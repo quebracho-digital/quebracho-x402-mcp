@@ -142,6 +142,16 @@ checked and is read just before settling; answers are cached
 `X402_SCREENING_UNAVAILABLE`. Until `app:screening sync` has run once, the OFAC step
 matches nothing and only logs a warning: run it before taking payments.
 
+After those lists, `Quebracho\X402\UsdcBlacklist` asks the token itself: Circle
+freezes addresses in the USDC contract (`isBlacklisted(address)`), OFAC or not,
+and a frozen payer or `payTo` makes the settlement revert. It is one `eth_call`
+per check (about 200-400 ms) through the network's public RPC, on EVM networks
+only; Solana and NEAR are not checked. An RPC that cannot answer follows
+`X402_SCREENING_UNAVAILABLE` too, so with the default `reject` an RPC outage
+stops payments. Checked on chain: Base Sepolia, Arc testnet and Avalanche Fuji
+expose the selector; Ethereum Sepolia and Polygon Amoy were unreachable when
+tried.
+
 ```bash
 ddev exec --dir /var/www/html/app bin/console app:screening sync          # download OFAC's lists
 ddev exec --dir /var/www/html/app bin/console app:screening deny 0x…      # our own report

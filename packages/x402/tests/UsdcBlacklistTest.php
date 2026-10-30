@@ -84,17 +84,32 @@ final class UsdcBlacklistTest extends TestCase
     {
         // A revert (token without isBlacklisted), an HTML error page, an EOA ("0x"): never a pass.
         foreach (['{"jsonrpc":"2.0","id":1,"error":{"code":3,"message":"execution reverted"}}', 'not json', $this->answer('0x')] as $body) {
+            $threw = false;
             try {
                 ($this->listener($body))($this->check());
-                self::fail('Should not pass: '.$body);
             } catch (\Throwable) {
                 // AddressCheck::start() turns this into address_check_failed.
-                self::addToAssertionCount(1);
+                $threw = true;
             }
+            self::assertTrue($threw, 'Should not pass: '.$body);
             $check = $this->check();
             ($this->listener($body, failOpen: true))($check);
             self::assertNull($check->reason());
         }
+    }
+
+    public function testTheDefaultIsFailClosed(): void
+    {
+        $f = new Psr17Factory();
+        $client = new class implements ClientInterface {
+            public function sendRequest(RequestInterface $request): ResponseInterface
+            {
+                return new Response(200, [], '{"jsonrpc":"2.0","id":1,"error":{"message":"execution reverted"}}');
+            }
+        };
+
+        $this->expectException(\RuntimeException::class);
+        (new UsdcBlacklist($client, $f, $f))($this->check());
     }
 
     public function testNetworksWithoutAnEvmBlacklistPassWithoutAskingAnyone(): void
@@ -109,10 +124,12 @@ final class UsdcBlacklistTest extends TestCase
 
     public function testMalformedAddressIsRejectedWithoutACall(): void
     {
-        $check = $this->check(address: '0x1234');
-        ($this->listener($this->answer(self::FREE)))($check);
+        foreach (['0x1234', self::ADDRESS.'ff', 'x'.self::ADDRESS] as $address) {
+            $check = $this->check(address: $address);
+            ($this->listener($this->answer(self::FREE)))($check);
 
-        self::assertSame('invalid_payload', $check->reason());
+            self::assertSame('invalid_payload', $check->reason(), $address);
+        }
         self::assertSame([], $this->calls);
     }
 }
