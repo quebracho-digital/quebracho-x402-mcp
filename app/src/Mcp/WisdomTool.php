@@ -16,7 +16,9 @@ final class WisdomTool
 
     // Paid: X402_PAID_TOOLS lists it, so tools/call needs an x402 payment.
     #[McpTool(name: 'wisdom', description: 'Returns a paid piece of engineering wisdom (x402, testnet USDC).')]
-    public function __invoke(): string
+    // The unused $topic keeps the input schema non-empty: Hugging Face's chat template
+    // rejects a tool without `parameters`, and symfony/ai omits them for an empty schema.
+    public function __invoke(?string $topic = null): string
     {
         return self::SAYINGS[array_rand(self::SAYINGS)];
     }

@@ -62,7 +62,10 @@ on its own wallet). Nothing is charged, the output is withheld and the same
 payment can be sent again.
 
 The MCP endpoint is `https://quebracho-x402-mcp.ddev.site/mcp` (Streamable
-HTTP). You can also open it in the
+HTTP). Keep the DDEV project name: `allowed_hosts` in
+`app/config/packages/mcp.yaml` (DNS rebinding protection) only lists
+`localhost` and `quebracho-x402-mcp.ddev.site`, so any other host gets
+`403 Invalid Host header`. Add yours there if you rename it. You can also open it in the
 [MCP Inspector](https://github.com/modelcontextprotocol/inspector).
 
 Run the library tests (no network):
