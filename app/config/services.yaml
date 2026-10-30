@@ -44,6 +44,19 @@ services:
             # AddressCheck on the payer, answered by App\X402\Screening.
             $events: '@event_dispatcher'
 
+    # Frozen in the USDC contract itself (not only OFAC): asked after Screening's
+    # lists (lower priority). An RPC that cannot answer follows the same policy
+    # as the screening API: X402_SCREENING_UNAVAILABLE, "reject" by default.
+    Quebracho\X402\UsdcBlacklist:
+        factory: ['App\X402\BlacklistFactory', 'create']
+        arguments:
+            $http: '@psr18.http_client'
+            $requests: '@mcp.psr17_factory'
+            $streams: '@mcp.psr17_factory'
+            $unavailable: '%env(X402_SCREENING_UNAVAILABLE)%'
+        tags:
+            - { name: kernel.event_listener, event: Quebracho\X402\AddressCheck, priority: -10 }
+
     mcp.server.default.controller:
         class: App\Controller\McpController
         public: true
