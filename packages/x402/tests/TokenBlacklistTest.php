@@ -12,12 +12,12 @@ use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 use Quebracho\X402\AddressCheck;
 use Quebracho\X402\Networks;
-use Quebracho\X402\UsdcBlacklist;
+use Quebracho\X402\TokenBlacklist;
 
 /**
- * UsdcBlacklist against a scripted node: what it asks, and what each answer does.
+ * TokenBlacklist against a scripted node: what it asks, and what each answer does.
  */
-final class UsdcBlacklistTest extends TestCase
+final class TokenBlacklistTest extends TestCase
 {
     private const ADDRESS = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
     private const BASE = 'eip155:84532';
@@ -27,7 +27,12 @@ final class UsdcBlacklistTest extends TestCase
     /** @var list<array<string, mixed>> */
     private array $calls = [];
 
-    private function listener(string $body, bool $failOpen = false, int $status = 200): UsdcBlacklist
+    protected function tearDown(): void
+    {
+        Networks::reset();
+    }
+
+    private function listener(string $body, bool $failOpen = false, int $status = 200, array $tokens = []): TokenBlacklist
     {
         $client = new class($body, $status, $this->calls) implements ClientInterface {
             public function __construct(private string $body, private int $status, private array &$calls)
@@ -43,7 +48,7 @@ final class UsdcBlacklistTest extends TestCase
         };
         $f = new Psr17Factory();
 
-        return new UsdcBlacklist($client, $f, $f, $failOpen);
+        return new TokenBlacklist($client, $f, $f, $failOpen, $tokens);
     }
 
     private function check(string $network = self::BASE, string $address = self::ADDRESS, ?string $role = null): AddressCheck
@@ -109,7 +114,61 @@ final class UsdcBlacklistTest extends TestCase
         };
 
         $this->expectException(\RuntimeException::class);
-        (new UsdcBlacklist($client, $f, $f))($this->check());
+        (new TokenBlacklist($client, $f, $f))($this->check());
+    }
+
+    /**
+     * Each token asks its own function: USDC and USDT (Ethereum).
+     */
+    public function testEachTokenAsksItsOwnFunction(): void
+    {
+        Networks::add(1, '0xdAC17F958D2ee523a2206206994597C13D831ec7', 'Tether USD', '1', rpc: 'https://eth.example');
+        $expected = [
+            self::BASE => '0xfe575a87',
+            'eip155:1' => '0xe47d6060',
+        ];
+        foreach ($expected as $network => $selector) {
+            $check = $this->check($network);
+            ($this->listener($this->answer(self::FROZEN)))($check);
+
+            self::assertSame('address_blacklisted', $check->reason(), $network);
+            self::assertSame($selector, substr(end($this->calls)['params'][0]['data'], 0, 10), $network);
+            self::assertSame(Networks::get($network)['asset'], end($this->calls)['params'][0]['to'], $network);
+        }
+    }
+
+    public function testAnAssetWithoutAKnownFunctionIsNotAsked(): void
+    {
+        Networks::add(777, '0x1111111111111111111111111111111111111111', 'Some Token', '1', rpc: 'https://x.example');
+        $check = $this->check('eip155:777');
+        ($this->listener($this->answer(self::FROZEN)))($check);
+
+        self::assertNull($check->reason());
+        self::assertSame([], $this->calls);
+    }
+
+    public function testUsdt0IsNotAskedUntilYouAddIt(): void
+    {
+        Networks::add(30, '0x779dED0C9e1022225F8e0630b35A9B54Be713736', 'USDT0', '1', rpc: 'https://rsk.example');
+        $check = $this->check('eip155:30');
+        ($this->listener($this->answer(self::FROZEN)))($check);
+
+        self::assertNull($check->reason());
+        self::assertSame([], $this->calls);
+    }
+
+    public function testYourOwnTokenAndAMistypedFunction(): void
+    {
+        Networks::add(777, '0x1111111111111111111111111111111111111111', 'Some Token', '1', rpc: 'https://x.example');
+        $check = $this->check('eip155:777');
+        // The asset in any case, as people paste it.
+        ($this->listener($this->answer(self::FROZEN), tokens: ['eip155:777|0x1111111111111111111111111111111111111111' => 'getBlackListStatus']))($check);
+
+        self::assertSame('address_blacklisted', $check->reason());
+        self::assertSame('0x59bf1abe', substr($this->calls[0]['params'][0]['data'], 0, 10));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->listener($this->answer(self::FREE), tokens: ['eip155:777|0x1' => 'isbad']);
     }
 
     public function testNetworksWithoutAnEvmBlacklistPassWithoutAskingAnyone(): void

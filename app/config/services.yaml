@@ -47,7 +47,7 @@ services:
     # Frozen in the USDC contract itself (not only OFAC): asked after Screening's
     # lists (lower priority). An RPC that cannot answer follows the same policy
     # as the screening API: X402_SCREENING_UNAVAILABLE, "reject" by default.
-    Quebracho\X402\UsdcBlacklist:
+    Quebracho\X402\TokenBlacklist:
         factory: ['App\X402\BlacklistFactory', 'create']
         arguments:
             $http: '@psr18.http_client'
