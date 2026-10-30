@@ -18,6 +18,7 @@ contributed by Quebracho.
 | `packages/x402/` | `quebracho/x402`: framework-agnostic library (PSR-7/15/17/18, `ext-gmp`). Signs and verifies x402 payments. |
 | `app/` | Symfony 8.1 + `symfony/mcp-bundle`: an MCP server with a free `echo` tool and a paid `wisdom` tool, and `bin/console app:ask`, a Symfony AI agent that discovers, pays and calls them. |
 | `bin/smoke.sh` | End-to-end check over real HTTP: free call, unpaid call (PaymentRequired), paid call (result + receipt). |
+| `bin/inspect.py` | Stdlib-only Python MCP client: initialize, `tools/list`, free call, unpaid call (shows the PaymentRequired). No Node needed. |
 | `bin/pay.php` | Minimal buyer: turns a PaymentRequired tool result into the same call, paid. |
 
 ## Quick start (5 minutes)
