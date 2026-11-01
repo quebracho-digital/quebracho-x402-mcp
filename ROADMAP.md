@@ -15,7 +15,7 @@ Decisions are recorded in [DECISIONS.md](DECISIONS.md).
 | 10-29 | Settle on testnet through a real facilitator (x402.org, Base Sepolia) | done |
 | 10-29 | Facilitator clients in the library: any URL, Circle, on chain (G7) | done |
 | 10-29 | Online verify, claim release, 502 when the facilitator is down, upfront flow, resource, outcome event (G2–G5, G8, G10) | done |
-| 10-30 → 11-03 | Solana (G6), network catalogue (G1), G9, G11–G12, Packagist (G13), NEAR strict screening | |
+| 10-30 → 11-03 | Solana (G6), network catalogue (G1), G9, G11–G12, Packagist (G13), NEAR strict screening | done (G13: v0.1.0 on Packagist; v0.2.0 pending) |
 | 11-04 → 11-07 | `demo.sh`, README, 90 s video, minimal CI | |
 | **before 11-08** | **Submit** | |
 

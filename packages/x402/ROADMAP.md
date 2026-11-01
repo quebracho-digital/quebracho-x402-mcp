@@ -1,7 +1,8 @@
 # quebracho/x402: roadmap
 
-Lives in the hackathon repo for now. It moves to its own repo after the
-hackathon (`git subtree split`, history kept), then goes on Packagist.
+Developed in the hackathon repo (`packages/x402`) and published by
+`git subtree split` to github.com/quebracho-digital/x402, which feeds
+[Packagist](https://packagist.org/packages/quebracho/x402). Release = re-split, push, tag.
 
 ## Done
 
