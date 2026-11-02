@@ -5,3 +5,7 @@ php_version: "8.4"
 webserver_type: nginx-fpm
 omit_containers: [db]
 webimage_extra_packages: [php8.4-gmp, php8.4-pcov]
+hooks:
+  post-start:
+    # First start: the app's dependencies (the library comes in through a path repository).
+    - exec: "test -f app/vendor/autoload.php || composer install -d app"

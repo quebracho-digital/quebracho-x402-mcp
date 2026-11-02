@@ -11,6 +11,15 @@ contributed by Quebracho.
 > The demo runs on Base Sepolia. In *mock mode* signatures are real and fully
 > verified, but nothing is settled on chain, so you need no wallet and no faucet.
 
+## TL;DR
+
+- **What:** an MCP server in Symfony whose tools charge per call, and a framework-free PHP library (`quebracho/x402`, MIT) to sell or buy anything over [x402](https://www.x402.org/) (HTTP 402 plus a signed USDC authorization).
+- **Why:** agents can call tools but cannot pay for them. API keys and accounts do not scale to machines.
+- **How:** the agent calls a tool, gets a price (402), signs within a budget, retries with the payment, and receives the result with an on-chain receipt.
+- **Safe by construction:** verify is not paid. One signature buys one delivery, a replay never runs the handler, smart-wallet signatures are refused, gas is bounded, and addresses are screened. Each defence has a test.
+- **Proven:** 144 library tests with no network, EVM, Solana and NEAR (experimental) schemes, and a real USDC settle on Base Sepolia.
+- **Try it:** `bin/smoke.sh` after `ddev start` (below). Mock mode needs no wallet and no faucet.
+
 ## What's inside
 
 | Path | What it is |
@@ -27,11 +36,9 @@ Requirements: [DDEV](https://ddev.com/) (PHP runs inside it, nothing to
 install on the host) and `curl`.
 
 ```bash
-git clone https://github.com/leofishman/quebracho-x402-mcp.git
+git clone https://github.com/quebracho-digital/quebracho-x402-mcp.git
 cd quebracho-x402-mcp
-ddev start
-ddev composer install -d packages/x402
-ddev composer install -d app
+ddev start     # the first start also runs composer install for the app
 bin/smoke.sh
 ```
 
@@ -69,9 +76,10 @@ HTTP). Keep the DDEV project name: `allowed_hosts` in
 `403 Invalid Host header`. Add yours there if you rename it. You can also open it in the
 [MCP Inspector](https://github.com/modelcontextprotocol/inspector).
 
-Run the library tests (no network):
+Run the library tests (no network; the library has its own dependencies):
 
 ```bash
+ddev composer install -d packages/x402
 ddev exec -d /var/www/html/packages/x402 vendor/bin/phpunit tests
 ```
 
