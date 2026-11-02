@@ -8,3 +8,7 @@
 /.ddev/traefik/
 CONTEXT.md
 /packages/*/.phpunit.result.cache
+
+# Local video work (not for git)
+/video/
+*.mp4
