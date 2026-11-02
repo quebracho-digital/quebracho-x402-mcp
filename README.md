@@ -18,6 +18,7 @@ contributed by Quebracho.
 - **How:** the agent calls a tool, gets a price (402), signs within a budget, retries with the payment, and receives the result with an on-chain receipt.
 - **Safe by construction:** verify is not paid. One signature buys one delivery, a replay never runs the handler, smart-wallet signatures are refused, gas is bounded, and addresses are screened. Each defence has a test.
 - **Proven:** 144 library tests with no network, EVM, Solana and NEAR (experimental) schemes, and a real USDC settle on Base Sepolia.
+- **Used by:** the Drupal module [x402_pay](https://www.drupal.org/project/x402_pay): its `1.0.x` branch on drupal.org (the dev release) runs on this library (`quebracho/x402 ^0.2`). The library grew from that module, so one codebase serves Drupal and Symfony. The last tagged release, 1.0.0-beta2, predates it.
 - **Try it:** `bin/smoke.sh` after `ddev start` (below). Mock mode needs no wallet and no faucet.
 
 ## What's inside
