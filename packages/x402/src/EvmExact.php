@@ -51,6 +51,8 @@ final class EvmExact implements Scheme
             ($accepted['scheme'] ?? null) !== 'exact' => 'invalid_scheme',
             ($accepted['network'] ?? null) !== $req['network'] => 'invalid_network',
             empty($req['extra']['name']) || empty($req['extra']['version']) => 'invalid_payment_requirements',
+            // An offer that charges nothing (zero, empty, not a plain integer) is not a sale; Networks::requirements already refuses it.
+            !preg_match('/^[1-9][0-9]*$/', (string) ($req['amount'] ?? '')) => 'invalid_payment_requirements',
             // The buyer echoes the offer it took; a different echo is not that offer.
             0 !== strcasecmp((string) ($accepted['asset'] ?? ''), $req['asset'])
               || 0 !== strcasecmp((string) ($accepted['payTo'] ?? ''), $req['payTo'])

@@ -26,7 +26,7 @@ $middleware = new X402Middleware([new EvmExact()], $price, $claim, $psr17, $psr1
 `(new FileClaims('/var/x402-claims'))(...)` on one host, or any atomic
 `fn(string $key): bool` (DB unique key, Redis `SET NX`) on several.
 
-Unpaid → `402` with `PAYMENT-REQUIRED`. Paid → verify offline, run the
+Unpaid → `402` with `PAYMENT-REQUIRED`. Paid → verify offline, claim, run the
 handler, settle only on 2xx, answer with `PAYMENT-RESPONSE`. `$settle` is a
 facilitator callback; `Settlement::mock()` is mock mode, by name only: real
 verification, nothing moves on chain, the receipt says `extensions.mock`.
@@ -39,8 +39,14 @@ Optional, by name, on both middlewares:
   failed, settle failed with no transaction) is good again. A pending settle
   keeps its claim. `FileClaims::prune($seconds)` clears old claims.
 - `resource:` the 402's `resource` (canonical URL, description, mimeType).
-- `extra.paymentFlow = 'upfront'` in an offer settles before the handler runs;
-  once money moved, the receipt goes with whatever the handler answers.
+- `extra.paymentFlow = 'upfront'` in an offer settles **before** the handler
+  runs. **Use it for any handler with an effect you cannot undo** (create an
+  order, call a paid third-party API, issue a credential, publish, start a job):
+  in the default flow the handler runs before settle, so if the settle then
+  fails the buyer got the effect without paying. Once money moved, the receipt
+  goes with whatever the handler answers; a handler that then fails records
+  `failed_after_settle` so you can refund by hand. Default flow is for
+  content-like output, where withholding the response is the whole delivery.
 - A `FacilitatorException` answers 502 on HTTP (`facilitator_unavailable` on MCP).
   On settle the claim is kept: the facilitator may have sent the transaction.
 - A tool result with `isError` is not charged and goes out as it is: a paid
@@ -161,10 +167,92 @@ A NEAR seller that screens payers passes `keyOwner: NearExact::keyOwner($rpc)`
 (the node's `view_access_key`): without it the payer is unproven and screening
 rejects it.
 
-## Hardening
+## Protections, layer by layer
 
-What it resists, each backed by a test, is listed in the
-[repository README](../../README.md#attacks-it-resists).
+Every line is backed by a test in `tests/` (`vendor/bin/phpunit tests`). The
+reasons are in the repository's [DECISIONS.md](../../DECISIONS.md); the
+attack-by-attack list is in the [repository README](../../README.md#attacks-it-resists).
+
+**Verify is not paid.** The one rule the rest follows from (see Wang et al.,
+*x402 facilitators*, USENIX Security 2026): a payment that verified has not
+moved money. Nothing here treats `verify` as a receipt. Only a settle that came
+back consistent (2xx, `success: true`, a transaction, our network, the payer
+who signed) is "paid"; anything else withholds the output.
+
+*Replay and "free shopping"*
+- **One signature, one delivery.** The payment is claimed atomically before the
+  handler runs (network + payer + EIP-3009 nonce on EVM; the signed message on
+  Solana; sender + key + nonce on NEAR). The key follows the network family,
+  not the shape of the payload, and EVM values must be canonical (one spelling
+  per address, nonce, number), so `0xAB…` and `0xab…` cannot make two claims.
+- **A replay never runs the handler.** The official middlewares run it and then
+  find the nonce spent; here the copy is refused first, so a replay costs the
+  seller nothing.
+- **A claim is freed only when nothing can have been charged** (the handler
+  delivered nothing, or the facilitator clearly refused). It is kept on
+  `settlement_pending`, `facilitator_unavailable`, `unexpected_settle_error`
+  and `invalid_settle_response`: the transaction may still land, and a freed
+  claim would sell the same payment twice.
+- **Mock mode by name.** `$settle` is mandatory; `Settlement::mock()` verifies
+  for real, moves nothing and stamps `extensions.mock` on the receipt.
+
+*Requirements binding and authenticity (offline, before anything is spent)*
+- The offer is chosen from the seller's own list, never from the buyer's copy;
+  the buyer's echo of asset, payTo and amount must match it.
+- EVM: scheme, network, version, recipient, exact value, `validAfter`,
+  `validBefore` (with 6 s of slack) and the EIP-712 signature (recovered
+  signer must be `from`; high-s malleated signatures refused, EIP-2).
+- The signature's validity is capped by the offer's `maxTimeoutSeconds`
+  (+60 s skew), which bounds replay windows and claim storage.
+- An offer that charges nothing (amount zero or not a plain positive integer)
+  is refused. `Networks::requirements` already refuses to build one.
+- Malformed payloads get a rejection reason, never a 5xx.
+
+*What the sponsored gas can do (ChainFacilitator)*
+- It builds the transaction itself: a `transferWithAuthorization` to the
+  *offer's* token contract, calldata assembled field by field from validated
+  values. Client-supplied calldata is never forwarded; there is no generic relay.
+- **No smart-wallet execution.** Signatures must be exactly 65 bytes
+  (r ‖ s ‖ v). ERC-1271 and ERC-6492 (counterfactual deployment, factory calls)
+  are refused on purpose: they bring executable bytes and unbounded gas into
+  verification. Solana smart wallets and lookup tables are refused likewise.
+- Simulates with `eth_call` first and estimates gas (+20 %); `maxGasCost`
+  aborts anything dearer; one lock per network serialises the gas wallet's
+  nonce; the transaction hash is known before it is sent, so a send that times
+  out still leaves something to reconcile; the receipt must have `status 0x1`.
+- Refuses what would revert anyway: a payment that is not for our payTo,
+  amount or network, an expired one, a frozen payer or payTo (see Address
+  screening), a nonce the chain already spent (online `verify`).
+
+*Delivery model and who bears the risk*
+- Default flow: verify offline → (screen, online verify) → claim → handler →
+  settle on 2xx. The output is withheld if settle fails, and **the handler has
+  already run**: right for content (JSON, text, files), not for irreversible
+  effects. Use `paymentFlow = 'upfront'` for those, see below.
+- A handler that fails (non-2xx, `isError`, exception) is not charged and its
+  claim is freed.
+- A late rejection from a slow address check withholds the output as well.
+
+*Buyer*
+- Signs only known tokens and EIP-712 domains, positive integer amounts within a
+  per-network cap, a canonical `payTo`, and validity up to 10 minutes.
+- The budget is spent when it signs and never refunded on the seller's word.
+- The wrapped PSR-18 client must not follow redirects, or another host gets the
+  signed payment.
+
+*Both sides*
+- Payer and `payTo` screening through a PSR-14 event; a list or API that
+  cannot answer fails closed. `TokenBlacklist` asks USDC's (and Tether's
+  legacy USDT's) on-chain blacklist before a signature is spent.
+
+*Known limits*
+- Pending or silent settles are logged, not reconciled automatically.
+- `FileClaims` is single-host; several hosts need an atomic store.
+- A third-party HTTP facilitator may accept at `/verify` and still fail at
+  `/settle` (state changed in between); the gas is then its cost, not ours.
+  Use `ChainFacilitator` to carry that yourself.
+- Concentration: one facilitator URL is one point of failure. The library takes
+  any `Facilitator`, so a fallback is a few lines of the caller's.
 
 ## Frameworks without PSR-7
 

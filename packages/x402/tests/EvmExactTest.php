@@ -100,4 +100,23 @@ final class EvmExactTest extends TestCase
         self::assertNull((new EvmExact(clock: fn () => self::NOW))->verify($upper, self::req()), 'same bytes, same signature');
         self::assertSame(Settlement::key($payment), Settlement::key($upper));
     }
+
+    public function testRejectsAnOfferThatChargesNothing(): void
+    {
+        foreach (['0', '', '-1', '1e3', '01'] as $amount) {
+            $req = ['amount' => $amount] + self::req();
+            self::assertSame('invalid_payment_requirements', (new EvmExact(clock: fn () => self::NOW))->verify(self::payment(), $req), "amount '$amount'");
+        }
+    }
+
+    public function testRefusesSmartWalletSignatures(): void
+    {
+        // ERC-1271 / ERC-6492 signatures are longer than r ‖ s ‖ v: they would
+        // carry executable bytes (a factory call), so they are never accepted.
+        $payment = self::payment();
+        $payment['payload']['signature'] .= str_repeat('ab', 32).'6492649264926492649264926492649264926492649264926492649264926492';
+        self::assertSame('invalid_payload', (new EvmExact(clock: fn () => self::NOW))->verify($payment, self::req()));
+        $this->expectException(\Quebracho\X402\InvalidPaymentException::class);
+        \Quebracho\X402\ChainFacilitator::calldata($payment);
+    }
 }

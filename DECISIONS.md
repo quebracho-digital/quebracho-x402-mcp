@@ -122,3 +122,14 @@ An accepted decision is never rewritten: if it changes, a new one replaces it.
   - NEAR: `decodeSignedDelegateAction` rejects trailing bytes, and `Settlement::key` is network + sender + public key + nonce.
   - Also from the audit: `invalid_settle_response` keeps the claim (money may have moved); an upfront HTTP handler that throws after settling records `failed_after_settle`; the paying clients document that the wrapped PSR-18 client must not follow redirects.
 - Consequences: breaking for callers that relied on the default, so the next tag is v0.2.0.
+
+## D13 — Verify is not paid: README states it; zero-amount offers and smart-wallet signatures are refused on purpose (paper review 2026-11-02)
+
+- Status: accepted (Leo: "si, haz los 3, pero que el README quede muy descriptivo sobre las funcionalidades y protecciones que implementamos en toda la libreria")
+- Context: Wang et al., *x402 facilitators* (USENIX Security 2026, https://www.usenix.org/system/files/usenixsecurity26-wang-qinying.pdf) found 49 violations in 15 facilitators: free shopping (deliver after verify, settle fails or repeats), asset theft through ERC-6492 execution, DoS and gas abuse on sponsored gas. Reviewing this library against it: the default flow runs the handler before settle, so an irreversible handler can deliver an effect without payment; that was only a README line, not a rule.
+- Decision:
+  - The README says it plainly: verify is not paid, default flow suits content, `paymentFlow = 'upfront'` is for irreversible handlers. No second middleware (YAGNI); the choice stays per offer.
+  - ERC-1271/ERC-6492 stay refused (signatures are exactly 65 bytes) and the README says so; a test pins it.
+  - `EvmExact::verify` refuses an amount that is not a plain positive integer (`invalid_payment_requirements`); `Networks::requirements` already did.
+  - The library README now lists each protection by layer, and the known limits.
+- Consequences: no behaviour change for offers built with `Networks::requirements`. Needs re-split and push of `packages/x402` to quebracho-digital/x402 to publish.
