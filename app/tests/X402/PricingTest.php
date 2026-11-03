@@ -110,6 +110,7 @@ final class PricingTest extends TestCase
             }
         }];
         yield 'pair pointing elsewhere' => [new class {
+            // b and c pair with each other; a names b, but b does not name a back.
             #[McpTool(name: 'a', meta: [PaidJob::META => ['role' => 'start', 'pairedWith' => 'b']])]
             #[PaidJob('start', 'b')]
             public function a(): void
@@ -121,11 +122,24 @@ final class PricingTest extends TestCase
             public function b(): void
             {
             }
+
+            #[McpTool(name: 'c', meta: [PaidJob::META => ['role' => 'start', 'pairedWith' => 'b']])]
+            #[PaidJob('start', 'b')]
+            public function c(): void
+            {
+            }
         }];
         yield 'unknown role' => [new class {
-            #[McpTool(name: 'a')]
+            // Paired correctly: only the role is wrong.
+            #[McpTool(name: 'a', meta: [PaidJob::META => ['role' => 'deposit', 'pairedWith' => 'b']])]
             #[PaidJob('deposit', 'b')]
             public function a(): void
+            {
+            }
+
+            #[McpTool(name: 'b', meta: [PaidJob::META => ['role' => 'result', 'pairedWith' => 'a']])]
+            #[PaidJob('result', 'a')]
+            public function b(): void
             {
             }
         }];

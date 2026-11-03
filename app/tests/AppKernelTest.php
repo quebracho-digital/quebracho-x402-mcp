@@ -6,7 +6,12 @@ namespace App\Tests;
 
 use App\EventListener\McpRateLimit;
 use App\X402\Pricing;
+use Quebracho\X402\Budget;
+use Quebracho\X402\Networks;
+use Quebracho\X402\PayingMcpClient;
+use Quebracho\X402\X402McpMiddleware;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
+use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Routing\Exception\ResourceNotFoundException;
 use Symfony\Component\Routing\RouterInterface;
 
@@ -44,5 +49,44 @@ final class AppKernelTest extends KernelTestCase
                 // Not routed at all: not counted either.
             }
         }
+    }
+
+    public function testTheMiddlewareHasTheDurationAndValidateHooksWired(): void
+    {
+        $middleware = self::getContainer()->get(X402McpMiddleware::class);
+        $hook = static fn (string $name) => (new \ReflectionProperty(X402McpMiddleware::class, $name))->getValue($middleware);
+
+        self::assertSame(60, $hook('duration')(['name' => 'analyze_terms']));
+        self::assertSame(0, $hook('duration')(['name' => 'wisdom']));
+        self::assertSame('Unknown tool: nosuchtool_start', $hook('validate')(['name' => 'nosuchtool_start']));
+        self::assertNull($hook('validate')(['name' => 'wisdom']));
+    }
+
+    public function testTheBuyerSignsNoLongerThanX402BuyerMaxTimeout(): void
+    {
+        $client = self::getContainer()->get(PayingMcpClient::class);
+        $budget = (new \ReflectionProperty(PayingMcpClient::class, 'budget'))->getValue($client);
+        \assert($budget instanceof Budget);
+        $offer = static fn (int $timeout) => Networks::requirements('eip155:84532', '0.01', '0x7e510E6B4c3E2121CB64CD0686a4f241Df326510', $timeout);
+
+        self::assertSame('170', $_SERVER['X402_BUYER_MAX_TIMEOUT'] ?? null, 'the committed default');
+        self::assertTrue($budget->allows($offer(170)));
+        self::assertFalse($budget->allows($offer(171)));
+    }
+
+    public function testOnePostOverMcpLimitIpThroughTheRealKernelIs429(): void
+    {
+        $kernel = self::bootKernel();
+        // A fresh client per run: the test env keeps limiter state in its cache pool between runs.
+        $ip = '198.18.'.random_int(0, 255).'.'.random_int(1, 254);
+        $send = static fn () => $kernel->handle(Request::create('http://localhost/mcp', 'POST', server: ['REMOTE_ADDR' => $ip, 'CONTENT_TYPE' => 'application/json'], content: '{"jsonrpc":"2.0","id":9,"method":"ping"}'));
+
+        $limit = (int) $_SERVER['MCP_LIMIT_IP'];
+        for ($i = 0; $i < $limit; ++$i) {
+            self::assertNotSame(429, $send()->getStatusCode(), "request $i is within the limit");
+        }
+        $refused = $send();
+        self::assertSame(429, $refused->getStatusCode());
+        self::assertSame(9, json_decode((string) $refused->getContent(), true)['id']);
     }
 }
