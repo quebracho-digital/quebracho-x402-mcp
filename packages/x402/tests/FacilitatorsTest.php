@@ -207,7 +207,7 @@ final class FacilitatorsTest extends TestCase
     {
         $good = ['success' => true, 'transaction' => self::TX, 'network' => self::NETWORK, 'payer' => strtolower(self::BUYER)];
         $this->assertSame($good, $this->http([$this->json(200, $good)], 'K')->settle($this->payment(), $this->req()));
-        foreach (['no transaction' => ['transaction' => ''], 'other network' => ['network' => 'eip155:1'], 'other payer' => ['payer' => self::PAY_TO]] as $case => $change) {
+        foreach (['no transaction' => ['transaction' => ''], 'other network' => ['network' => 'eip155:7'], 'other payer' => ['payer' => self::PAY_TO]] as $case => $change) {
             $this->assertFalse($this->http([$this->json(200, $change + $good)], 'K')->settle($this->payment(), $this->req())['success'], $case);
         }
         $this->assertSame('insufficient_funds', $this->http([$this->json(402, ['success' => false, 'errorReason' => 'insufficient_funds'])], 'K')->settle($this->payment(), $this->req())['errorReason']);

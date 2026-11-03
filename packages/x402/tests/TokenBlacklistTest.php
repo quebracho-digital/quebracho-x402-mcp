@@ -167,6 +167,17 @@ final class TokenBlacklistTest extends TestCase
         self::assertSame($usdc, end($this->calls)['params'][0]['to'], $network);
     }
 
+    public function testEthereumIsBuiltInSoItsUsdcIsAskedWithoutRegisteringAnything(): void
+    {
+        $check = $this->check('eip155:1');
+        ($this->listener($this->answer(self::FROZEN)))($check);
+
+        self::assertSame('address_blacklisted', $check->reason());
+        self::assertSame('0xfe575a87', substr($this->calls[0]['params'][0]['data'], 0, 10));
+        self::assertSame(Networks::get('eip155:1')['rpc'], $this->calls[0]['url']);
+        self::assertSame('0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', $this->calls[0]['params'][0]['to']);
+    }
+
     public function testAnAssetWithoutAKnownFunctionIsNotAsked(): void
     {
         Networks::add(777, '0x1111111111111111111111111111111111111111', 'Some Token', '1', rpc: 'https://x.example');

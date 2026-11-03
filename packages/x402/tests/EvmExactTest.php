@@ -38,7 +38,7 @@ final class EvmExactTest extends TestCase
         yield 'amount' => [fn (array $p) => ['payload' => ['authorization' => ['value' => '1']]], 'invalid_exact_evm_payload_authorization_value_mismatch'];
         yield 'recipient' => [fn (array $p) => ['payload' => ['authorization' => ['to' => '0x0000000000000000000000000000000000000001']]], 'invalid_exact_evm_payload_recipient_mismatch'];
         yield 'payer' => [fn (array $p) => ['payload' => ['authorization' => ['from' => '0x0000000000000000000000000000000000000001']]], 'invalid_exact_evm_payload_signature'];
-        yield 'network' => [fn (array $p) => ['accepted' => ['network' => 'eip155:1']], 'invalid_network'];
+        yield 'network' => [fn (array $p) => ['accepted' => ['network' => 'eip155:7']], 'invalid_network'];
         yield 'array nonce' => [fn (array $p) => ['payload' => ['authorization' => ['nonce' => ['x']]]], 'invalid_payload'];
         yield 'echoed payTo' => [fn (array $p) => ['accepted' => ['payTo' => '0x0000000000000000000000000000000000000001']], 'invalid_payload'];
         yield 'version' => [fn (array $p) => ['x402Version' => 1], 'invalid_x402_version'];

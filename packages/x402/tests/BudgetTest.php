@@ -26,7 +26,7 @@ final class BudgetTest extends TestCase
     {
         yield 'other token' => [['asset' => '0x29f2D40B0605204364af54EC677bD022dA425d03']];
         yield 'other EIP-712 domain' => [['extra' => ['name' => 'Fake', 'version' => '2']]];
-        yield 'unknown network' => [['network' => 'eip155:1']];
+        yield 'unknown network' => [['network' => 'eip155:7']];
         yield 'ten-year validity' => [['maxTimeoutSeconds' => 315360000]];
         yield 'validity as string' => [['maxTimeoutSeconds' => '60']];
         yield 'not a number' => [['amount' => 'abc']];

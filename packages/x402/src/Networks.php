@@ -16,8 +16,19 @@ final class Networks
      * its fee payer); `rpc` a public node, for sweeping; `explorer` where
      * people see a transaction.
      */
-    // Testnets only: this library never moves real money.
+    // The demo testnets, and Ethereum mainnet. Ethereum is here to be *read*: the
+    // blacklist of its USDC and USDT is an eth_call, which costs no gas. Paying on
+    // it is possible but a settlement there costs real gas. Any other mainnet is
+    // registered by the site with add() (see "Add a blockchain" in the README).
     public const ALL = [
+        'eip155:1' => [
+            'label' => 'Ethereum (USDC)',
+            'asset' => '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+            'decimals' => 6,
+            'extra' => ['name' => 'USD Coin', 'version' => '2'],
+            'rpc' => 'https://ethereum-rpc.publicnode.com',
+            'explorer' => 'https://etherscan.io/tx/',
+        ],
         'eip155:84532' => [
             'label' => 'Base Sepolia (USDC)',
             'asset' => '0x036CbD53842c5426634e7929541eC2318f3dCF7e',

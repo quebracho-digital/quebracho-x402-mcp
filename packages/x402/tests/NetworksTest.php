@@ -29,7 +29,7 @@ final class NetworksTest extends TestCase
     {
         Networks::reset();
         self::assertTrue(Networks::has('eip155:84532'));
-        self::assertNull(Networks::find('eip155:1'));
+        self::assertNull(Networks::find('eip155:7'));
         $sol = Networks::addSolana('5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d', 'EPjFWDvwVrfSoUeVmsKoc8MPa6tdozRmrgHgDt9uhAa7', 'Solana (USDC)');
         self::assertSame('solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d', $sol);
         self::assertArrayHasKey($sol, Networks::all());
