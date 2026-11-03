@@ -13,6 +13,12 @@ use PHPUnit\Framework\TestCase;
 final class PricingTest extends TestCase
 {
     private const PAY_TO = '0x7e510E6B4c3E2121CB64CD0686a4f241Df326510';
+    private const TOOLS = [
+        'wisdom' => ['job' => null, 'required' => []],
+        'analyze_terms' => ['job' => null, 'required' => ['text']],
+        'echo' => ['job' => null, 'required' => []],
+        'free' => ['job' => null, 'required' => []],
+    ];
 
     /** @return list<array{0: class-string, 1: string}> every #[McpTool] handler in App\Mcp, plus the fixture's */
     private static function handlers(): array
@@ -55,16 +61,91 @@ final class PricingTest extends TestCase
     {
         $tools = PaidJob::catalog(self::handlers());
         $pricing = new Pricing([], 'eip155:84532', '0.01', self::PAY_TO, tools: $tools);
-        foreach (array_keys(array_filter($tools)) as $name) {
+        foreach (array_keys(array_filter($tools, static fn (array $t) => null !== $t['job'])) as $name) {
             self::assertNotNull($pricing(['name' => $name]), "$name must be paid");
         }
     }
 
-    public function testAPaidNameThatIsNoToolIsRefusedBeforeAnyPayment(): void
+    /** @return iterable<string, array{list<string>, array<string, string>, array<string, int>, array<string, int>, string}> */
+    public static function typos(): iterable
     {
-        $pricing = new Pricing(['wisdom', 'wisdon'], 'eip155:84532', '0.01', self::PAY_TO, tools: ['wisdom' => null]);
-        self::assertNull($pricing->validate(['name' => 'wisdom']));
-        self::assertSame('Unknown tool: wisdon', $pricing->validate(['name' => 'wisdon']));
+        yield 'X402_PAID_TOOLS' => [['wisdon'], [], [], [], 'X402_PAID_TOOLS names "wisdon"'];
+        yield 'X402_PRICES' => [[], ['wisdon' => '0.02'], [], [], 'X402_PRICES names "wisdon"'];
+        yield 'X402_TIMEOUTS' => [[], [], ['wisdon' => 120], [], 'X402_TIMEOUTS names "wisdon"'];
+        yield 'X402_DURATIONS' => [[], [], [], ['wisdon' => 10], 'X402_DURATIONS names "wisdon"'];
+    }
+
+    /**
+     * @param list<string>          $paid
+     * @param array<string, string> $prices
+     * @param array<string, int>    $timeouts
+     * @param array<string, int>    $durations
+     */
+    #[DataProvider('typos')]
+    public function testANameThatIsNoToolIsAConfigError(array $paid, array $prices, array $timeouts, array $durations, string $message): void
+    {
+        // Fails open otherwise: the tool meant to be charged is free.
+        $this->expectExceptionMessage($message);
+        new Pricing($paid, 'eip155:84532', '0.01', self::PAY_TO, $prices, $timeouts, $durations, self::TOOLS);
+    }
+
+    /** @return iterable<string, array{string, array<string, string>, array<string, mixed>, string}> */
+    public static function badPrices(): iterable
+    {
+        yield 'X402_PRICE not a number' => ['abc', [], self::TOOLS, 'X402_PRICE: '];
+        yield 'X402_PRICES not a number' => ['0.01', ['wisdom' => 'abc'], self::TOOLS, 'X402_PRICES[wisdom]: '];
+        yield 'X402_PRICES zero' => ['0.01', ['wisdom' => '0'], self::TOOLS, 'X402_PRICES[wisdom]: '];
+        // Past PaidJob::catalog's check (a price the token cannot represent): Pricing names the flag.
+        yield 'PaidJob price too precise' => ['0.01', [], ['j_start' => ['job' => ['role' => 'start', 'pairedWith' => 'j_result', 'price' => '0.0000001'], 'required' => []]] + self::TOOLS, '#[PaidJob] price of j_start: '];
+    }
+
+    /**
+     * @param array<string, string> $prices
+     * @param array<string, mixed>  $tools
+     */
+    #[DataProvider('badPrices')]
+    public function testEveryPaidToolIsPricedUpFront(string $price, array $prices, array $tools, string $message): void
+    {
+        $this->expectExceptionMessage($message);
+        new Pricing(['wisdom'], 'eip155:84532', $price, self::PAY_TO, $prices, tools: $tools);
+    }
+
+    public function testAnUnusedDefaultPriceIsNotChecked(): void
+    {
+        self::assertNull((new Pricing([], 'eip155:84532', 'abc', self::PAY_TO, tools: self::TOOLS))(['name' => 'wisdom']));
+    }
+
+    public function testValidateRefusesACallMissingWhatItsToolNeeds(): void
+    {
+        $pricing = new Pricing(['analyze_terms'], 'eip155:84532', '0.01', self::PAY_TO, tools: self::TOOLS);
+        self::assertSame('Missing required argument(s): text', $pricing->validate(['name' => 'analyze_terms', 'arguments' => []]));
+        self::assertSame('Missing required argument(s): text', $pricing->validate(['name' => 'analyze_terms']));
+        self::assertSame('arguments must be an object', $pricing->validate(['name' => 'analyze_terms', 'arguments' => 'x']));
+        self::assertNull($pricing->validate(['name' => 'analyze_terms', 'arguments' => ['text' => 'ok']]));
+        self::assertNull($pricing->validate(['name' => 'wisdom', 'arguments' => []]));
+    }
+
+    public function testAClassLevelFlagOnAnInvokableToolCounts(): void
+    {
+        $result = new class {
+            #[McpTool(name: 'invokable_result', meta: [PaidJob::META => ['role' => 'result', 'pairedWith' => 'invokable_start']])]
+            #[PaidJob('result', 'invokable_start')]
+            public function result(): void
+            {
+            }
+        };
+        $tools = PaidJob::catalog([[InvokableJobStartFixture::class, '__invoke'], [$result::class, 'result']], [InvokableJobStartFixture::class, $result::class]);
+        self::assertSame('start', $tools['invokable_start']['job']['role'] ?? null);
+        self::assertSame(['n'], $tools['invokable_start']['required'], 'the request context is injected, not required');
+    }
+
+    public function testOnlyToolsInTheServedNamespacesCount(): void
+    {
+        $handlers = [[JobToolsFixture::class, 'start'], [JobToolsFixture::class, 'result'], [\App\Mcp\WisdomTool::class, '__invoke']];
+        self::assertSame(['wisdom'], array_keys(PaidJob::catalog($handlers, ['App\\Mcp\\'])));
+        self::assertSame(['demo_start', 'demo_result'], array_keys(PaidJob::catalog(\array_slice($handlers, 0, 2), ['App\\Tests\\'])));
+        self::assertSame([], PaidJob::catalog($handlers, []));
+        self::assertSame([], PaidJob::catalog($handlers, ['App\\Mc']), 'a namespace pattern ends in a backslash');
     }
 
     /** @return iterable<string, array{object}> */
@@ -129,6 +210,43 @@ final class PricingTest extends TestCase
             {
             }
         }];
+        yield 'two tools with one name' => [new class {
+            #[McpTool(name: 'a')]
+            public function a(): void
+            {
+            }
+
+            #[McpTool(name: 'a')]
+            public function b(): void
+            {
+            }
+        }];
+        yield 'a deposit price that is no price' => [new class {
+            #[McpTool(name: 'a', meta: [PaidJob::META => ['role' => 'start', 'pairedWith' => 'b']])]
+            #[PaidJob('start', 'b', price: 'abc')]
+            public function a(): void
+            {
+            }
+
+            #[McpTool(name: 'b', meta: [PaidJob::META => ['role' => 'result', 'pairedWith' => 'a']])]
+            #[PaidJob('result', 'a')]
+            public function b(): void
+            {
+            }
+        }];
+        yield 'a zero deposit' => [new class {
+            #[McpTool(name: 'a', meta: [PaidJob::META => ['role' => 'start', 'pairedWith' => 'b']])]
+            #[PaidJob('start', 'b', price: '0.00')]
+            public function a(): void
+            {
+            }
+
+            #[McpTool(name: 'b', meta: [PaidJob::META => ['role' => 'result', 'pairedWith' => 'a']])]
+            #[PaidJob('result', 'a')]
+            public function b(): void
+            {
+            }
+        }];
         yield 'unknown role' => [new class {
             // Paired correctly: only the role is wrong.
             #[McpTool(name: 'a', meta: [PaidJob::META => ['role' => 'deposit', 'pairedWith' => 'b']])]
@@ -155,7 +273,7 @@ final class PricingTest extends TestCase
 
     public function testAFastToolKeepsTheDefaultOfferAndNoDuration(): void
     {
-        $pricing = new Pricing(['wisdom', 'analyze_terms'], 'eip155:84532', '0.01', self::PAY_TO, ['analyze_terms' => '0.02'], ['analyze_terms' => 120], ['analyze_terms' => 60]);
+        $pricing = new Pricing(['wisdom', 'analyze_terms'], 'eip155:84532', '0.01', self::PAY_TO, ['analyze_terms' => '0.02'], ['analyze_terms' => 120], ['analyze_terms' => 60], self::TOOLS);
 
         self::assertSame(60, $pricing(['name' => 'wisdom'])[0]['maxTimeoutSeconds']);
         self::assertSame(0, $pricing->duration(['name' => 'wisdom']));
@@ -188,12 +306,12 @@ final class PricingTest extends TestCase
     public function testABadTimeoutOrDurationIsAConfigError(array $timeouts, array $durations): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        new Pricing(['analyze_terms'], 'eip155:84532', '0.01', self::PAY_TO, [], $timeouts, $durations);
+        new Pricing(['analyze_terms'], 'eip155:84532', '0.01', self::PAY_TO, [], $timeouts, $durations, self::TOOLS);
     }
 
     public function testTheLargestDurationsThatFit(): void
     {
-        $edge = new Pricing(['analyze_terms', 'wisdom'], 'eip155:84532', '0.01', self::PAY_TO, [], ['analyze_terms' => 600, 'wisdom' => 1], ['analyze_terms' => 593, 'echo' => 53, 'free' => 0]);
+        $edge = new Pricing(['analyze_terms', 'wisdom'], 'eip155:84532', '0.01', self::PAY_TO, [], ['analyze_terms' => 600, 'wisdom' => 1], ['analyze_terms' => 593, 'echo' => 53, 'free' => 0], self::TOOLS);
         self::assertSame(593, $edge->duration(['name' => 'analyze_terms']));
         self::assertSame(53, $edge->duration(['name' => 'echo']));
         self::assertSame(1, $edge(['name' => 'wisdom'])[0]['maxTimeoutSeconds']);

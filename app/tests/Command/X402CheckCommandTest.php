@@ -58,6 +58,11 @@ final class X402CheckCommandTest extends KernelTestCase
         yield 'TERMS_LIMIT_DAY not a number' => [['TERMS_LIMIT_DAY' => 'abc'], 'TERMS_LIMIT_DAY: must be a positive integer'];
         yield 'timeout not a number' => [['X402_TIMEOUTS' => '{"analyze_terms":"abc"}'], 'X402_TIMEOUTS[analyze_terms] must be an integer'];
         yield 'duration too long' => [['X402_DURATIONS' => '{"analyze_terms":115}'], 'X402_DURATIONS[analyze_terms]'];
+        yield 'a paid tool name with a typo' => [['X402_PAID_TOOLS' => 'wisdon,analyze_terms'], 'X402_PAID_TOOLS names "wisdon", which is no tool this server serves'];
+        yield 'a price with a typo' => [['X402_PRICES' => '{"wisdon":"0.02"}'], 'X402_PRICES names "wisdon"'];
+        yield 'X402_PRICE not a number' => [['X402_PRICE' => 'abc'], 'X402_PRICE: Not a price'];
+        yield 'X402_PRICES not a number' => [['X402_PRICES' => '{"wisdom":"abc"}'], 'X402_PRICES[wisdom]: Not a price'];
+        yield 'X402_PRICES zero' => [['X402_PRICES' => '{"wisdom":"0"}'], 'X402_PRICES[wisdom]: A price must be above zero'];
         yield 'an offer our buyer refuses' => [['X402_BUYER_MAX_TIMEOUT' => '100'], 'analyze_terms offers 120 s, longer than our own buyer signs (100 s)'];
     }
 

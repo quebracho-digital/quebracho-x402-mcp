@@ -6,6 +6,7 @@ namespace App\Tests;
 
 use App\EventListener\McpRateLimit;
 use App\X402\Pricing;
+use Psr\Cache\CacheItemPoolInterface;
 use Quebracho\X402\Budget;
 use Quebracho\X402\Networks;
 use Quebracho\X402\PayingMcpClient;
@@ -58,8 +59,16 @@ final class AppKernelTest extends KernelTestCase
 
         self::assertSame(60, $hook('duration')(['name' => 'analyze_terms']));
         self::assertSame(0, $hook('duration')(['name' => 'wisdom']));
-        self::assertSame('Unknown tool: nosuchtool_start', $hook('validate')(['name' => 'nosuchtool_start']));
-        self::assertNull($hook('validate')(['name' => 'wisdom']));
+        self::assertSame('Missing required argument(s): text', $hook('validate')(['name' => 'analyze_terms', 'arguments' => []]));
+        self::assertNull($hook('validate')(['name' => 'analyze_terms', 'arguments' => ['text' => 'x']]));
+    }
+
+    public function testTheCatalogHoldsTheServedToolsOnly(): void
+    {
+        $tools = self::getContainer()->getParameter('app.mcp_tools');
+        \assert(\is_array($tools));
+        self::assertEqualsCanonicalizing(['analyze_terms', 'echo', 'ombu_search', 'wisdom'], array_keys($tools));
+        self::assertSame(['text'], $tools['analyze_terms']['required']);
     }
 
     public function testTheBuyerSignsNoLongerThanX402BuyerMaxTimeout(): void
@@ -77,7 +86,11 @@ final class AppKernelTest extends KernelTestCase
     public function testOnePostOverMcpLimitIpThroughTheRealKernelIs429(): void
     {
         $kernel = self::bootKernel();
-        // A fresh client per run: the test env keeps limiter state in its cache pool between runs.
+        // The test env keeps limiter state (var/share/test) between runs: start from empty,
+        // or a re-run within a minute meets the shared mcp_global bucket half spent.
+        $pool = self::getContainer()->get('cache.rate_limiter');
+        \assert($pool instanceof CacheItemPoolInterface);
+        $pool->clear();
         $ip = '198.18.'.random_int(0, 255).'.'.random_int(1, 254);
         $send = static fn () => $kernel->handle(Request::create('http://localhost/mcp', 'POST', server: ['REMOTE_ADDR' => $ip, 'CONTENT_TYPE' => 'application/json'], content: '{"jsonrpc":"2.0","id":9,"method":"ping"}'));
 

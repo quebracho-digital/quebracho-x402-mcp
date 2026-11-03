@@ -62,12 +62,8 @@ final class X402CheckCommand
         foreach (['mcp_ip' => $this->mcpIp, 'mcp_global' => $this->mcpGlobal, 'terms_ip' => $this->termsIp, 'terms_day' => $this->termsDay] as $id => $factory) {
             $check("limiter $id", fn () => $factory()->create('app:x402:check'));
         }
-        $check('Pricing (X402_PAID_TOOLS, X402_PRICE(S), X402_PAY_TO, X402_NETWORK, X402_TIMEOUTS, X402_DURATIONS)', function (): void {
-            $pricing = ($this->pricing)();
-            foreach (array_keys((array) json_decode((string) $this->timeouts, true)) as $tool) {
-                $pricing(['name' => $tool]);
-            }
-        });
+        // Pricing's constructor prices every paid tool and refuses a name that is no tool.
+        $check('Pricing (X402_PAID_TOOLS, X402_PRICE(S), X402_PAY_TO, X402_NETWORK, X402_TIMEOUTS, X402_DURATIONS, #[PaidJob])', fn () => ($this->pricing)());
         $check('buyer (X402_BUDGETS, X402_MAX_PER_PAYMENT, X402_BUYER_KEY, X402_BUYER_MAX_TIMEOUT)', fn () => ($this->buyer)());
         $check('X402_TIMEOUTS within X402_BUYER_MAX_TIMEOUT', function (): void {
             foreach ((array) json_decode((string) $this->timeouts, true) as $tool => $seconds) {

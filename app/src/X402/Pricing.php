@@ -18,12 +18,12 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 final class Pricing
 {
     /**
-     * @param list<string>                                                            $paidTools
-     * @param array<string, string>                                                   $prices
-     * @param array<string, mixed>                                                    $timeouts  maxTimeoutSeconds per tool, 1..Budget::MAX_TIMEOUT; default Networks::TIMEOUT
-     * @param array<string, mixed>                                                    $durations worst-case seconds from the claim to the settle, per tool
-     * @param array<string, ?array{role: string, pairedWith: string, price: ?string}> $tools     every registered tool by
-     *                                                                                           name, with its #[PaidJob]
+     * @param list<string>                                                                                                $paidTools
+     * @param array<string, string>                                                                                       $prices
+     * @param array<string, mixed>                                                                                        $timeouts  maxTimeoutSeconds per tool, 1..Budget::MAX_TIMEOUT; default Networks::TIMEOUT
+     * @param array<string, mixed>                                                                                        $durations worst-case seconds from the claim to the settle, per tool
+     * @param array<string, array{job: ?array{role: string, pairedWith: string, price: ?string}, required: list<string>}> $tools
+     *                                                                                                                               every served tool by name (PaidJob::catalog)
      */
     public function __construct(
         #[Autowire(env: 'csv:X402_PAID_TOOLS')] private readonly array $paidTools,
@@ -48,6 +48,26 @@ final class Pricing
                 throw new \InvalidArgumentException("X402_DURATIONS[$tool] must be an integer under its X402_TIMEOUTS minus ".EvmExact::SLACK.' s.');
             }
         }
+        // A typo fails open: "wisdon" in X402_PAID_TOOLS leaves wisdom free. Every name must be a served tool.
+        foreach (['X402_PAID_TOOLS' => $this->paidTools, 'X402_PRICES' => array_keys($this->prices), 'X402_TIMEOUTS' => array_keys($this->timeouts), 'X402_DURATIONS' => array_keys($this->durations)] as $env => $names) {
+            foreach ($names as $name) {
+                if (!isset($this->tools[$name])) {
+                    throw new \InvalidArgumentException("$env names \"$name\", which is no tool this server serves.");
+                }
+            }
+        }
+        // Every paid tool must be sellable, or it errors on its first call.
+        foreach ($this->tools as $name => ['job' => $job]) {
+            if (null === $job && !\in_array($name, $this->paidTools, true)) {
+                continue;
+            }
+            try {
+                $this(['name' => $name]);
+            } catch (\InvalidArgumentException $e) {
+                $from = null !== ($job['price'] ?? null) ? "#[PaidJob] price of $name" : (isset($this->prices[$name]) ? "X402_PRICES[$name]" : 'X402_PRICE');
+                throw new \InvalidArgumentException("$from: {$e->getMessage()}", 0, $e);
+            }
+        }
     }
 
     /**
@@ -59,7 +79,7 @@ final class Pricing
     {
         $name = $params['name'];
         // Fails closed: a #[PaidJob] tool is never free, listed or not. The flag decides, not the name.
-        $job = $this->tools[$name] ?? null;
+        $job = $this->tools[$name]['job'] ?? null;
         if (null === $job && !\in_array($name, $this->paidTools, true)) {
             return null;
         }
@@ -74,12 +94,21 @@ final class Pricing
     }
 
     /**
-     * For X402McpMiddleware's $validate: a paid name that is no registered tool
-     * (a typo in X402_PAID_TOOLS) is refused before any payment is read.
+     * For X402McpMiddleware's $validate, before any payment is read: a call
+     * missing an argument its tool needs is refused, so an upfront (_start)
+     * deposit is never charged for a call that cannot run.
+     *
+     * ponytail: presence only; a wrong type still reaches the tool (an error after an upfront settle).
      */
     public function validate(array $params): ?string
     {
-        return \array_key_exists($params['name'], $this->tools) ? null : "Unknown tool: {$params['name']}";
+        $args = $params['arguments'] ?? [];
+        if (!\is_array($args)) {
+            return 'arguments must be an object';
+        }
+        $missing = array_diff($this->tools[$params['name']]['required'] ?? [], array_keys($args));
+
+        return [] === $missing ? null : 'Missing required argument(s): '.implode(', ', $missing);
     }
 
     /**
