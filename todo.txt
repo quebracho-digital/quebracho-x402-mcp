@@ -1,7 +1,10 @@
 (A) 2026-11-02 Video del hackathon v2: grabación real de la demo (bin/smoke.sh, app:ask, compra real en Ombú con recibo), 90 s, subir con URL nueva (la del formulario es la vieja); material en video/NOTES.md, se hace al final, cuando funcionen los MCP +hackathon due:2026-11-20
 (B) 2026-11-02 Re-split de packages/x402 con tag nuevo (v0.2.2 o v0.3.0: incluye ConcordiumExact) cuando Leo ponga el hook de Packagist +hackathon @agente
 (B) 2026-11-02 Entregar el hackathon: formulario con repo (monorepo) + video nuevo; plazo oficial 2026-11-22 18:00 CET +hackathon due:2026-11-22
+(B) 2026-11-03 Integrar el MCP de Ombú en app/ (segundo servidor MCP del agente, URL por variable de entorno) solo cuando la sesión de Ombú termine, haga los tests y pushee; esperar su aviso; Leo: "ya estaba todo decidido" +hackathon +ombu
 (A) 2026-11-03 Ombú: agregar un MCP (módulo contrib drupal/mcp_server, SDK oficial) con búsqueda y detalle de servicios, solo en dev; lo coordina la sesión de docs y lo hace una sesión experta en Ombú; deploy a prod solo con autorización de Leo +hackathon +ombu due:2026-11-14
+(C) 2026-11-03 Concordium: retomar y restaurar desde b83b145 (git show) recién desde 2026-11-19; hasta entonces no codear nada de Concordium en este repo (Kalibang) +kalibang due:2026-11-19
+(B) 2026-11-03 Evaluar sumar Hugging Face (jurado Nico Martin): plataforma HF para el agente de Symfony AI y/o una herramienta de pago respaldada por un modelo de HF; ver la evaluación en la sesión +hackathon
 (B) 2026-11-03 Commitear ombu_search (app/src/Mcp/OmbuSearchTool.php, tests) y el diagrama del README cuando Leo lo pida; el diagrama no se vio renderizado +hackathon
 (B) 2026-11-03 Compra real en la demo contra un listado de Ombú, con las wallets del hackathon de Tameion; tope de centavos, clave solo en app/.env.local; al final, cuando funcionen los MCP +hackathon due:2026-11-18
 (C) 2026-10-30 Rotar HF_TOKEN (apareció en el chat de la sesión del 2026-10-30; Leo: no urge, riesgo = los USD 20 del cupón) cuando venza el cupón o antes de publicar nada con el token +quebracho-x402-mcp @seguridad due:2026-11-27
