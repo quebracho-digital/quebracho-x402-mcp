@@ -240,7 +240,8 @@ our Hugging Face credit, so four limits with Symfony's `rate-limiter` (with
 (`App\EventListener\McpRateLimit`, right after routing) before the x402
 middleware: a flood reaches no signature check, payee screening or facilitator
 `/verify`, and nothing is claimed or charged. A request whose Host or Origin
-the transport refuses (403, the bundle's `allowed_hosts`) is not counted. Over
+the transport refuses (403, the bundle's `allowed_hosts`) is not counted and
+not throttled: that check is cheap and runs before anything x402 does. Over
 a limit the answer is HTTP 429 with a `Retry-After` header (seconds, at least
 1, exposed to browsers by `Access-Control-Expose-Headers`) and a JSON-RPC error,
 `{"jsonrpc":"2.0","id":<the request's id>,"error":{"code":-32000,"message":"Rate limit reached for /mcp. Nothing was charged; try later."}}`;
@@ -268,8 +269,14 @@ NAT), 198.18.0.0/15 (benchmarking), 0.0.0.0/8 and 240.0.0.0/4, and for IPv6
 attacker wrote to its left picks the bucket. In production set
 `TRUSTED_PROXIES` to your real proxies, by address.
 
+The global cap trades a flood for a lockout: about
+`MCP_LIMIT_GLOBAL / MCP_LIMIT_IP` clients (10 with the defaults) each sending
+at their full rate fill it, and then every new client gets 429, even on
+`initialize`, until the minute slides. Raise `MCP_LIMIT_GLOBAL` to what your
+server can verify per minute; it is a ceiling for a bad day, not a quota.
+
 The limiter state lives in the `cache.rate_limiter` pool (files under
-`var/cache/<env>/pools`) and its locks are flock files (`sf.*.lock`) in PHP's
+`var/share/<env>/pools/app`, from `APP_SHARE_DIR`, not `var/cache`) and its locks are flock files (`sf.*.lock`) in PHP's
 temp directory. Neither is pruned by itself: run
 `bin/console cache:pool:prune` from cron (hourly is plenty), and remove lock
 files older than a day, for example
@@ -294,9 +301,17 @@ never priced. A `start` tool settles its deposit before running
 published in the tool's `_meta` in `tools/list`
 (`"x402/job": {"role": ..., "pairedWith": ...}`). The container build fails
 on a tool named `*_start` or `*_result` without the flag, on a flag missing
-from `_meta`, and on a pair that does not point back with the other role. A
-paid name that is no registered tool (a typo in `X402_PAID_TOOLS`) is a
-JSON-RPC `-32602` error before any payment is read.
+from `_meta`, on a deposit price that is no positive decimal, on two tools
+with one name, and on a pair that does not point back with the other role.
+Only tools inside the served registry (`App\Mcp\` in `mcp.yaml`) count.
+
+Before any payment is read, a paid call missing an argument its tool needs
+(a parameter without a default) is a JSON-RPC `-32602` error, so a `_start`
+deposit is never charged for a call that cannot run. Known limit: only the
+presence of each argument is checked, not its type; a wrong type reaches the
+tool, and on an upfront tool that is after the money moved. The middleware
+then dispatches a `failed_after_settle` `PaymentOutcome` (it carries the
+payment, so payer and nonce) for a manual refund, and the receipt goes back in `error.data["x402/payment-response"]`.
 
 A call costs roughly a quarter of a cent at DeepSeek V4.1
 Flash's listed prices (our estimate; the Hugging Face bill is not checked yet).
@@ -376,15 +391,21 @@ ddev exec --dir /var/www/html/app bin/console app:screening check 0x…
 `app/.env` holds working defaults. Override them in `app/.env.local` (git-ignored).
 On every deploy, after `composer install`, run `bin/console app:x402:check`:
 Pricing, the limiters and the buyer's budget are otherwise only built on the
-first request, and the command exits 1 naming each bad value (including an
-`X402_TIMEOUTS` above `X402_BUYER_MAX_TIMEOUT`, which our own agent would refuse).
+first request, and the command exits 1 naming each bad value: a name in
+`X402_PAID_TOOLS`, `X402_PRICES`, `X402_TIMEOUTS` or `X402_DURATIONS` that is
+no tool (a typo there would leave the tool you meant to charge free), a price
+that is not a positive amount for any paid tool (`X402_PRICE`, `X402_PRICES`
+or a `#[PaidJob]` price), a limit that is not a positive integer, a bad
+timeout or duration, a buyer budget that does not build, and an
+`X402_TIMEOUTS` above `X402_BUYER_MAX_TIMEOUT` (our own agent would refuse
+it). The same Pricing errors also answer every `/mcp` request with a 500.
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `X402_NETWORK` | `eip155:84532` | CAIP-2 network (Base Sepolia). |
 | `X402_PRICE` | `0.01` | Price per paid call, in USD. |
 | `X402_PAY_TO` | `0x7e51…6510` | Who gets paid. **This is the author's wallet.** Change it to yours. |
-| `X402_PAID_TOOLS` | `wisdom,analyze_terms` | Comma-separated tool names that cost money. A `#[PaidJob]` tool is always paid, listed or not; a listed name that is no tool is refused (`-32602`). |
+| `X402_PAID_TOOLS` | `wisdom,analyze_terms` | Comma-separated tool names that cost money. A `#[PaidJob]` tool is always paid, listed or not. A name here (or in `X402_PRICES`, `X402_TIMEOUTS`, `X402_DURATIONS`) that is no tool is a config error (`app:x402:check` exits 1; `/mcp` answers 500). |
 | `X402_FACILITATOR` | `mock` | Must be set explicitly: `mock` (verified signatures, nothing settled) or a facilitator URL such as `https://x402.org/facilitator` (real settle: on Base Sepolia by default, on a mainnet when `X402_NETWORK` is one you registered). Anything else fails closed: every `/mcp` request errors, nothing is served for free. |
 | `X402_BUYER_KEY` | web3.js docs key | The agent's buyer key: the public web3.js key, holds testnet USDC; anyone can spend it. For a mainnet use your own key in `.env.local`, never in a committed file. |
 | `HF_TOKEN` | empty | Your Hugging Face token, for `app:ask --hf`. Put it in `app/.env.local`. |
