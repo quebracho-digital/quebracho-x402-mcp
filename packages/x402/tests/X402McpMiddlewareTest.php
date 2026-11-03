@@ -256,8 +256,7 @@ final class X402McpMiddlewareTest extends TestCase
         $request = $this->paidCall();
 
         $out = json_decode((string) $this->middleware($settle, hooks: ['validate' => $validate])->process($request, $this->handler())->getBody(), true);
-        self::assertSame(['code' => -32602, 'message' => 'text must not be empty'], $out['error']);
-        self::assertSame(2, $out['id']);
+        self::assertSame(['jsonrpc' => '2.0', 'id' => 2, 'error' => ['code' => -32602, 'message' => 'text must not be empty']], $out);
         self::assertSame(['wisdom', 0, 0], [$seen, $this->runs, $settled]);
         // Unpaid too: the buyer is not asked to sign for params we would refuse.
         self::assertArrayHasKey('error', json_decode((string) $this->middleware(hooks: ['validate' => $validate])->process(self::call('wisdom'), $this->handler())->getBody(), true));

@@ -38,6 +38,7 @@ final class BudgetTest extends TestCase
         // Never above MAX_TIMEOUT, whatever it is given.
         self::assertFalse(Budget::fromUsd(['eip155:84532' => '0.05'], maxTimeout: 9999)->allows(['maxTimeoutSeconds' => Budget::MAX_TIMEOUT + 1] + self::offer()));
         self::assertTrue(Budget::fromUsd(['eip155:84532' => '0.05'])->allows(['maxTimeoutSeconds' => Budget::MAX_TIMEOUT] + self::offer()));
+        self::assertTrue($budget->allows(['maxTimeoutSeconds' => 1] + self::offer()), 'one second is the shortest validity');
     }
 
     /** What a hostile seller can put in its PaymentRequired. */
