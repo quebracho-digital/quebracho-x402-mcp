@@ -1,24 +1,27 @@
-# quebracho-x402-mcp
+# quebracho/x402
 
-Paid MCP tools in PHP: a Symfony MCP server whose tools charge per call with
-[x402](https://www.x402.org/), and a PHP library any buyer or seller can use.
-An agent that pays another agent, with no API keys and no accounts. Only a
-signed USDC authorization travels in an HTTP header.
+x402 payments for PHP: a framework-free library (PSR-7/14/15/18, MIT) that
+lets any PHP service sell, or any PHP agent buy, over
+[x402](https://www.x402.org/): HTTP 402 plus a signed USDC authorization. No
+API keys, no accounts. This repo holds the library (`packages/x402`) and a
+Symfony MCP server with a Symfony AI agent (`app/`) that show it working.
 
 Built for the Symfony AI & MCP Hackathon (team Ombu). The x402 library is
-contributed by Quebracho.
+contributed by Quebracho. It already runs in production on mainnet at
+[ombu.quebracho.digital](https://ombu.quebracho.digital), and powers the
+Drupal module [x402_pay](https://www.drupal.org/project/x402_pay).
 
 > The demo runs on Base Sepolia. In *mock mode* signatures are real and fully
 > verified, but nothing is settled on chain, so you need no wallet and no faucet.
 
 ## TL;DR
 
-- **What:** an MCP server in Symfony whose tools charge per call, and a framework-free PHP library (`quebracho/x402`, MIT) to sell or buy anything over [x402](https://www.x402.org/) (HTTP 402 plus a signed USDC authorization).
+- **What:** `quebracho/x402`, a framework-free PHP library (MIT) to sell or buy anything over [x402](https://www.x402.org/) (HTTP 402 plus a signed USDC authorization), and a Symfony MCP server whose tools charge per call as its example.
 - **Why:** agents can call tools but cannot pay for them. API keys and accounts do not scale to machines.
 - **How:** the agent calls a tool, gets a price (402), signs within a budget, retries with the payment, and receives the result with an on-chain receipt.
 - **Safe by construction:** verify is not paid. One signature buys one delivery, a replay never runs the handler, smart-wallet signatures are refused, gas is bounded, and addresses are screened. Each defence has a test.
-- **Proven:** 144 library tests with no network, EVM, Solana and NEAR (experimental) schemes, and a real USDC settle on Base Sepolia.
-- **Used by:** the Drupal module [x402_pay](https://www.drupal.org/project/x402_pay): release 1.0.0-beta3 on drupal.org runs on this library (`quebracho/x402 ^0.2`). The library grew from that module, so one codebase serves Drupal and Symfony.
+- **Proven:** 166 library tests with no network, EVM, Solana and NEAR (experimental) schemes, and a real USDC settle on Base Sepolia.
+- **Used by:** ombu.quebracho.digital, in production on mainnet, and the Drupal module [x402_pay](https://www.drupal.org/project/x402_pay): release 1.0.0-beta3 on drupal.org runs on this library (`quebracho/x402 ^0.2`). The library grew from that module, so one codebase serves Drupal and Symfony.
 - **Try it:** `bin/smoke.sh` after `ddev start` (below). Mock mode needs no wallet and no faucet.
 
 ## What's inside
