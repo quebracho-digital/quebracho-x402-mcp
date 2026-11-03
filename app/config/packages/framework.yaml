@@ -5,6 +5,18 @@ framework:
     # Note that the session will be started ONLY if you read or write from it.
     session: true
 
+    # analyze_terms spends our Hugging Face credit, and a testnet payment costs the caller nothing:
+    # a limit per client and one for the whole server, per day. Env: TERMS_LIMIT_IP (per hour), TERMS_LIMIT_DAY.
+    rate_limiter:
+        terms_ip:
+            policy: sliding_window
+            limit: '%env(int:TERMS_LIMIT_IP)%'
+            interval: '1 hour'
+        terms_day:
+            policy: fixed_window
+            limit: '%env(int:TERMS_LIMIT_DAY)%'
+            interval: '1 day'
+
     #esi: true
     #fragments: true
 

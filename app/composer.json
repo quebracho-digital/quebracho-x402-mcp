@@ -24,6 +24,7 @@
         "symfony/http-client": "8.1.*",
         "symfony/mcp-bundle": "^0.15.0",
         "symfony/psr-http-message-bridge": "8.1.*",
+        "symfony/rate-limiter": "8.1.*",
         "symfony/runtime": "8.1.*",
         "symfony/yaml": "8.1.*"
     },

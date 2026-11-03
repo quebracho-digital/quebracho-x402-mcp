@@ -7,6 +7,9 @@ namespace App\Mcp;
 use App\Terms\TermsAnalyzer;
 use Mcp\Capability\Attribute\McpTool;
 use Mcp\Exception\ToolCallException;
+use Symfony\Component\DependencyInjection\Attribute\Target;
+use Symfony\Component\HttpFoundation\RequestStack;
+use Symfony\Component\RateLimiter\RateLimiterFactoryInterface;
 
 /**
  * Paid (X402_PAID_TOOLS, price in X402_PRICES): the Hugging Face call has a cost.
@@ -16,13 +19,22 @@ final class AnalyzeTermsTool
 {
     public const NOTICE = 'SUPER BETA: an example for the hackathon demo, not legal advice. A model can miss clauses or flag the wrong ones. Read the quotes in the document before you rely on them.';
 
-    public function __construct(private readonly TermsAnalyzer $analyzer)
-    {
+    public function __construct(
+        private readonly TermsAnalyzer $analyzer,
+        #[Target('terms_ip.limiter')] private readonly RateLimiterFactoryInterface $perClient,
+        #[Target('terms_day.limiter')] private readonly RateLimiterFactoryInterface $perDay,
+        private readonly RequestStack $requests,
+    ) {
     }
 
     #[McpTool(name: 'analyze_terms', description: 'SUPER BETA, an example for the hackathon demo, not legal advice. Flags the clauses of a terms of service or privacy policy (up to 1200 words) in 19 categories, each with a quote checked against your text. Paid.')]
     public function __invoke(string $text): string
     {
+        // Before the model call: a refused call throws, so nothing is charged and no credit is spent.
+        $ip = $this->requests->getCurrentRequest()?->getClientIp() ?? 'unknown';
+        if (!$this->perClient->create($ip)->consume()->isAccepted() || !$this->perDay->create('all')->consume()->isAccepted()) {
+            throw new ToolCallException('Rate limit reached for analyze_terms (a super beta example with a daily budget). Nothing was charged; try later.');
+        }
         try {
             $result = $this->analyzer->analyze($text);
         } catch (\Throwable $e) {

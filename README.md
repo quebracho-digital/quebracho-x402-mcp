@@ -165,16 +165,17 @@ A paid tool (0.02 USDC, `X402_PRICES`) that flags the clauses of a terms of
 service or privacy policy, up to 1,200 words, in 19 categories (arbitration,
 unilateral changes, data sharing, tracking, auto-renewal...). It shows what an
 x402 tool can wrap without any infrastructure of ours: the model is
-`Qwen/Qwen3.8-27B` (open weights) on Hugging Face Inference Providers, called
-with your `HF_TOKEN`, and the price covers the call.
+`deepseek-ai/DeepSeek-V4.1-Flash` (open weights, no reasoning step) on Hugging
+Face Inference Providers, called with your `HF_TOKEN`, and the price covers the
+call. Change it with `TERMS_MODEL` (`Qwen/Qwen3.8-27B` also works).
 
 Each category comes with quotes the model had to copy exactly, and the server
 checks every quote against your text and **drops the ones that are not in it**
 (`quotes_dropped` says how many). A reply that is not JSON, or a text that is
 too long, is a tool error, so nothing is charged. The categories and the
-prompt come from `terms-eval`, the set Lapacho used to compare models, where
-this model found 99% of its quotes verbatim on 13 real documents; the model
-was not tested again here. The text is fenced as data, so a clause that says
+prompt come from `terms-eval`, the set Lapacho used to compare models (there,
+Qwen3.8-27B found 99% of its quotes verbatim on 13 real documents; DeepSeek
+V4.1 Flash was only tried here, on the run below). The text is fenced as data, so a clause that says
 "ignore your instructions" is not obeyed.
 
 ```bash
@@ -184,26 +185,30 @@ ddev exec -d /var/www/html/app bin/console app:ask --hf "Use analyze_terms on th
 **A real run (2026-11-03).** Text: the first 1,100 words of Ombú's own
 [terms of use](https://ombu.quebracho.digital/terms.md), with backticks, quotes
 and `$` removed so the shell would not touch them. The agent (`openai/gpt-oss-20b`
-on Hugging Face) called the tool, paid 0.02 USDC on Base Sepolia
-(`0x357319517c45ac4245c3cd988e58186382e7583dcf84f753cb075df44008851f`) and got:
+on Hugging Face) called the tool, paid 0.02 USDC on Base Sepolia and the tool
+(DeepSeek V4.1 Flash) answered with every quote verbatim and
+`quotes_dropped: 0`. It flagged eight categories, for example:
 
-```json
-{
-  "model": "Qwen/Qwen3.8-27B",
-  "categories": {
-    "unilateral_change": ["it can change, fail or stop at any time, and these terms may change before it opens for real."],
-    "contract_by_using": ["By using Ombú you accept them."]
-  },
-  "quotes_dropped": 3
-}
-```
+| Category | Quote from the text |
+|---|---|
+| contract_by_using | "If you use Ombú through an agent, the person or organisation the agent acts for accepts them and answers for what it does." |
+| unilateral_change | "it can change, fail or stop at any time, and these terms may change before it opens for real" |
+| choice_of_law | "If you are a consumer under the law that applies to you (in Argentina, Law 24,240), nothing in these terms limits the rights that law gives you and that cannot be waived." |
+| cancellation | "You can cancel the purchase of a service sold by Ombú, without giving a reason, within 10 calendar days of it…" |
+| limitation_of_liability | "The Operator does not sell, provide, operate, verify, endorse or guarantee these services" |
 
-Both quotes are literal in the text. `quotes_dropped: 3` means the model gave
-three quotes that were **not** in the text and the server threw them away (the
-agent's own gloss, "only returns the top-ranked matches", is wrong). Two
-categories out of a whole terms page is little: this is a super beta, we did not
-measure what it misses on this text, and the real cost of the call against the
-Hugging Face bill is still unchecked.
+Runs vary: another run on the same text paid in
+`0xe97251dd18e177de16531ad07524b8c1a2437caca262588e9e9f0fa2916e92ac` and the
+agent summarised six categories. Not every flagged quote is a clause (one
+`content_removal` quote is only the lead-in of a list), which is why it stays
+a super beta. The payment is on a testnet, but the Hugging Face call is real.
+
+**Flooding.** A testnet payment costs the caller nothing and each call spends
+our Hugging Face credit, so `analyze_terms` is rate limited with Symfony's
+`rate-limiter`: `TERMS_LIMIT_IP` calls per client per hour (10) and
+`TERMS_LIMIT_DAY` in total per day (500). A refused call is a tool error, so
+nothing is charged. A call costs roughly a quarter of a cent at DeepSeek V4.1
+Flash's listed prices (our estimate; the Hugging Face bill is not checked yet).
 
 No local LLM? `--hf` runs the same agent on [Hugging Face Inference Providers](https://huggingface.co/docs/inference-providers): put your token in `app/.env.local` and nothing else is needed (the Symfony AI bridge `symfony/ai-hugging-face-platform`).
 
@@ -289,7 +294,8 @@ ddev exec --dir /var/www/html/app bin/console app:screening check 0x…
 | `X402_BUYER_KEY` | web3.js docs key | The agent's buyer key: the public web3.js key, holds testnet USDC; anyone can spend it. For a mainnet use your own key in `.env.local`, never in a committed file. |
 | `HF_TOKEN` | empty | Your Hugging Face token, for `app:ask --hf`. Put it in `app/.env.local`. |
 | `X402_PRICES` | `{"analyze_terms":"0.02"}` | A tool's own price in USD, when it is not `X402_PRICE`. |
-| `TERMS_MODEL` | `Qwen/Qwen3.8-27B` | The model behind `analyze_terms` (super beta): open weights on Inference Providers; needs `HF_TOKEN`. |
+| `TERMS_MODEL` | `deepseek-ai/DeepSeek-V4.1-Flash` | The model behind `analyze_terms` (super beta): open weights on Inference Providers; needs `HF_TOKEN`. |
+| `TERMS_LIMIT_IP` / `TERMS_LIMIT_DAY` | `10` / `500` | `analyze_terms` calls per client IP per hour and in total per day; over the limit is a tool error, nothing charged. |
 | `HF_MODEL` | `openai/gpt-oss-20b` | The model `--hf` uses: any chat model on Inference Providers with tool calling. |
 | `X402_BUDGETS` | `{"eip155:84532":"0.05"}` | The agent's spending cap per run, in USD, JSON by network. A network not listed is never paid (Arc mainnet is left out on purpose: add it in `.env.local` with a non-public key). |
 | `X402_MAX_PER_PAYMENT` | `{"eip155:84532":"0.02"}` | Ceiling for one single payment, same shape. |
