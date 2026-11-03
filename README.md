@@ -232,14 +232,18 @@ agent summarised six categories. Not every flagged quote is a clause (one
 a super beta. The payment is on a testnet, but the Hugging Face call is real.
 
 **Flooding.** A testnet payment costs the caller nothing and each call spends
-our Hugging Face credit, so `analyze_terms` is rate limited with Symfony's
-`rate-limiter` (with `lock`, flock, against parallel requests): `TERMS_LIMIT_IP` calls per client per hour (5) and
-`TERMS_LIMIT_DAY` in total per day (500). The client is the IP behind `TRUSTED_PROXIES` (default `private_ranges`; add Cloudflare's ranges in
+our Hugging Face credit, so two limits with Symfony's `rate-limiter` (with
+`lock`, flock, against parallel requests). Every `POST /mcp` counts against
+`MCP_LIMIT_IP` per client IP per minute (60), checked in a `kernel.request`
+listener (`App\EventListener\McpRateLimit`) before the x402 middleware: a flood
+gets a 429 and reaches no signature check, payee screening or facilitator
+`/verify`, and nothing is claimed or charged. `analyze_terms` also has
+`TERMS_LIMIT_DAY` calls in total per day (500), inside the tool: over it is a
+tool error, so nothing is charged (an empty text, one over 1,200 words or over
+12,000 characters is refused before it uses that limit). The client is the IP behind `TRUSTED_PROXIES` (default `private_ranges`; add Cloudflare's ranges in
 production, and never trust `X-Forwarded-For` from anyone else). `private_ranges` trusts any private address as a proxy, so a client that reaches PHP from one (a LAN, a published Docker port) can forge `X-Forwarded-For` and get a new bucket each time; in production list your real proxies instead. Under DDEV alone every caller reaches PHP as the
 Docker gateway, so locally the limit is one bucket for the host; a per-client limit needs a real proxy in front
-(Cloudflare, nginx) that passes the client IP. A refused call is a tool error, so
-nothing is charged (an empty text, one over 1,200 words or over 12,000 characters is refused before it uses any limit).
-The limiter lives inside the tool, so the work done before it (signature check, payee screening, `/verify`) is not covered: rate limit `/mcp` where you deploy it (for example a Cloudflare rule).
+(Cloudflare, nginx) that passes the client IP.
 
 **Slow tools.** The seller settles after the tool answers, so a signature
 must still be valid then. `analyze_terms` offers a 120 s signature
@@ -340,7 +344,8 @@ ddev exec --dir /var/www/html/app bin/console app:screening check 0x…
 | `X402_TIMEOUTS` | `{"analyze_terms":120}` | A tool's own `maxTimeoutSeconds` (how long its signature lives), when it is not 60. |
 | `X402_DURATIONS` | `{"analyze_terms":60}` | A tool's worst case in seconds from the claim to the settle; a payment with less validity left (plus 6 s) is refused before the claim. Must stay under the tool's timeout minus 6 s, or the app refuses to start. A tool not listed: no check. |
 | `TERMS_MODEL` | `deepseek-ai/DeepSeek-V4.1-Flash` | The model behind `analyze_terms` (super beta): open weights on Inference Providers; needs `HF_TOKEN`. |
-| `TERMS_LIMIT_IP` / `TERMS_LIMIT_DAY` | `5` / `500` | `analyze_terms` calls per client IP per hour and in total per day; over the limit is a tool error, nothing charged. |
+| `MCP_LIMIT_IP` | `60` | `POST /mcp` requests per client IP per minute, refused with 429 before any payment is checked. |
+| `TERMS_LIMIT_DAY` | `500` | `analyze_terms` calls in total per day; over the limit is a tool error, nothing charged. |
 | `HF_MODEL` | `openai/gpt-oss-20b` | The model `--hf` uses: any chat model on Inference Providers with tool calling. |
 | `X402_BUDGETS` | `{"eip155:84532":"0.05"}` | The agent's spending cap per run, in USD, JSON by network. A network not listed is never paid (Arc mainnet is left out on purpose: add it in `.env.local` with a non-public key). |
 | `X402_MAX_PER_PAYMENT` | `{"eip155:84532":"0.02"}` | Ceiling for one single payment, same shape. |

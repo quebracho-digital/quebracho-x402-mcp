@@ -3,7 +3,7 @@ framework:
     secret: '%env(APP_SECRET)%'
 
     # Behind a reverse proxy (DDEV's router, Cloudflare, nginx) REMOTE_ADDR is the proxy, so the
-    # per-client limit of analyze_terms would be one bucket for everybody. Trust only the hops listed in
+    # per-client limit on /mcp (MCP_LIMIT_IP) would be one bucket for everybody. Trust only the hops listed in
     # TRUSTED_PROXIES (default: private networks);
     # add Cloudflare's ranges in production. Never trust X-Forwarded-For from anyone else.
     trusted_proxies: '%env(TRUSTED_PROXIES)%'
@@ -12,13 +12,14 @@ framework:
     # Note that the session will be started ONLY if you read or write from it.
     session: true
 
-    # analyze_terms spends our Hugging Face credit, and a testnet payment costs the caller nothing:
-    # a limit per client and one for the whole server, per day. Env: TERMS_LIMIT_IP (per hour), TERMS_LIMIT_DAY.
+    # A testnet payment costs the caller nothing: POST /mcp is limited per client before any
+    # signature check (App\EventListener\McpRateLimit, MCP_LIMIT_IP per minute), and analyze_terms,
+    # which spends our Hugging Face credit, for the whole server per day (TERMS_LIMIT_DAY).
     rate_limiter:
-        terms_ip:
+        mcp_ip:
             policy: sliding_window
-            limit: '%env(int:TERMS_LIMIT_IP)%'
-            interval: '1 hour'
+            limit: '%env(int:MCP_LIMIT_IP)%'
+            interval: '1 minute'
         terms_day:
             policy: fixed_window
             limit: '%env(int:TERMS_LIMIT_DAY)%'
