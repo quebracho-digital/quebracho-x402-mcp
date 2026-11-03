@@ -14,6 +14,7 @@ use Psr\Http\Server\RequestHandlerInterface;
 use Quebracho\X402\EvmExact;
 use Quebracho\X402\FileClaims;
 use Quebracho\X402\Networks;
+use Quebracho\X402\Scheme;
 use Quebracho\X402\Settlement;
 use Quebracho\X402\Signer;
 use Quebracho\X402\X402McpMiddleware;
@@ -29,8 +30,11 @@ final class X402McpMiddlewareTest extends TestCase
         $this->claims = (new FileClaims(sys_get_temp_dir().'/x402-claims-'.bin2hex(random_bytes(8))))->__invoke(...);
     }
 
-    /** @param array<string, \Closure> $hooks validate, payer, duration */
-    private function middleware(?\Closure $settle = null, bool $upfront = false, array $hooks = []): X402McpMiddleware
+    /**
+     * @param array<string, \Closure> $hooks  validate, payer, duration
+     * @param ?Scheme                 $scheme default: EvmExact on the real clock
+     */
+    private function middleware(?\Closure $settle = null, bool $upfront = false, array $hooks = [], ?Scheme $scheme = null): X402McpMiddleware
     {
         $req = Networks::requirements('eip155:84532', '0.01', '0x000000000000000000000000000000000000dEaD');
         if ($upfront) {
@@ -38,7 +42,7 @@ final class X402McpMiddlewareTest extends TestCase
         }
         $f = new Psr17Factory();
 
-        return new X402McpMiddleware([new EvmExact()], fn (array $params) => 'wisdom' === $params['name'] ? [$req] : null, $this->claims, $f, $f, $settle ?? Settlement::mock(), ...$hooks);
+        return new X402McpMiddleware([$scheme ?? new EvmExact()], fn (array $params) => 'wisdom' === $params['name'] ? [$req] : null, $this->claims, $f, $f, $settle ?? Settlement::mock(), ...$hooks);
     }
 
     /** A tool server answering id 2, as JSON or as a buffered SSE stream. */
@@ -74,10 +78,10 @@ final class X402McpMiddlewareTest extends TestCase
     }
 
     /** @param int $age seconds ago it was signed: its validity left is maxTimeoutSeconds - $age */
-    private function paidCall(int $age = 0): ServerRequest
+    private function paidCall(int $age = 0, ?\Closure $clock = null): ServerRequest
     {
         $required = self::toolResult($this->middleware()->process(self::call('wisdom'), $this->handler()))['structuredContent'];
-        $buyer = new EvmExact(new Signer('0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318'), fn () => time() - $age);
+        $buyer = new EvmExact(new Signer('0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318'), $clock ?? fn () => time() - $age);
 
         return self::call('wisdom', $buyer->pay($required, $required['accepts'][0]));
     }
@@ -283,16 +287,49 @@ final class X402McpMiddlewareTest extends TestCase
 
     public function testASlowToolRefusesASignatureThatWouldExpireBeforeTheSettle(): void
     {
-        // Offer: 60 s. A tool that may take 55 s cannot settle a fresh signature in time (EvmExact::SLACK).
-        $slow = ['duration' => fn (array $params) => 55];
-        $request = $this->paidCall();
-        $result = self::toolResult($this->middleware(hooks: $slow)->process($request, $this->handler()));
+        // One pinned clock for buyer and seller: signed at $t, validBefore = $t + 60.
+        $t = time();
+        $request = $this->paidCall(clock: fn () => $t);
+        $seller = new EvmExact(clock: fn () => $t);
+        // 60 s left: a tool of 55 s plus EvmExact::SLACK (6) does not fit.
+        $result = self::toolResult($this->middleware(hooks: ['duration' => fn (array $params) => 55], scheme: $seller)->process($request, $this->handler()));
         self::assertSame('invalid_exact_evm_payload_authorization_valid_before', $result['structuredContent']['error']);
         self::assertSame(0, $this->runs);
 
-        // Not claimed: a tool that fits in the time left still sells that payment.
-        $ok = $this->middleware(hooks: ['duration' => fn () => 30])->process($request, $this->handler());
+        // Not claimed: 54 + 6 = 60 fits exactly, and that payment still buys.
+        $ok = $this->middleware(hooks: ['duration' => fn () => 54], scheme: $seller)->process($request, $this->handler());
         self::assertTrue(self::toolResult($ok)['_meta'][X402McpMiddleware::PAYMENT_RESPONSE]['success']);
+    }
+
+    public function testADurationOnASchemeWithoutValidBeforeIsRefused(): void
+    {
+        $request = $this->paidCall();
+        // A scheme for the same network that is not EvmExact: no expiry Sale can read.
+        $other = new class implements Scheme {
+            public function supports(string $network): bool
+            {
+                return true;
+            }
+
+            public function verify(array $payment, array $req): ?string
+            {
+                return null;
+            }
+
+            public function pay(array $required, array $req): array
+            {
+                return [];
+            }
+
+            public function payer(array $payment): ?string
+            {
+                return '0x2c7536E3605D9C16a7a3D7b1898e529396a65c23';
+            }
+        };
+        $result = self::toolResult($this->middleware(hooks: ['duration' => fn () => 10], scheme: $other)->process($request, $this->handler()));
+        self::assertSame('unsupported_scheme', $result['structuredContent']['error']);
+        self::assertSame(0, $this->runs);
+        self::assertSame('paid content', self::toolResult($this->middleware(scheme: $other)->process($request, $this->handler()))['content'][0]['text']);
     }
 
     public function testAFastToolIsUnchangedByTheHooks(): void

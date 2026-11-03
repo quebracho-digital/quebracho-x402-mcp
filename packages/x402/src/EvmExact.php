@@ -91,7 +91,10 @@ final class EvmExact implements Scheme
         return is_string($from) ? $from : null;
     }
 
-    private function now(): int
+    /**
+     * The clock verify() uses; Sale's pre-flight reads the same one.
+     */
+    public function now(): int
     {
         return $this->clock ? ($this->clock)() : time();
     }

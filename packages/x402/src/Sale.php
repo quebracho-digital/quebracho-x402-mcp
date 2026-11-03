@@ -67,7 +67,7 @@ final class Sale
                 $reason = self::UNAVAILABLE;
             }
         }
-        $reason ??= $this->expiresTooSoon();
+        $reason ??= $this->expiresTooSoon($scheme);
         // Spent before it runs: N concurrent copies get one delivery.
         if (null === $reason && !($this->claimed = ($this->claim)(Settlement::key($this->payment)))) {
             $reason = 'duplicate_settlement';
@@ -128,18 +128,20 @@ final class Sale
      * authorization would deliver unpaid. Checked last before the claim, after
      * the online verify spent its time. Only a call that declares a duration.
      */
-    private function expiresTooSoon(): ?string
+    private function expiresTooSoon(Scheme $scheme): ?string
     {
         if ($this->duration <= 0) {
             return null;
         }
-        // ponytail: EVM only (EIP-3009 validBefore); a scheme without one cannot carry a slow tool.
-        $before = $this->payment['payload']['authorization']['validBefore'] ?? null;
-        if (!is_string($before) || !preg_match('/^[0-9]{1,19}$/', $before)) {
+        // ponytail: EVM only (EIP-3009 validBefore). Reachable: a Solana or NEAR
+        // payment for a tool that declares a duration has no expiry we can read.
+        if (!$scheme instanceof EvmExact) {
             return 'unsupported_scheme';
         }
 
-        return (int) $before - time() < $this->duration + EvmExact::SLACK ? 'invalid_exact_evm_payload_authorization_valid_before' : null;
+        // verify() passed, so validBefore is a canonical decimal; same clock as verify().
+        return (int) $this->payment['payload']['authorization']['validBefore'] - $scheme->now() < $this->duration + EvmExact::SLACK
+          ? 'invalid_exact_evm_payload_authorization_valid_before' : null;
     }
 
     private function free(): void
