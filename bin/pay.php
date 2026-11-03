@@ -15,6 +15,10 @@ use Quebracho\X402\X402McpMiddleware;
 // Default: the unfunded web3.js docs key, enough for mock mode.
 $key = getenv('X402_BUYER_KEY') ?: '0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318';
 $required = json_decode(fgets(STDIN), true, flags: JSON_THROW_ON_ERROR)['result']['structuredContent'];
+if (!in_array($required['accepts'][0]['network'] ?? '', ['eip155:84532', 'eip155:5042002'], true)) {
+    fwrite(STDERR, "pay.php signs on testnets only; use app:ask, which has caps and an allowlist.\n");
+    exit(1);
+}
 $call = json_decode(fgets(STDIN), true, flags: JSON_THROW_ON_ERROR);
 $call['params']['_meta'][X402McpMiddleware::PAYMENT] = (new EvmExact(new Signer($key)))->pay($required, $required['accepts'][0]);
 echo json_encode($call, JSON_UNESCAPED_SLASHES);
