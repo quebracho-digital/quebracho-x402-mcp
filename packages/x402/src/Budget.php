@@ -48,7 +48,23 @@ final class Budget
         private readonly array $caps,
         private readonly ?\Closure $used = null,
         private readonly ?\Closure $clock = null,
+        private readonly array $perPayment = [],
     ) {
+    }
+
+    /**
+     * Caps in dollars, one per network, and optionally a ceiling per single
+     * payment: ['eip155:84532' => '0.05'], ['eip155:84532' => '0.02'].
+     * A network with no cap here gets nothing.
+     *
+     * @param array<string, string> $usd
+     * @param array<string, string> $perPaymentUsd
+     */
+    public static function fromUsd(array $usd, array $perPaymentUsd = [], ?\Closure $used = null): self
+    {
+        $atomic = static fn (array $m): array => array_map(static fn (string $v, string $n) => Networks::atomic($v, Networks::get($n)['decimals']), $m, array_keys($m));
+
+        return new self(array_combine(array_keys($usd), $atomic($usd)), $used, null, [] === $perPaymentUsd ? [] : array_combine(array_keys($perPaymentUsd), $atomic($perPaymentUsd)));
     }
 
     /**
@@ -93,6 +109,10 @@ final class Budget
             // Another EIP-712 domain would sign for a token we did not mean.
             || ($req['extra']['name'] ?? null) !== ($token['extra']['name'] ?? false) || ($req['extra']['version'] ?? null) !== ($token['extra']['version'] ?? false)
         ) {
+            return false;
+        }
+
+        if (isset($this->perPayment[$network]) && gmp_cmp($req['amount'], $this->perPayment[$network]) > 0) {
             return false;
         }
 

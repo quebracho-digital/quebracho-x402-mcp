@@ -21,6 +21,15 @@ final class BudgetTest extends TestCase
         self::assertTrue(Budget::usd('eip155:84532', '0.05')->allows(self::offer()));
     }
 
+    public function testCapsPerNetworkAndPerPaymentFromUsd(): void
+    {
+        $budget = Budget::fromUsd(['eip155:84532' => '0.05'], ['eip155:84532' => '0.005']);
+        self::assertFalse($budget->allows(self::offer()), 'over the per-payment ceiling');
+        self::assertTrue(Budget::fromUsd(['eip155:84532' => '0.05'], ['eip155:84532' => '0.01'])->allows(self::offer()));
+        self::assertFalse(Budget::fromUsd(['eip155:84532' => '0.05'])->allows(Networks::requirements('eip155:5042', '0.01', '0x000000000000000000000000000000000000dEaD')), 'no cap for Arc');
+        self::assertTrue(Budget::fromUsd(['eip155:5042' => '0.05'])->allows(Networks::requirements('eip155:5042', '0.01', '0x000000000000000000000000000000000000dEaD')));
+    }
+
     /** What a hostile seller can put in its PaymentRequired. */
     public static function hostile(): iterable
     {

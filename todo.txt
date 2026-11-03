@@ -25,3 +25,5 @@ x (A) 2026-10-30 Screening (Leo: "tenemos que implementarla"): sumar al listener
 (C) 2026-10-30 Recibo de entrega verificable (hash de la respuesta firmado por el vendedor, ligado a la tx) para alimentar reseñas verificadas de Ombú +hackathon @agente (AgentPay Receipts, vet402)
 (C) 2026-10-30 Circle Gateway como esquema de pago (comprador y vendedor): desbloquea ~2.056 listados Gateway-only del catálogo de Ombú +hackathon @agente
 (C) 2026-10-30 Ideas extra de los ganadores de Arc: reputación ERC-8004, página /proof releída de la cadena, CI contra nodo real, sección "límites y qué falló" en el README +hackathon @agente
+(B) 2026-11-03 Comprar en Ombú (Arc mainnet): poner eip155:5042 en X402_BUDGETS de app/.env.local con clave NO pública, y el payTo del vendedor (listado de Quebracho) en X402_PAYTO_ALLOW; es plata real, decide Leo +hackathon +ombu due:2026-11-18
+(C) 2026-11-03 Ombú: detector de inyección de instrucciones al importar listados (el texto de vendedores llega a agentes con billetera), usar reputación y reportes del mercado para filtrar; lo hace la sesión de Ombú +ombu +seguridad

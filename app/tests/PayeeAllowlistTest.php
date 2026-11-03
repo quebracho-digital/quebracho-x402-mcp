@@ -1,0 +1,30 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Tests;
+
+use App\X402\PayeeAllowlist;
+use PHPUnit\Framework\TestCase;
+use Quebracho\X402\AddressCheck;
+use Symfony\Component\EventDispatcher\EventDispatcher;
+
+final class PayeeAllowlistTest extends TestCase
+{
+    private const OURS = '0x7e510E6B4c3E2121CB64CD0686a4f241Df326510';
+
+    private static function verdict(string $allow, string $address): ?string
+    {
+        $events = new EventDispatcher();
+        $events->addListener(AddressCheck::class, new PayeeAllowlist($allow));
+
+        return AddressCheck::run($events, AddressCheck::PAY_TO, $address, ['network' => 'eip155:84532']);
+    }
+
+    public function testPaysOnlyListedWalletsAndDeniesByDefault(): void
+    {
+        self::assertNull(self::verdict(self::OURS, strtolower(self::OURS)));
+        self::assertSame('payto_not_allowed', self::verdict(self::OURS, '0x000000000000000000000000000000000000dEaD'));
+        self::assertSame('payto_not_allowed', self::verdict('', self::OURS), 'an empty list pays nobody');
+    }
+}

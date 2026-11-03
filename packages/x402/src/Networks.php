@@ -37,6 +37,15 @@ final class Networks
             'rpc' => 'https://sepolia.base.org',
             'explorer' => 'https://sepolia.basescan.org/tx/',
         ],
+        // Arc mainnet: asset, name() "USDC" and version() "2" read from the chain (rpc.mainnet.arc.io, chain id 0x13b2).
+        'eip155:5042' => [
+            'label' => 'Arc (USDC)',
+            'asset' => '0x3600000000000000000000000000000000000000',
+            'decimals' => 6,
+            'extra' => ['name' => 'USDC', 'version' => '2'],
+            'rpc' => 'https://rpc.mainnet.arc.io',
+            'explorer' => 'https://explorer.arc.io/tx/',
+        ],
         'eip155:5042002' => [
             'label' => 'Arc testnet (USDC)',
             'asset' => '0x3600000000000000000000000000000000000000',

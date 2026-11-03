@@ -78,7 +78,7 @@ services:
             - '@logger'
         tags: [controller.service_arguments, { name: monolog.logger, channel: mcp }]
 
-    # Buyer side, for app:ask: pays paid tools in band within X402_BUDGET_USD.
+    # Buyer side, for app:ask: pays paid tools in band within X402_BUDGETS and X402_MAX_PER_PAYMENT, only to X402_PAYTO_ALLOW.
     Quebracho\X402\PayingMcpClient:
         arguments:
             # No redirects: a 307 must never carry the signed payment to another host.
@@ -95,9 +95,10 @@ services:
                     arguments: [!service { class: Quebracho\X402\Signer, arguments: ['%env(X402_BUYER_KEY)%'] }]
             $budget: !service
                 class: Quebracho\X402\Budget
-                factory: ['Quebracho\X402\Budget', 'usd']
+                factory: ['Quebracho\X402\Budget', 'fromUsd']
+                # Caps per network and per single payment, in USD, from env (JSON). A network without a cap is never paid.
                 # Expired signatures the seller never settled are freed, once the chain says so.
-                arguments: ['%env(X402_NETWORK)%', '%env(X402_BUDGET_USD)%', !closure '@App\X402\AuthorizationState']
+                arguments: ['%env(json:X402_BUDGETS)%', '%env(json:X402_MAX_PER_PAYMENT)%', !closure '@App\X402\AuthorizationState']
             $streams: '@mcp.psr17_factory'
             $onPaid: !closure '@App\X402\Receipts'
             $onRefused: !closure ['@App\X402\Receipts', 'refused']

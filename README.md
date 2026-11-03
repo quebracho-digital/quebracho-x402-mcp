@@ -130,7 +130,7 @@ client (`mcp.clients.buyer.self` in `app/config/packages/mcp.yaml`), lists its
 tools and offers them to the LLM. The PSR-18 client under that MCP connection
 is `Quebracho\X402\PayingMcpClient`: when a tool answers with a
 PaymentRequired it signs with `X402_BUYER_KEY`, stays within
-`X402_BUDGET_USD`, resends the same call with the payment in `_meta` and
+`X402_BUDGETS` (per network) and `X402_MAX_PER_PAYMENT`, resends the same call with the payment in `_meta` and
 reads the receipt.
 
 Point it at any OpenAI-compatible server with tool calling (llama.cpp,
@@ -267,7 +267,9 @@ ddev exec --dir /var/www/html/app bin/console app:screening check 0x…
 | `X402_PRICES` | `{"analyze_terms":"0.02"}` | A tool's own price in USD, when it is not `X402_PRICE`. |
 | `TERMS_MODEL` | `Qwen/Qwen3.8-27B` | The model behind `analyze_terms` (super beta): open weights on Inference Providers; needs `HF_TOKEN`. |
 | `HF_MODEL` | `openai/gpt-oss-20b` | The model `--hf` uses: any chat model on Inference Providers with tool calling. |
-| `X402_BUDGET_USD` | `0.05` | The agent's spending cap per run on `X402_NETWORK`. |
+| `X402_BUDGETS` | `{"eip155:84532":"0.05"}` | The agent's spending cap per run, in USD, JSON by network. A network not listed is never paid (Arc mainnet is left out on purpose: add it in `.env.local` with a non-public key). |
+| `X402_MAX_PER_PAYMENT` | `{"eip155:84532":"0.02"}` | Ceiling for one single payment, same shape. |
+| `X402_PAYTO_ALLOW` | the demo `PAY_TO` | Wallets the agent may pay, comma separated, default deny: a seller cannot name its own wallet. |
 | `X402_SCREENING_API_KEY` | empty | Chainalysis sanctions API key. Empty: only our lists and OFAC's. |
 | `X402_SCREENING_CACHE_TTL` | `86400` | Seconds an API answer (clean or sanctioned) is kept. |
 | `X402_SCREENING_TIMEOUT` | `3` | Seconds to wait for the API. |
