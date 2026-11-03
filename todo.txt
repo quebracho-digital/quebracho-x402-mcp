@@ -24,4 +24,4 @@ x (A) 2026-10-30 Screening (Leo: "tenemos que implementarla"): sumar al listener
 (C) 2026-10-30 Circle Gateway como esquema de pago (comprador y vendedor): desbloquea ~2.056 listados Gateway-only del catálogo de Ombú +hackathon @agente
 (C) 2026-10-30 Ideas extra de los ganadores de Arc: reputación ERC-8004, página /proof releída de la cadena, CI contra nodo real, sección "límites y qué falló" en el README +hackathon @agente
 (C) 2026-11-03 Ombú: detector de inyección de instrucciones al importar listados (el texto de vendedores llega a agentes con billetera), usar reputación y reportes del mercado para filtrar; lo hace la sesión de Ombú +ombu +seguridad
-(A) 2026-11-03 Subir video/paid_mcp_tools_v7.mp4 a YouTube (no listado, subtítulos v7.en.srt, texto de video/youtube.md) y poner la URL nueva en el formulario; decidir si se prefiere grabación de pantalla en vivo +hackathon due:2026-11-20
+(A) 2026-11-03 Revisar y subir video/paid_mcp_tools_v8.mp4 a YouTube (no listado, subtítulos v8.en.srt aparte, texto de video/youtube.md) y poner la URL nueva en el formulario +hackathon due:2026-11-20
