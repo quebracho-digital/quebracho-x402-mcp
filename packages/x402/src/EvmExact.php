@@ -9,6 +9,9 @@ namespace Quebracho\X402;
  */
 final class EvmExact implements Scheme
 {
+    /** Seconds a signature must still be valid for when it is settled, so it does not expire on its way into a block. */
+    public const SLACK = 6;
+
     /**
      * @param ?Signer   $buyer
      *                         Needed to pay; a seller that only verifies passes none
@@ -60,8 +63,8 @@ final class EvmExact implements Scheme
             0 !== strcasecmp((string) ($auth['to'] ?? ''), $req['payTo']) => 'invalid_exact_evm_payload_recipient_mismatch',
             (string) ($auth['value'] ?? '') !== (string) $req['amount'] => 'invalid_exact_evm_payload_authorization_value_mismatch',
             (int) ($auth['validAfter'] ?? PHP_INT_MAX) > $now => 'invalid_exact_evm_payload_authorization_valid_after',
-            // 6 s of slack so it does not expire on its way into a block, as the reference facilitator does.
-            (int) ($auth['validBefore'] ?? 0) < $now + 6 => 'invalid_exact_evm_payload_authorization_valid_before',
+            // Slack so it does not expire on its way into a block, as the reference facilitator does.
+            (int) ($auth['validBefore'] ?? 0) < $now + self::SLACK => 'invalid_exact_evm_payload_authorization_valid_before',
             // No longer than the offer allows (+60 s clock skew): bounds replay windows and claim storage.
             (int) $auth['validBefore'] > $now + (int) ($req['maxTimeoutSeconds'] ?? 0) + 60 => 'invalid_exact_evm_payload_authorization_valid_before',
             0 !== strcasecmp((string) Signer::recover(Authorization::digest($req, $auth), $signature), (string) ($auth['from'] ?? '')) => 'invalid_exact_evm_payload_signature',

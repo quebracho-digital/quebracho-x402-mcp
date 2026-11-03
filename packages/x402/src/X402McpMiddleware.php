@@ -48,6 +48,18 @@ final class X402McpMiddleware implements MiddlewareInterface
      * @param ?\Closure                 $resource
      *                                            fn(array $params): array — the PaymentRequired's resource (url,
      *                                            description, mimeType); default: mcp://tool/<name>
+     * @param ?\Closure                 $validate
+     *                                            fn(array $params): ?string — why these params cannot be sold, or NULL.
+     *                                            Runs before any payment is read: a reason is a JSON-RPC -32602 error,
+     *                                            nothing is claimed, settled or run (price() returning NULL means free,
+     *                                            so it cannot refuse)
+     * @param ?\Closure                 $payer
+     *                                            fn(array $params, string $payer): ?string — once the signature proved
+     *                                            who pays, why this payer cannot buy this call, or NULL; before the claim
+     * @param ?\Closure                 $duration
+     *                                            fn(array $params): int — worst-case seconds from the claim until the
+     *                                            settle is sent; a signature that expires sooner (plus EvmExact::SLACK) is
+     *                                            refused before the claim. 0 or NULL: no check (EVM validBefore only)
      */
     public function __construct(
         private readonly array $schemes,
@@ -60,6 +72,9 @@ final class X402McpMiddleware implements MiddlewareInterface
         private readonly ?\Closure $verify = null,
         private readonly ?\Closure $release = null,
         private readonly ?\Closure $resource = null,
+        private readonly ?\Closure $validate = null,
+        private readonly ?\Closure $payer = null,
+        private readonly ?\Closure $duration = null,
     ) {
     }
 
@@ -94,6 +109,12 @@ final class X402McpMiddleware implements MiddlewareInterface
             return $this->responses->createResponse(202);
         }
         $id = $message['id'];
+        $params = $message['params'];
+        // Before the buyer signs or the payment is looked at: bad params cost nothing.
+        $invalid = null !== $this->validate ? ($this->validate)($params) : null;
+        if (null !== $invalid) {
+            return $this->json(['jsonrpc' => '2.0', 'id' => $id, 'error' => ['code' => -32602, 'message' => $invalid]]);
+        }
         $resource = null !== $this->resource ? ($this->resource)($message['params']) : ['url' => 'mcp://tool/'.$message['params']['name']];
 
         $payment = $message['params']['_meta'][self::PAYMENT] ?? null;
@@ -106,7 +127,8 @@ final class X402McpMiddleware implements MiddlewareInterface
         if (false === $req) {
             return $this->required($id, $accepts, $resource, 'invalid_payment_requirements');
         }
-        $sale = new Sale($this->schemes, $this->claim, $this->settle, $this->events, $this->verify, $this->release, $payment, $req);
+        $payer = null !== $this->payer ? fn (string $from): ?string => ($this->payer)($params, $from) : null;
+        $sale = new Sale($this->schemes, $this->claim, $this->settle, $this->events, $this->verify, $this->release, $payment, $req, $payer, null !== $this->duration ? ($this->duration)($params) : 0);
         // ponytail: verify runs before the MCP session check and costs an
         // ecrecover; rate-limit the route where it is deployed.
         $reason = $sale->admit();

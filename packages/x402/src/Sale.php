@@ -28,6 +28,8 @@ final class Sale
         private readonly ?\Closure $release,
         public readonly array $payment,
         public readonly array $req,
+        private readonly ?\Closure $payer = null,
+        private readonly int $duration = 0,
     ) {
     }
 
@@ -48,6 +50,11 @@ final class Sale
         $scheme = current(array_filter($this->schemes, fn (Scheme $s) => $s->supports($this->req['network'])))
           ?: throw new \LogicException("No scheme verifies {$this->req['network']}.");
         $reason = $scheme->verify($this->payment, $this->req);
+        if (null === $reason && null !== $this->payer) {
+            // Who pays is proven now; a buyer this call is not for takes no claim.
+            $from = $scheme->payer($this->payment);
+            $reason = null === $from ? 'invalid_payload' : ($this->payer)($from);
+        }
         // Screened once the signature proved who pays, before anything is spent;
         // a slow lookup started here is read before settling.
         $this->check = null === $reason ? AddressCheck::start($this->events, AddressCheck::PAYER, $scheme->payer($this->payment), $this->req) : null;
@@ -60,6 +67,7 @@ final class Sale
                 $reason = self::UNAVAILABLE;
             }
         }
+        $reason ??= $this->expiresTooSoon();
         // Spent before it runs: N concurrent copies get one delivery.
         if (null === $reason && !($this->claimed = ($this->claim)(Settlement::key($this->payment)))) {
             $reason = 'duplicate_settlement';
@@ -113,6 +121,25 @@ final class Sale
         if ($handlerStatus < 200 || $handlerStatus >= 300) {
             $this->outcome('failed_after_settle', $handlerStatus);
         }
+    }
+
+    /**
+     * A slow handler must not outlive the signature: settled after it, an expired
+     * authorization would deliver unpaid. Checked last before the claim, after
+     * the online verify spent its time. Only a call that declares a duration.
+     */
+    private function expiresTooSoon(): ?string
+    {
+        if ($this->duration <= 0) {
+            return null;
+        }
+        // ponytail: EVM only (EIP-3009 validBefore); a scheme without one cannot carry a slow tool.
+        $before = $this->payment['payload']['authorization']['validBefore'] ?? null;
+        if (!is_string($before) || !ctype_digit($before)) {
+            return 'unsupported_scheme';
+        }
+
+        return (int) $before - time() < $this->duration + EvmExact::SLACK ? 'invalid_exact_evm_payload_authorization_valid_before' : null;
     }
 
     private function free(): void

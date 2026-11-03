@@ -29,7 +29,8 @@ final class X402McpMiddlewareTest extends TestCase
         $this->claims = (new FileClaims(sys_get_temp_dir().'/x402-claims-'.bin2hex(random_bytes(8))))->__invoke(...);
     }
 
-    private function middleware(?\Closure $settle = null, bool $upfront = false): X402McpMiddleware
+    /** @param array<string, \Closure> $hooks validate, payer, duration */
+    private function middleware(?\Closure $settle = null, bool $upfront = false, array $hooks = []): X402McpMiddleware
     {
         $req = Networks::requirements('eip155:84532', '0.01', '0x000000000000000000000000000000000000dEaD');
         if ($upfront) {
@@ -37,7 +38,7 @@ final class X402McpMiddlewareTest extends TestCase
         }
         $f = new Psr17Factory();
 
-        return new X402McpMiddleware([new EvmExact()], fn (array $params) => 'wisdom' === $params['name'] ? [$req] : null, $this->claims, $f, $f, $settle ?? Settlement::mock());
+        return new X402McpMiddleware([new EvmExact()], fn (array $params) => 'wisdom' === $params['name'] ? [$req] : null, $this->claims, $f, $f, $settle ?? Settlement::mock(), ...$hooks);
     }
 
     /** A tool server answering id 2, as JSON or as a buffered SSE stream. */
@@ -72,10 +73,11 @@ final class X402McpMiddlewareTest extends TestCase
         return new ServerRequest('POST', 'https://example.test/mcp', ['Content-Type' => 'application/json'], json_encode(['jsonrpc' => '2.0', 'id' => 2, 'method' => 'tools/call', 'params' => $params]));
     }
 
-    private function paidCall(): ServerRequest
+    /** @param int $age seconds ago it was signed: its validity left is maxTimeoutSeconds - $age */
+    private function paidCall(int $age = 0): ServerRequest
     {
         $required = self::toolResult($this->middleware()->process(self::call('wisdom'), $this->handler()))['structuredContent'];
-        $buyer = new EvmExact(new Signer('0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318'));
+        $buyer = new EvmExact(new Signer('0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318'), fn () => time() - $age);
 
         return self::call('wisdom', $buyer->pay($required, $required['accepts'][0]));
     }
@@ -230,6 +232,77 @@ final class X402McpMiddlewareTest extends TestCase
         // Charged first: a failing tool still carries the receipt.
         $failed = self::toolResult($this->middleware($tx, true)->process($pay(), $this->handler(['isError' => true, 'content' => []])));
         self::assertTrue($failed['_meta']['x402/payment-response']['success']);
+        self::assertSame(2, $this->runs);
+    }
+
+    public function testValidateRefusesBeforeAnythingIsReadClaimedOrRun(): void
+    {
+        $settled = 0;
+        $settle = function () use (&$settled) {
+            ++$settled;
+
+            return Settlement::mock()(...\func_get_args());
+        };
+        $seen = null;
+        $validate = function (array $params) use (&$seen): ?string {
+            $seen = $params['name'];
+
+            return 'text must not be empty';
+        };
+        $request = $this->paidCall();
+
+        $out = json_decode((string) $this->middleware($settle, hooks: ['validate' => $validate])->process($request, $this->handler())->getBody(), true);
+        self::assertSame(['code' => -32602, 'message' => 'text must not be empty'], $out['error']);
+        self::assertSame(2, $out['id']);
+        self::assertSame(['wisdom', 0, 0], [$seen, $this->runs, $settled]);
+        // Unpaid too: the buyer is not asked to sign for params we would refuse.
+        self::assertArrayHasKey('error', json_decode((string) $this->middleware(hooks: ['validate' => $validate])->process(self::call('wisdom'), $this->handler())->getBody(), true));
+        // Not claimed: the same payment still buys once the params are fine.
+        $ok = $this->middleware(hooks: ['validate' => fn () => null])->process($request, $this->handler());
+        self::assertSame('paid content', self::toolResult($ok)['content'][0]['text']);
+    }
+
+    public function testAPayerTheCallIsNotForTakesNoClaim(): void
+    {
+        $seen = [];
+        $payer = function (array $params, string $from) use (&$seen): ?string {
+            $seen = [$params['name'], $from];
+
+            return 'not_the_jobs_payer';
+        };
+        $request = $this->paidCall();
+
+        $result = self::toolResult($this->middleware(hooks: ['payer' => $payer])->process($request, $this->handler()));
+        self::assertSame('not_the_jobs_payer', $result['structuredContent']['error']);
+        self::assertSame(['wisdom', '0x2c7536E3605D9C16a7a3D7b1898e529396a65c23'], $seen);
+        self::assertSame(0, $this->runs);
+
+        $ok = $this->middleware(hooks: ['payer' => fn () => null])->process($request, $this->handler());
+        self::assertTrue(self::toolResult($ok)['_meta'][X402McpMiddleware::PAYMENT_RESPONSE]['success']);
+    }
+
+    public function testASlowToolRefusesASignatureThatWouldExpireBeforeTheSettle(): void
+    {
+        // Offer: 60 s. A tool that may take 55 s cannot settle a fresh signature in time (EvmExact::SLACK).
+        $slow = ['duration' => fn (array $params) => 55];
+        $request = $this->paidCall();
+        $result = self::toolResult($this->middleware(hooks: $slow)->process($request, $this->handler()));
+        self::assertSame('invalid_exact_evm_payload_authorization_valid_before', $result['structuredContent']['error']);
+        self::assertSame(0, $this->runs);
+
+        // Not claimed: a tool that fits in the time left still sells that payment.
+        $ok = $this->middleware(hooks: ['duration' => fn () => 30])->process($request, $this->handler());
+        self::assertTrue(self::toolResult($ok)['_meta'][X402McpMiddleware::PAYMENT_RESPONSE]['success']);
+    }
+
+    public function testAFastToolIsUnchangedByTheHooks(): void
+    {
+        // Regression: 10 s left, as today accepted (EvmExact's 6 s slack) when the tool declares no duration.
+        $durations = ['duration' => fn (array $params) => 'wisdom' === $params['name'] ? 0 : 120];
+        foreach ([[], $durations] as $hooks) {
+            $result = self::toolResult($this->middleware(hooks: $hooks)->process($this->paidCall(age: 50), $this->handler()));
+            self::assertTrue($result['_meta'][X402McpMiddleware::PAYMENT_RESPONSE]['success']);
+        }
         self::assertSame(2, $this->runs);
     }
 }

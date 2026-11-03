@@ -85,6 +85,23 @@ $price = fn (array $params) => $params['name'] === 'wisdom' ? [Networks::require
 $middleware = new X402McpMiddleware([new EvmExact()], $price, $claim, $psr17, $psr17, $settle);
 ```
 
+Optional hooks, each off by default (a tool that does not use them is sold
+exactly as without them):
+
+- `validate: fn(array $params): ?string` runs before any payment is read; a
+  reason is a JSON-RPC `-32602` error and nothing is claimed, settled or run.
+  `$price` returning NULL means *free*, so it cannot be the validation.
+- `payer: fn(array $params, string $payer): ?string` runs once the signature
+  proved who pays, before the claim: a reason refuses the payment (for
+  example, only the payer who started a job may buy its result).
+- `duration: fn(array $params): int` is the tool's worst case in seconds from
+  the claim until the settle is sent. An EVM signature whose `validBefore`
+  leaves less than that plus `EvmExact::SLACK` (6 s) is refused before the
+  claim (`invalid_exact_evm_payload_authorization_valid_before`); a scheme
+  without `validBefore` is refused (`unsupported_scheme`) when a duration is
+  declared. Give that tool a longer `maxTimeoutSeconds`
+  (`Networks::requirements(..., $timeout)`).
+
 ## Buyer
 
 ```php
