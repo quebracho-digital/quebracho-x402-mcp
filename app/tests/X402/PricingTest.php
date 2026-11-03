@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\X402;
 
+use App\X402\PaidJob;
 use App\X402\Pricing;
 use Mcp\Capability\Attribute\McpTool;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -13,40 +14,129 @@ final class PricingTest extends TestCase
 {
     private const PAY_TO = '0x7e510E6B4c3E2121CB64CD0686a4f241Df326510';
 
-    /** @return list<string> every #[McpTool] name in App\Mcp, plus the fixture's */
-    private static function toolNames(): array
+    /** @return list<array{0: class-string, 1: string}> every #[McpTool] handler in App\Mcp, plus the fixture's */
+    private static function handlers(): array
     {
         $classes = array_map(static fn (string $f) => 'App\\Mcp\\'.basename($f, '.php'), glob(\dirname(__DIR__, 2).'/src/Mcp/*.php') ?: []);
-        $names = [];
+        $handlers = [];
         foreach ([...$classes, JobToolsFixture::class] as $class) {
             $r = new \ReflectionClass($class);
-            foreach ([$r, ...$r->getMethods()] as $at) {
-                foreach ($at->getAttributes(McpTool::class) as $a) {
-                    $names[] = $a->newInstance()->name ?? $at->getName();
+            if ([] !== $r->getAttributes(McpTool::class)) {
+                $handlers[] = [$class, '__invoke'];
+            }
+            foreach ($r->getMethods() as $m) {
+                if ([] !== $m->getAttributes(McpTool::class)) {
+                    $handlers[] = [$class, $m->getName()];
                 }
             }
         }
 
-        return $names;
+        return $handlers;
     }
 
-    public function testJobToolsAreNeverFreeEvenWhenNobodyListedThem(): void
+    public function testTheFlagNotTheNameMakesAJobTool(): void
     {
+        $tools = PaidJob::catalog(self::handlers());
         // X402_PAID_TOOLS left empty: NULL would mean free, i.e. a job run or delivered unpaid.
-        $pricing = new Pricing([], 'eip155:84532', '0.01', self::PAY_TO);
-        $job = array_filter(self::toolNames(), static fn (string $n) => preg_match('/_(start|result|status)$/', $n));
-        self::assertContains('demo_start', $job, 'the scan found the fixture');
+        $pricing = new Pricing([], 'eip155:84532', '0.01', self::PAY_TO, tools: $tools);
+        self::assertContains('demo_start', array_keys($tools), 'the scan found the fixture');
 
-        foreach ($job as $name) {
-            $accepts = $pricing(['name' => $name]);
-            if (str_ends_with($name, '_status')) {
-                // The plan (debate r2, decision 2): status is a free, payer-checked read.
-                self::assertNull($accepts, "$name is free");
-                continue;
-            }
-            self::assertNotNull($accepts, "$name must be paid");
-            self::assertSame(str_ends_with($name, '_start') ? 'upfront' : null, $accepts[0]['extra']['paymentFlow'] ?? null, $name);
+        $start = $pricing(['name' => 'demo_start'])[0];
+        self::assertSame(['upfront', '5000'], [$start['extra']['paymentFlow'], $start['amount']], 'its own deposit price, settled first');
+        $result = $pricing(['name' => 'demo_result'])[0];
+        self::assertSame(['10000', null], [$result['amount'], $result['extra']['paymentFlow'] ?? null]);
+        self::assertNull($pricing(['name' => 'demo_status']), 'a status read is free');
+        // Reviewer paid 0.01 USDC upfront for this one when the name decided.
+        self::assertNull($pricing(['name' => 'nosuchtool_start']));
+        self::assertNull($pricing(['name' => 'nosuchtool_result']));
+    }
+
+    public function testEveryFlaggedToolHasAPrice(): void
+    {
+        $tools = PaidJob::catalog(self::handlers());
+        $pricing = new Pricing([], 'eip155:84532', '0.01', self::PAY_TO, tools: $tools);
+        foreach (array_keys(array_filter($tools)) as $name) {
+            self::assertNotNull($pricing(['name' => $name]), "$name must be paid");
         }
+    }
+
+    public function testAPaidNameThatIsNoToolIsRefusedBeforeAnyPayment(): void
+    {
+        $pricing = new Pricing(['wisdom', 'wisdon'], 'eip155:84532', '0.01', self::PAY_TO, tools: ['wisdom' => null]);
+        self::assertNull($pricing->validate(['name' => 'wisdom']));
+        self::assertSame('Unknown tool: wisdon', $pricing->validate(['name' => 'wisdon']));
+    }
+
+    /** @return iterable<string, array{object}> */
+    public static function badJobTools(): iterable
+    {
+        yield 'named like a job, no flag' => [new class {
+            #[McpTool(name: 'x_start')]
+            public function run(): void
+            {
+            }
+        }];
+        yield 'flag not published in _meta' => [new class {
+            #[McpTool(name: 'x_start')]
+            #[PaidJob('start', 'x_result')]
+            public function run(): void
+            {
+            }
+
+            #[McpTool(name: 'x_result', meta: [PaidJob::META => ['role' => 'result', 'pairedWith' => 'x_start']])]
+            #[PaidJob('result', 'x_start')]
+            public function result(): void
+            {
+            }
+        }];
+        yield 'pair missing' => [new class {
+            #[McpTool(name: 'x_start', meta: [PaidJob::META => ['role' => 'start', 'pairedWith' => 'x_result']])]
+            #[PaidJob('start', 'x_result')]
+            public function run(): void
+            {
+            }
+        }];
+        yield 'pair with the same role' => [new class {
+            #[McpTool(name: 'a', meta: [PaidJob::META => ['role' => 'start', 'pairedWith' => 'b']])]
+            #[PaidJob('start', 'b')]
+            public function a(): void
+            {
+            }
+
+            #[McpTool(name: 'b', meta: [PaidJob::META => ['role' => 'start', 'pairedWith' => 'a']])]
+            #[PaidJob('start', 'a')]
+            public function b(): void
+            {
+            }
+        }];
+        yield 'pair pointing elsewhere' => [new class {
+            #[McpTool(name: 'a', meta: [PaidJob::META => ['role' => 'start', 'pairedWith' => 'b']])]
+            #[PaidJob('start', 'b')]
+            public function a(): void
+            {
+            }
+
+            #[McpTool(name: 'b', meta: [PaidJob::META => ['role' => 'result', 'pairedWith' => 'c']])]
+            #[PaidJob('result', 'c')]
+            public function b(): void
+            {
+            }
+        }];
+        yield 'unknown role' => [new class {
+            #[McpTool(name: 'a')]
+            #[PaidJob('deposit', 'b')]
+            public function a(): void
+            {
+            }
+        }];
+    }
+
+    #[DataProvider('badJobTools')]
+    public function testAJobToolMistakeStopsTheBuild(object $tools): void
+    {
+        $handlers = array_map(static fn (\ReflectionMethod $m) => [$tools::class, $m->getName()], (new \ReflectionClass($tools))->getMethods());
+        $this->expectException(\LogicException::class);
+        PaidJob::catalog($handlers);
     }
 
     public function testAFastToolKeepsTheDefaultOfferAndNoDuration(): void

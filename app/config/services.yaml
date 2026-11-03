@@ -53,6 +53,8 @@ services:
             $release: !closure ['@Quebracho\X402\FileClaims', 'release']
             # A slow tool (X402_DURATIONS) refuses a signature that would expire before its settle.
             $duration: !closure ['@App\X402\Pricing', 'duration']
+            # A paid name that is no registered tool: JSON-RPC -32602 before any payment is read.
+            $validate: !closure ['@App\X402\Pricing', 'validate']
             $responses: '@mcp.psr17_factory'
             $streams: '@mcp.psr17_factory'
             # AddressCheck on the payer, answered by App\X402\Screening.
