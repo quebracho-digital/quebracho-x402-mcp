@@ -30,6 +30,16 @@ final class BudgetTest extends TestCase
         self::assertTrue(Budget::fromUsd(['eip155:5042' => '0.05'])->allows(Networks::requirements('eip155:5042', '0.01', '0x000000000000000000000000000000000000dEaD')));
     }
 
+    public function testABuyerSignsNoLongerThanItWaits(): void
+    {
+        $budget = Budget::fromUsd(['eip155:84532' => '0.05'], maxTimeout: 170);
+        self::assertTrue($budget->allows(['maxTimeoutSeconds' => 170] + self::offer()));
+        self::assertFalse($budget->allows(['maxTimeoutSeconds' => 171] + self::offer()));
+        // Never above MAX_TIMEOUT, whatever it is given.
+        self::assertFalse(Budget::fromUsd(['eip155:84532' => '0.05'], maxTimeout: 9999)->allows(['maxTimeoutSeconds' => Budget::MAX_TIMEOUT + 1] + self::offer()));
+        self::assertTrue(Budget::fromUsd(['eip155:84532' => '0.05'])->allows(['maxTimeoutSeconds' => Budget::MAX_TIMEOUT] + self::offer()));
+    }
+
     /** What a hostile seller can put in its PaymentRequired. */
     public static function hostile(): iterable
     {

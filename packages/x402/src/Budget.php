@@ -43,12 +43,17 @@ final class Budget
      *                                     EIP-3009 authorizationState on chain. NULL never frees anything.
      * @param ?\Closure             $clock
      *                                     Returns the current Unix time; tests pin it
+     * @param int                   $maxTimeout
+     *                                     The longest validity this buyer signs (at most MAX_TIMEOUT): no more
+     *                                     than its HTTP client waits for the answer, or it can pay for one it
+     *                                     never reads
      */
     public function __construct(
         private readonly array $caps,
         private readonly ?\Closure $used = null,
         private readonly ?\Closure $clock = null,
         private readonly array $perPayment = [],
+        private readonly int $maxTimeout = self::MAX_TIMEOUT,
     ) {
     }
 
@@ -60,11 +65,11 @@ final class Budget
      * @param array<string, string> $usd
      * @param array<string, string> $perPaymentUsd
      */
-    public static function fromUsd(array $usd, array $perPaymentUsd = [], ?\Closure $used = null): self
+    public static function fromUsd(array $usd, array $perPaymentUsd = [], ?\Closure $used = null, int $maxTimeout = self::MAX_TIMEOUT): self
     {
         $atomic = static fn (array $m): array => array_map(static fn (string $v, string $n) => Networks::atomic($v, Networks::get($n)['decimals']), $m, array_keys($m));
 
-        return new self(array_combine(array_keys($usd), $atomic($usd)), $used, null, [] === $perPaymentUsd ? [] : array_combine(array_keys($perPaymentUsd), $atomic($perPaymentUsd)));
+        return new self(array_combine(array_keys($usd), $atomic($usd)), $used, null, [] === $perPaymentUsd ? [] : array_combine(array_keys($perPaymentUsd), $atomic($perPaymentUsd)), $maxTimeout);
     }
 
     /**
@@ -87,7 +92,7 @@ final class Budget
             return false;
         }
         $timeout = $req['maxTimeoutSeconds'] ?? null;
-        if (!is_int($timeout) || $timeout < 1 || $timeout > self::MAX_TIMEOUT) {
+        if (!is_int($timeout) || $timeout < 1 || $timeout > min($this->maxTimeout, self::MAX_TIMEOUT)) {
             return false;
         }
         $token = Networks::find($network);
