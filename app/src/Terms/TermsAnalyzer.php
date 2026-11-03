@@ -20,8 +20,8 @@ use Symfony\Component\DependencyInjection\Attribute\Target;
  * is something you can find in the document, not a summary you have to trust.
  *
  * The categories and the "quotes copied exactly" instruction come from the
- * terms-eval set of Lapacho (https://github.com/quebracho-digital/lapacho), where
- * Qwen3.8-27B found 99% of its quotes verbatim on 13 real documents.
+ * terminos-es dataset of Lapacho (https://github.com/quebracho-digital/lapacho, and quebracho-digital/terminos-es
+ * on Hugging Face), where Qwen3.8-27B found 99% of its quotes verbatim on 13 real documents.
  */
 final class TermsAnalyzer
 {
@@ -56,12 +56,6 @@ final class TermsAnalyzer
     }
 
     /**
-     * @return array{model: string, categories: array<string, list<string>>, quotes_dropped: int}
-     *
-     * @throws \InvalidArgumentException The text is empty or longer than MAX_WORDS
-     * @throws \RuntimeException         The model did not answer with a JSON object
-     */
-    /**
      * The trimmed text, or why it is refused. Free: no model call, so the rate limit comes after it.
      *
      * @throws \InvalidArgumentException The text is empty or longer than MAX_WORDS
@@ -77,6 +71,12 @@ final class TermsAnalyzer
         return $text;
     }
 
+    /**
+     * @return array{model: string, categories: array<string, list<string>>, quotes_dropped: int}
+     *
+     * @throws \InvalidArgumentException The text is empty or longer than MAX_WORDS
+     * @throws \RuntimeException         The model did not answer with a JSON object
+     */
     public function analyze(string $text): array
     {
         $text = $this->check($text);

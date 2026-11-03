@@ -188,8 +188,8 @@ the same names so results can be compared, and eleven cover consumer rights and
 personal data (indemnification, waiver of rights, tracking...). We found no
 Spanish set like it. It was built to measure which models can find those
 clauses and **quote** them instead of inventing them: with fixed prompt,
-temperature 0 and reasoning off, Qwen3.8-27B reaches F1 0.91 and 99% verbatim
-quotes (the best of the five models we compared). Limits we state in the
+temperature 0 and reasoning off, Qwen3.8-27B reaches F1 0.91 (the best of the five
+models we compared reaches 0.92) and the most verbatim quotes, 99%. Limits we state in the
 dataset card: the labels were written by a model and corrected by two other
 models and one person, so human agreement is not measured; severity is not
 evaluated; the full texts are not included (copyright), they are rebuilt from
