@@ -33,6 +33,8 @@ class Kernel extends BaseKernel implements CompilerPassInterface
                 $handlers[] = [$class, $tag['method'] ?? '__invoke'];
             }
         }
-        $container->setParameter('app.mcp_tools', PaidJob::catalog($handlers));
+        // Only what a server serves (mcp.yaml registry): a tagged tool outside it is no tool here.
+        $served = array_merge(...array_values(array_map(static fn (array $kinds) => $kinds['tools'] ?? [], $container->getParameter('mcp.servers.elements'))));
+        $container->setParameter('app.mcp_tools', PaidJob::catalog($handlers, $served));
     }
 }

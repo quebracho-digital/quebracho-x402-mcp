@@ -115,3 +115,9 @@ services:
             $onRefused: !closure ['@App\X402\Receipts', 'refused']
             # AddressCheck on payTo before signing, answered by App\X402\Screening.
             $events: '@event_dispatcher'
+
+when@test:
+    services:
+        # A tagged MCP tool outside the served registry (App\Mcp\): app.mcp_tools must not list it (AppKernelTest).
+        App\Tests\X402\JobToolsFixture:
+            autoconfigure: true
