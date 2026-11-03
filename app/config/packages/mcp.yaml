@@ -25,3 +25,8 @@ mcp:
                     transport: http
                     url: '%env(MCP_URL)%'
                     http_client: 'Quebracho\X402\PayingMcpClient'
+                # Ombú's own MCP (search and detail are free; ombu_call_service pays x402 on Arc).
+                ombu:
+                    transport: http
+                    url: '%env(OMBU_MCP_URL)%'
+                    http_client: 'Quebracho\X402\PayingMcpClient'

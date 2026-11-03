@@ -22,6 +22,12 @@ services:
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
 
+    # Faceted on purpose: only Quebracho's Ombú listings.
+    App\Mcp\OmbuSearchTool:
+        arguments:
+            # Quebracho's own listings: /market?seller[ours]=ours. Not an env var: nothing at runtime changes it.
+            $facet: {seller: {ours: ours}}
+
     Quebracho\X402\EvmExact: ~
 
     # One claim per payment, durable across processes on this host.

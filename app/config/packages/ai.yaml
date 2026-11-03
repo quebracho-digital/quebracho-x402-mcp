@@ -16,6 +16,7 @@ ai:
                 Some tools are paid with x402; payment is handled for you, so call them when they fit.
             tools:
                 - mcp_server: 'buyer.self'
+                - mcp_server: 'buyer.ombu'
         huggingface:
             platform: 'ai.platform.huggingface'
             model: '%env(HF_MODEL)%'
@@ -24,3 +25,4 @@ ai:
                 Some tools are paid with x402; payment is handled for you, so call them when they fit.
             tools:
                 - mcp_server: 'buyer.self'
+                - mcp_server: 'buyer.ombu'

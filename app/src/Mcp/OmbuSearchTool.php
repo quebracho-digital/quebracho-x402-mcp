@@ -20,14 +20,17 @@ final class OmbuSearchTool
     public function __construct(
         private readonly HttpClientInterface $http,
         private readonly string $market = 'https://ombu.quebracho.digital',
+        // The facet, fixed by the server's config: the tool takes only `query`, so no agent
+        // or user can lift it. [] = the whole market; any Ombú filter works (a niche).
+        private readonly array $facet = [],
     ) {
     }
 
-    #[McpTool(name: 'ombu_search', description: 'Searches Ombu, a market of paid x402 services for agents. Returns title, provider, category and price per call, with a link to each service.')]
+    #[McpTool(name: 'ombu_search', description: 'Demo of a faceted catalogue (the facet is server config, default: Quebracho listings only). Searches Ombu, a market of paid x402 services for agents. Returns title, provider, category and price per call, with a link to each service.')]
     public function __invoke(string $query): string
     {
         try {
-            $markdown = $this->http->request('GET', $this->market.'/market.md', ['query' => ['search' => $query], 'timeout' => 10])->getContent();
+            $markdown = $this->http->request('GET', $this->market.'/market.md', ['query' => ['search' => $query] + $this->facet, 'timeout' => 10])->getContent();
         } catch (ExceptionInterface $e) {
             return 'Ombu is unreachable right now: '.$e->getMessage();
         }

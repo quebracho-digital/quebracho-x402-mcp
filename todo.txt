@@ -3,8 +3,6 @@
 (B) 2026-11-02 Entregar el hackathon: formulario con repo (monorepo) + video nuevo; plazo oficial 2026-11-22 18:00 CET +hackathon due:2026-11-22
 (B) 2026-11-03 Formulario del hackathon: repo monorepo, video nuevo y párrafo actualizado (librería, 152 tests, mainnet en Ombú, Symfony AI + HF, analyze_terms super beta, MCP de Ombú); el párrafo viejo dice 166 tests +hackathon due:2026-11-22
 (C) 2026-11-03 deck de claude.ai (PmrCSQoAgeuqWFLRhje8uZ) y deck.html sin trackear: dicen 144 tests y el hash viejo 0xbfeba3…; actualizar a 152 y 0x41334e… o borrar deck.html +hackathon
-(B) 2026-11-03 Integrar el MCP de Ombú en app/ (segundo servidor MCP del agente, URL por variable de entorno) solo cuando la sesión de Ombú termine, haga los tests y pushee; esperar su aviso; Leo: "ya estaba todo decidido" +hackathon +ombu
-(A) 2026-11-03 Ombú: agregar un MCP (módulo contrib drupal/mcp_server, SDK oficial) con búsqueda y detalle de servicios, solo en dev; lo coordina la sesión de docs y lo hace una sesión experta en Ombú; deploy a prod solo con autorización de Leo +hackathon +ombu due:2026-11-14
 (C) 2026-11-03 Concordium: retomar y restaurar desde b83b145 (git show) recién desde 2026-11-19; hasta entonces no codear nada de Concordium en este repo (Kalibang) +kalibang due:2026-11-19
 (B) 2026-11-03 analyze_terms (super beta, Qwen/Qwen3.8-27B en HF) hecho en c191831; falta comparar el costo real con la factura de HF y decidir el precio final (hoy 0.02 USDC) +hackathon due:2026-11-10
 (A) 2026-11-03 Rehacer el video: grabación real de la demo, 152 tests, app:ask --hf, analyze_terms (decir super beta), MCP de Ombú y compra real con recibo; 90 s; subir con URL nueva y actualizar subtítulos/descripción (video/youtube.md) +hackathon due:2026-11-20
