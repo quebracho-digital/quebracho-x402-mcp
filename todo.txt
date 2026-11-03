@@ -1,5 +1,4 @@
 (A) 2026-11-02 Video del hackathon v2: grabación real de la demo (bin/smoke.sh, app:ask, compra real en Ombú con recibo), 90 s, subir con URL nueva (la del formulario es la vieja); material en video/NOTES.md, se hace al final, cuando funcionen los MCP +hackathon due:2026-11-20
-(B) 2026-11-02 Re-split de packages/x402 con tag nuevo (v0.3.0: Ethereum incorporada, blacklist de USDC de mainnet, sin Concordium) cuando Leo ponga el hook de Packagist; hoy Packagist y el split están en v0.2.x sin esto +hackathon @agente
 (B) 2026-11-02 Entregar el hackathon: formulario con repo (monorepo) + video nuevo; plazo oficial 2026-11-22 18:00 CET +hackathon due:2026-11-22
 (B) 2026-11-03 Formulario del hackathon: repo monorepo, video nuevo y párrafo actualizado (librería, 152 tests, mainnet en Ombú, Symfony AI + HF, analyze_terms super beta, MCP de Ombú); el párrafo viejo dice 166 tests +hackathon due:2026-11-22
 (C) 2026-11-03 deck de claude.ai (PmrCSQoAgeuqWFLRhje8uZ) y deck.html sin trackear: dicen 144 tests y el hash viejo 0xbfeba3…; actualizar a 152 y 0x41334e… o borrar deck.html +hackathon
