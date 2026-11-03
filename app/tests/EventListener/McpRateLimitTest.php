@@ -5,7 +5,10 @@ declare(strict_types=1);
 namespace App\Tests\EventListener;
 
 use App\EventListener\McpRateLimit;
+use Nyholm\Psr7\Factory\Psr17Factory;
 use PHPUnit\Framework\TestCase;
+use Symfony\AI\McpBundle\Http\MiddlewareFactory;
+use Symfony\Bridge\PsrHttpMessage\Factory\PsrHttpFactory;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpKernel\Event\RequestEvent;
 use Symfony\Component\HttpKernel\HttpKernelInterface;
@@ -21,13 +24,21 @@ final class McpRateLimitTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->limit = new McpRateLimit(new RateLimiterFactory(['id' => 'mcp', 'policy' => 'fixed_window', 'limit' => 1, 'interval' => '1 minute'], new InMemoryStorage()));
+        $this->limit = self::limit(perClient: 1);
+    }
+
+    private static function limit(int $perClient = 1, int $global = 100, ?RateLimiterFactoryInterface $client = null): McpRateLimit
+    {
+        $factory = static fn (string $id, int $n) => new RateLimiterFactory(['id' => $id, 'policy' => 'fixed_window', 'limit' => $n, 'interval' => '1 minute'], new InMemoryStorage());
+        $psr17 = new Psr17Factory();
+
+        return new McpRateLimit($client ?? $factory('mcp', $perClient), $factory('all', $global), new MiddlewareFactory(['localhost'], []), new PsrHttpFactory($psr17, $psr17, $psr17, $psr17), $psr17);
     }
 
     /** What the router leaves on a request to the MCP endpoint (or $route for any other). */
-    private function event(string $ip, string $method = 'POST', ?string $route = '_mcp_endpoint_default', string $body = '', int $type = HttpKernelInterface::MAIN_REQUEST): RequestEvent
+    private function event(string $ip, string $method = 'POST', ?string $route = '_mcp_endpoint_default', string $body = '', int $type = HttpKernelInterface::MAIN_REQUEST, string $host = 'localhost'): RequestEvent
     {
-        $request = Request::create('/mcp', $method, server: ['REMOTE_ADDR' => $ip], content: $body);
+        $request = Request::create("http://$host/mcp", $method, server: ['REMOTE_ADDR' => $ip], content: $body);
         $request->attributes->set('_route', $route);
         $event = new RequestEvent($this->createStub(HttpKernelInterface::class), $request, $type);
         ($this->limit)($event);
@@ -103,8 +114,42 @@ final class McpRateLimitTest extends TestCase
         $limiter->method('consume')->willReturn($refused);
         $factory = $this->createStub(RateLimiterFactoryInterface::class);
         $factory->method('create')->willReturn($limiter);
-        $this->limit = new McpRateLimit($factory);
+        $this->limit = self::limit(client: $factory);
 
         self::assertSame('1', $this->event('203.0.113.1')->getResponse()?->headers->get('Retry-After'));
+    }
+
+    public function testTheWholeServerHasACapToo(): void
+    {
+        $this->limit = self::limit(perClient: 10, global: 2);
+        self::assertNull($this->send('2001:db8:1:1::1'));
+        self::assertNull($this->send('2001:db8:1:2::1'));
+        self::assertSame(429, $this->send('2001:db8:1:3::1'), 'a third /64 of the same /48');
+    }
+
+    public function testAClientOverItsOwnLimitDoesNotSpendEverybodysCap(): void
+    {
+        $this->limit = self::limit(perClient: 1, global: 2);
+        $this->send('203.0.113.1');
+        $this->send('203.0.113.1');
+        $this->send('203.0.113.1');
+        self::assertNull($this->send('203.0.113.2'), 'the refused calls did not count globally');
+    }
+
+    public function testAForeignHostOrOriginSpendsNoBucket(): void
+    {
+        // The transport answers these with 403; the listener lets them through uncounted.
+        self::assertNull($this->event('203.0.113.1', host: 'evil.example')->getResponse());
+        $origin = Request::create('http://localhost/mcp', 'POST', server: ['REMOTE_ADDR' => '203.0.113.1', 'HTTP_ORIGIN' => 'https://evil.example']);
+        $origin->attributes->set('_route', '_mcp_endpoint_default');
+        ($this->limit)(new RequestEvent($this->createStub(HttpKernelInterface::class), $origin, HttpKernelInterface::MAIN_REQUEST));
+        self::assertNull($this->send('203.0.113.1'), 'the only call is still there');
+        self::assertSame(429, $this->send('203.0.113.1'));
+    }
+
+    public function testABrowserMayReadRetryAfter(): void
+    {
+        $this->send('203.0.113.1');
+        self::assertSame('Retry-After', $this->event('203.0.113.1')->getResponse()?->headers->get('Access-Control-Expose-Headers'));
     }
 }
