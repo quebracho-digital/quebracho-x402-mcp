@@ -6,6 +6,7 @@ namespace Quebracho\X402\Tests;
 
 use Nyholm\Psr7\Factory\Psr17Factory;
 use Nyholm\Psr7\Response;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
@@ -135,6 +136,35 @@ final class TokenBlacklistTest extends TestCase
             self::assertSame($selector, substr(end($this->calls)['params'][0]['data'], 0, 10), $network);
             self::assertSame(Networks::get($network)['asset'], end($this->calls)['params'][0]['to'], $network);
         }
+    }
+
+    /**
+     * @return iterable<string, array{int, string}>
+     */
+    public static function mainnetUsdc(): iterable
+    {
+        yield 'Ethereum' => [1, '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'];
+        yield 'Base' => [8453, '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'];
+        yield 'Polygon' => [137, '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359'];
+        yield 'Avalanche' => [43114, '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E'];
+        yield 'Optimism' => [10, '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85'];
+        yield 'Arbitrum' => [42161, '0xaf88d065e77c8cC2239327C5EDb3A432268e5831'];
+        yield 'Arc' => [5042, '0x3600000000000000000000000000000000000000'];
+    }
+
+    /**
+     * Mainnet USDC is checked by default once the site registers the network.
+     */
+    #[DataProvider('mainnetUsdc')]
+    public function testMainnetUsdcIsAskedWithCirclesFunction(int $chainId, string $usdc): void
+    {
+        $network = Networks::add($chainId, $usdc, 'USD Coin', '2', rpc: 'https://rpc.example');
+        $check = $this->check($network);
+        ($this->listener($this->answer(self::FROZEN)))($check);
+
+        self::assertSame('address_blacklisted', $check->reason(), $network);
+        self::assertSame('0xfe575a87', substr(end($this->calls)['params'][0]['data'], 0, 10), $network);
+        self::assertSame($usdc, end($this->calls)['params'][0]['to'], $network);
     }
 
     public function testAnAssetWithoutAKnownFunctionIsNotAsked(): void

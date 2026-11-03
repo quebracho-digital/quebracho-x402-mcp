@@ -45,6 +45,7 @@ final class TokenBlacklist
      * 8 of 8 OFAC-listed addresses; it has no EIP-3009, so it is no payment
      * asset yet, but it is ready for a chain or token that brings USDT.
      * Not reached from here when tried: Ethereum Sepolia, Polygon Amoy (Circle's USDC, assumed).
+     * The mainnet USDC below were each read from a public RPC on 2026-11-03.
      *
      * NOT active: USDT0 (Arbitrum, Rootstock) exposes `isBlocked(address)`
      * (0xfbac3951; the Circle and legacy Tether names revert there), but it
@@ -58,6 +59,17 @@ final class TokenBlacklist
         'eip155:11155111|0x1c7d4b196cb0c7b01d743fbc6116a902379c7238' => 'isBlacklisted',
         'eip155:80002|0x41e94eb019c0762f9bfcf9fb1e58725bfb0e7582' => 'isBlacklisted',
         'eip155:1|0xdac17f958d2ee523a2206206994597c13d831ec7' => 'isBlackListed',
+        // Circle's native USDC on mainnets (2026-11-03: name() "USD Coin" (Arc: "USDC"),
+        // version() "2", 6 decimals; isBlacklisted answered, a made-up selector reverted).
+        // Only asked once the network is registered (Networks::add), so listing them
+        // makes no mainnet a built-in network.
+        'eip155:1|0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48' => 'isBlacklisted',
+        'eip155:8453|0x833589fcd6edb6e08f4c7c32d4f71b54bda02913' => 'isBlacklisted',
+        'eip155:137|0x3c499c542cef5e3811e1192ce70d8cc03d5c3359' => 'isBlacklisted',
+        'eip155:43114|0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e' => 'isBlacklisted',
+        'eip155:10|0x0b2c639c533813f4aa9d7837caf62653d097ff85' => 'isBlacklisted',
+        'eip155:42161|0xaf88d065e77c8cc2239327c5edb3a432268e5831' => 'isBlacklisted',
+        'eip155:5042|0x3600000000000000000000000000000000000000' => 'isBlacklisted',
     ];
 
     /**
