@@ -106,7 +106,8 @@ services:
                 factory: ['App\X402\BuyerBudget', 'create']
                 # Caps per network and per single payment, in USD, from env (JSON). A network without a cap is never paid.
                 # Expired signatures the seller never settled are freed, once the chain says so.
-                arguments: ['%env(json:X402_BUDGETS)%', '%env(json:X402_MAX_PER_PAYMENT)%', !closure '@App\X402\AuthorizationState', '%env(X402_BUYER_KEY)%']
+                # X402_BUYER_MAX_TIMEOUT: no signature lives longer than the 180 s the client below waits.
+                arguments: ['%env(json:X402_BUDGETS)%', '%env(json:X402_MAX_PER_PAYMENT)%', !closure '@App\X402\AuthorizationState', '%env(X402_BUYER_KEY)%', '%env(int:X402_BUYER_MAX_TIMEOUT)%']
             $streams: '@mcp.psr17_factory'
             $onPaid: !closure '@App\X402\Receipts'
             $onRefused: !closure ['@App\X402\Receipts', 'refused']

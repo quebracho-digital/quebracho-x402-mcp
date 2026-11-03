@@ -16,7 +16,10 @@ final class BuyerBudget
 {
     private const PUBLIC_KEY = '0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318';
 
-    public static function create(array $caps, array $perPayment, \Closure $used, string $key): Budget
+    /**
+     * @param int $maxTimeout X402_BUYER_MAX_TIMEOUT: the longest validity signed, under the paying client's wait
+     */
+    public static function create(array $caps, array $perPayment, \Closure $used, string $key, int $maxTimeout = Budget::MAX_TIMEOUT): Budget
     {
         if (0 === strcasecmp($key, self::PUBLIC_KEY)) {
             foreach (array_keys($caps) as $network) {
@@ -26,6 +29,6 @@ final class BuyerBudget
             }
         }
 
-        return Budget::fromUsd($caps, $perPayment, $used);
+        return Budget::fromUsd($caps, $perPayment, $used, $maxTimeout);
     }
 }
