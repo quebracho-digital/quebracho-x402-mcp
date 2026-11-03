@@ -49,7 +49,8 @@ final class Sale
     {
         $scheme = current(array_filter($this->schemes, fn (Scheme $s) => $s->supports($this->req['network'])))
           ?: throw new \LogicException("No scheme verifies {$this->req['network']}.");
-        $reason = $scheme->verify($this->payment, $this->req);
+        // Offline first: a signature too short for this tool costs no facilitator round trip.
+        $reason = $scheme->verify($this->payment, $this->req) ?? $this->expiresTooSoon($scheme);
         if (null === $reason && null !== $this->payer) {
             // Who pays is proven now; a buyer this call is not for takes no claim.
             $from = $scheme->payer($this->payment);
@@ -67,6 +68,7 @@ final class Sale
                 $reason = self::UNAVAILABLE;
             }
         }
+        // Again after the online verify, which may have taken seconds of that validity.
         $reason ??= $this->expiresTooSoon($scheme);
         // Spent before it runs: N concurrent copies get one delivery.
         if (null === $reason && !($this->claimed = ($this->claim)(Settlement::key($this->payment)))) {
@@ -125,8 +127,9 @@ final class Sale
 
     /**
      * A slow handler must not outlive the signature: settled after it, an expired
-     * authorization would deliver unpaid. Checked last before the claim, after
-     * the online verify spent its time. Only a call that declares a duration.
+     * authorization would deliver unpaid. Checked right after the offline verify
+     * and again last before the claim, once the online verify spent its time.
+     * Only a call that declares a duration.
      */
     private function expiresTooSoon(Scheme $scheme): ?string
     {

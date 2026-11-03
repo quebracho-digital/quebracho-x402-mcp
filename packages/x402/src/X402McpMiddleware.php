@@ -178,6 +178,11 @@ final class X402McpMiddleware implements MiddlewareInterface
             }
             if (isset($out['result'])) {
                 $out['result']['_meta'][self::PAYMENT_RESPONSE] = $receipt;
+            } elseif (isset($out['error'])) {
+                // Upfront and the tool answered with a JSON-RPC error: the money moved,
+                // so the buyer still gets the receipt (its transaction) in error.data.
+                $data = $out['error']['data'] ?? [];
+                $out['error']['data'] = (is_array($data) ? $data : ['data' => $data]) + [self::PAYMENT_RESPONSE => $receipt];
             }
 
             return $out;

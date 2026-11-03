@@ -21,17 +21,19 @@ use Quebracho\X402\X402McpMiddleware;
 
 final class X402McpMiddlewareTest extends TestCase
 {
+    use TempClaims;
+
     private int $runs = 0;
     private \Closure $claims;
 
     protected function setUp(): void
     {
         // One durable store per test, shared by every middleware it builds.
-        $this->claims = (new FileClaims(sys_get_temp_dir().'/x402-claims-'.bin2hex(random_bytes(8))))->__invoke(...);
+        $this->claims = (new FileClaims($this->claimsDir()))->__invoke(...);
     }
 
     /**
-     * @param array<string, \Closure> $hooks  validate, payer, duration
+     * @param array<string, \Closure> $hooks  validate, payer, duration, verify
      * @param ?Scheme                 $scheme default: EvmExact on the real clock
      */
     private function middleware(?\Closure $settle = null, bool $upfront = false, array $hooks = [], ?Scheme $scheme = null): X402McpMiddleware
@@ -237,6 +239,62 @@ final class X402McpMiddlewareTest extends TestCase
         $failed = self::toolResult($this->middleware($tx, true)->process($pay(), $this->handler(['isError' => true, 'content' => []])));
         self::assertTrue($failed['_meta']['x402/payment-response']['success']);
         self::assertSame(2, $this->runs);
+    }
+
+    public function testUpfrontReceiptRidesOnAJsonRpcError(): void
+    {
+        $tx = fn () => ['success' => true, 'transaction' => '0x'.str_repeat('ab', 32), 'network' => 'eip155:84532'];
+        $required = self::toolResult($this->middleware(upfront: true)->process(self::call('wisdom'), $this->handler()))['structuredContent'];
+        $request = self::call('wisdom', (new EvmExact(new Signer('0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318')))->pay($required, $required['accepts'][0]));
+        $errors = new class implements RequestHandlerInterface {
+            public function handle(ServerRequestInterface $request): ResponseInterface
+            {
+                return new Response(200, ['Content-Type' => 'application/json'], '{"jsonrpc":"2.0","id":2,"error":{"code":-32603,"message":"tool broke","data":"trace id 7"}}');
+            }
+        };
+
+        $out = json_decode((string) $this->middleware($tx, true)->process($request, $errors)->getBody(), true);
+        self::assertSame('tool broke', $out['error']['message']);
+        self::assertSame('trace id 7', $out['error']['data']['data']);
+        self::assertSame('0x'.str_repeat('ab', 32), $out['error']['data'][X402McpMiddleware::PAYMENT_RESPONSE]['transaction']);
+    }
+
+    public function testATooShortSignatureCostsNoFacilitatorRoundTrip(): void
+    {
+        $t = time();
+        $request = $this->paidCall(clock: fn () => $t);
+        $verified = 0;
+        $verify = function () use (&$verified): ?string {
+            ++$verified;
+
+            return null;
+        };
+        $result = self::toolResult($this->middleware(hooks: ['duration' => fn () => 55, 'verify' => $verify], scheme: new EvmExact(clock: fn () => $t))->process($request, $this->handler()));
+        self::assertSame('invalid_exact_evm_payload_authorization_valid_before', $result['structuredContent']['error']);
+        self::assertSame([0, 0], [$verified, $this->runs]);
+    }
+
+    public function testTheTimeTheOnlineVerifyTookIsCountedBeforeTheClaim(): void
+    {
+        $now = $t = time();
+        $request = $this->paidCall(clock: fn () => $t);
+        $seller = new EvmExact(clock: function () use (&$now) {
+            return $now;
+        });
+        // 60 s left fits a 50 s tool, until the facilitator takes 10 s to answer.
+        $slow = function () use (&$now): ?string {
+            $now += 10;
+
+            return null;
+        };
+        $result = self::toolResult($this->middleware(hooks: ['duration' => fn () => 50, 'verify' => $slow], scheme: $seller)->process($request, $this->handler()));
+        self::assertSame('invalid_exact_evm_payload_authorization_valid_before', $result['structuredContent']['error']);
+        self::assertSame(0, $this->runs);
+
+        // Not claimed: with a fast facilitator the same payment buys.
+        $now = $t;
+        $ok = $this->middleware(hooks: ['duration' => fn () => 50, 'verify' => fn () => null], scheme: $seller)->process($request, $this->handler());
+        self::assertTrue(self::toolResult($ok)['_meta'][X402McpMiddleware::PAYMENT_RESPONSE]['success']);
     }
 
     public function testValidateRefusesBeforeAnythingIsReadClaimedOrRun(): void
