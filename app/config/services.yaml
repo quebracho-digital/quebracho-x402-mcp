@@ -87,14 +87,14 @@ services:
     # Buyer side, for app:ask: pays paid tools in band within X402_BUDGETS and X402_MAX_PER_PAYMENT, only to X402_PAYTO_ALLOW.
     Quebracho\X402\PayingMcpClient:
         arguments:
-            # No redirects: a 307 must never carry the signed payment to another host.
+            # No redirects: a 307 must never carry the signed payment to another host. Waits up to 120 s: more than the 60 s a signed payment lives plus the seller's settle (the library README says so); a buyer that hangs up early can pay for an answer it never reads.
             $client: !service
                 class: Symfony\Component\HttpClient\Psr18Client
                 arguments:
                     - !service
                         class: Symfony\Contracts\HttpClient\HttpClientInterface
                         factory: ['Symfony\Component\HttpClient\HttpClient', 'create']
-                        arguments: [{max_redirects: 0, timeout: 20, max_duration: 55}]
+                        arguments: [{max_redirects: 0, timeout: 30, max_duration: 120}]
             $schemes:
                 - !service
                     class: Quebracho\X402\EvmExact
