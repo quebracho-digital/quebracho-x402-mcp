@@ -92,12 +92,15 @@ exactly as without them):
   reason is a JSON-RPC `-32602` error and nothing is claimed, settled or run.
   `$price` returning NULL means *free*, so it cannot be the validation.
 - `payer: fn(array $params, string $payer): ?string` runs once the signature
-  proved who pays, before the claim: a reason refuses the payment (for
-  example, only the payer who started a job may buy its result).
+  proved who pays, before the claim: the reason it returns is the
+  PaymentRequired's `error` (your own code; for example, only the payer who
+  started a job may buy its result). A scheme that cannot name the payer is
+  `invalid_payload`.
 - `duration: fn(array $params): int` is the tool's worst case in seconds from
   the claim until the settle is sent. An EVM signature whose `validBefore`
-  leaves less than that plus `EvmExact::SLACK` (6 s) is refused before the
-  claim (`invalid_exact_evm_payload_authorization_valid_before`); a scheme
+  leaves less than that plus `EvmExact::SLACK` (6 s), on `EvmExact`'s clock, is
+  refused before the claim (`invalid_exact_evm_payload_authorization_valid_before`,
+  the spec's code: here "too short for this tool"); a scheme
   without `validBefore` is refused (`unsupported_scheme`) when a duration is
   declared. Give that tool a longer `maxTimeoutSeconds`
   (`Networks::requirements(..., $timeout)`).
@@ -123,7 +126,9 @@ reads the receipt from `result._meta["x402/payment-response"]`.
 that does not follow redirects, or another host gets the signed payment. The budget is a per-network cap,
 in memory, spent when it signs (a signed authorization is money the seller
 can settle) and never refunded on the seller's word. Both buyers sign only
-known tokens (`Networks`), integer amounts and validities up to 10 minutes.
+known tokens (`Networks`), integer amounts and validities up to 10 minutes
+(`Budget::fromUsd(..., maxTimeout: 170)` lowers that: never sign a validity
+longer than your HTTP client waits).
 With `Budget::usd($network, $usd, $used)`, where `$used` reads the token's
 `authorizationState` on chain, a signature the seller never settled frees
 its amount once it expires unused.

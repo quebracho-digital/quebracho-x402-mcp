@@ -36,17 +36,17 @@ final class Budget
 
     /**
      * @param array<string, string> $caps
-     *                                     Network => maximum atomic units, e.g. ['eip155:84532' => '50000'] for
-     *                                     0.05 USDC. Networks without a cap get nothing.
+     *                                          Network => maximum atomic units, e.g. ['eip155:84532' => '50000'] for
+     *                                          0.05 USDC. Networks without a cap get nothing.
      * @param ?\Closure             $used
-     *                                     fn(string $network, string $from, string $nonce): bool — the token's
-     *                                     EIP-3009 authorizationState on chain. NULL never frees anything.
+     *                                          fn(string $network, string $from, string $nonce): bool — the token's
+     *                                          EIP-3009 authorizationState on chain. NULL never frees anything.
      * @param ?\Closure             $clock
-     *                                     Returns the current Unix time; tests pin it
+     *                                          Returns the current Unix time; tests pin it
      * @param int                   $maxTimeout
-     *                                     The longest validity this buyer signs (at most MAX_TIMEOUT): no more
-     *                                     than its HTTP client waits for the answer, or it can pay for one it
-     *                                     never reads
+     *                                          The longest validity this buyer signs (at most MAX_TIMEOUT): no more
+     *                                          than its HTTP client waits for the answer, or it can pay for one it
+     *                                          never reads
      */
     public function __construct(
         private readonly array $caps,
