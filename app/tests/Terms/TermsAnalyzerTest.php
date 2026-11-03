@@ -9,6 +9,7 @@ use App\Terms\TermsAnalyzer;
 use Mcp\Exception\ToolCallException;
 use PHPUnit\Framework\TestCase;
 use Symfony\AI\Platform\Test\MockPlatformFactory;
+use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\RequestStack;
 use Symfony\Component\RateLimiter\RateLimiterFactory;
 use Symfony\Component\RateLimiter\Storage\InMemoryStorage;
@@ -28,11 +29,11 @@ final class TermsAnalyzerTest extends TestCase
         return new TermsAnalyzer($platform, 'some/model');
     }
 
-    private function tool(TermsAnalyzer $analyzer, int $perIp = 10, int $perDay = 500): AnalyzeTermsTool
+    private function tool(TermsAnalyzer $analyzer, int $perIp = 10, int $perDay = 500, ?RequestStack $requests = null): AnalyzeTermsTool
     {
         $limiter = static fn (string $id, int $limit) => new RateLimiterFactory(['id' => $id, 'policy' => 'fixed_window', 'limit' => $limit, 'interval' => '1 day'], new InMemoryStorage());
 
-        return new AnalyzeTermsTool($analyzer, $limiter('ip', $perIp), $limiter('day', $perDay), new RequestStack());
+        return new AnalyzeTermsTool($analyzer, $limiter('ip', $perIp), $limiter('day', $perDay), $requests ?? new RequestStack());
     }
 
     public function testKeepsOnlyQuotesFoundInTheTextAndCountsTheRest(): void
@@ -131,5 +132,26 @@ in Delaware'],
             self::assertStringContainsString('Rate limit', $e->getMessage());
         }
         self::assertSame(1, $calls);
+    }
+
+    public function testEachClientIpHasItsOwnBucketAndTheDayLimitIsShared(): void
+    {
+        $ok = $this->analyzer('{"arbitration": ["binding arbitration in Delaware"]}');
+        $requests = new RequestStack();
+        $from = static function (string $ip) use ($requests): void {
+            while (null !== $requests->pop()) {
+            }
+            $requests->push(Request::create('/mcp', 'POST', server: ['REMOTE_ADDR' => $ip]));
+        };
+        $tool = $this->tool($ok, perIp: 1, perDay: 2, requests: $requests);
+
+        $from('203.0.113.1');
+        $tool(self::TEXT);
+        $from('203.0.113.2');
+        $tool(self::TEXT);
+
+        $this->expectException(ToolCallException::class);
+        $from('203.0.113.3');
+        $tool(self::TEXT);
     }
 }

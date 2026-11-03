@@ -2,6 +2,13 @@
 framework:
     secret: '%env(APP_SECRET)%'
 
+    # Behind a reverse proxy (DDEV's router, Cloudflare, nginx) REMOTE_ADDR is the proxy, so the
+    # per-client limit of analyze_terms would be one bucket for everybody. Trust only the hops listed in
+    # TRUSTED_PROXIES (default: private networks, which covers DDEV and a proxy on the same host);
+    # add Cloudflare's ranges in production. Never trust X-Forwarded-For from anyone else.
+    trusted_proxies: '%env(TRUSTED_PROXIES)%'
+    trusted_headers: ['x-forwarded-for', 'x-forwarded-proto', 'x-forwarded-host']
+
     # Note that the session will be started ONLY if you read or write from it.
     session: true
 

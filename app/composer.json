@@ -22,6 +22,7 @@
         "symfony/flex": "^2",
         "symfony/framework-bundle": "8.1.*",
         "symfony/http-client": "8.1.*",
+        "symfony/lock": "8.1.*",
         "symfony/mcp-bundle": "^0.15.0",
         "symfony/psr-http-message-bridge": "8.1.*",
         "symfony/rate-limiter": "8.1.*",

@@ -205,8 +205,9 @@ a super beta. The payment is on a testnet, but the Hugging Face call is real.
 
 **Flooding.** A testnet payment costs the caller nothing and each call spends
 our Hugging Face credit, so `analyze_terms` is rate limited with Symfony's
-`rate-limiter`: `TERMS_LIMIT_IP` calls per client per hour (5) and
-`TERMS_LIMIT_DAY` in total per day (500). A refused call is a tool error, so
+`rate-limiter` (with `lock`, flock, against parallel requests): `TERMS_LIMIT_IP` calls per client per hour (5) and
+`TERMS_LIMIT_DAY` in total per day (500). The client is the IP behind `TRUSTED_PROXIES` (default `private_ranges`, which covers DDEV; add
+Cloudflare's ranges in production, and never trust `X-Forwarded-For` from anyone else). A refused call is a tool error, so
 nothing is charged. A call costs roughly a quarter of a cent at DeepSeek V4.1
 Flash's listed prices (our estimate; the Hugging Face bill is not checked yet).
 
