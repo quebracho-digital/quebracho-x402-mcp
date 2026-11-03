@@ -173,10 +173,29 @@ Each category comes with quotes the model had to copy exactly, and the server
 checks every quote against your text and **drops the ones that are not in it**
 (`quotes_dropped` says how many). A reply that is not JSON, or a text that is
 too long, is a tool error, so nothing is charged. The categories and the
-prompt come from `terms-eval`, the set Lapacho used to compare models (there,
-Qwen3.8-27B found 99% of its quotes verbatim on 13 real documents; DeepSeek
-V4.1 Flash was only tried here, on the run below). The text is fenced as data, so a clause that says
+prompt come from our own curated dataset (below). The text is fenced as data, so a clause that says
 "ignore your instructions" is not obeyed.
+
+**The dataset behind it.** The 19 categories are not invented for the demo: they
+come from [`quebracho-digital/terminos-es`](https://huggingface.co/datasets/quebracho-digital/terminos-es),
+a dataset we curated on Hugging Face (project Lapacho, CC-BY-4.0; gated with
+automatic approval). It holds 13 real terms of service and privacy policies in
+Spanish (Argentina and the rest of the world: Spotify, Netflix, Google,
+Mercado Libre, Mercado Pago, Uber, TikTok, WhatsApp), each labelled with the
+clauses a consumer cares about, a **verbatim quote** that justifies every
+label and a severity. Eight categories are those of UNFAIR-ToS (LexGLUE), with
+the same names so results can be compared, and eleven cover consumer rights and
+personal data (indemnification, waiver of rights, tracking...). We found no
+Spanish set like it. It was built to measure which models can find those
+clauses and **quote** them instead of inventing them: with fixed prompt,
+temperature 0 and reasoning off, Qwen3.8-27B reaches F1 0.91 and 99% verbatim
+quotes (the best of the five models we compared). Limits we state in the
+dataset card: the labels were written by a model and corrected by two other
+models and one person, so human agreement is not measured; severity is not
+evaluated; the full texts are not included (copyright), they are rebuilt from
+the URLs and a SHA-256 tells you if the site changed. `analyze_terms` reuses
+its categories, its prompt and its rule that a quote must be literal; the
+DeepSeek V4.1 Flash it runs by default is not in that comparison.
 
 ```bash
 ddev exec -d /var/www/html/app bin/console app:ask --hf "Use analyze_terms on this text: <paste up to 1200 words>"
