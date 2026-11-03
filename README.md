@@ -7,7 +7,15 @@ API keys, no accounts. This repo holds the library (`packages/x402`) and a
 Symfony MCP server with a Symfony AI agent (`app/`) that show it working.
 
 Built for the Symfony AI & MCP Hackathon (team Ombu). The version we submitted is
-the tag `hackathon-submission`; `main` may move on after it. The x402 library is
+the tag `hackathon-submission`; `main` may move on after it.
+
+What was made for the hackathon: the library and this demo start at commit
+[`185d334`](https://github.com/quebracho-digital/quebracho-x402-mcp/commit/185d334)
+(2026-10-28), and Ombú's MCP server is
+[`f7ef5f0`](https://github.com/quebracho-digital/ombu/commit/f7ef5f0) and
+[`f5fd6f0`](https://github.com/quebracho-digital/ombu/commit/f5fd6f0) (2026-11-03). The
+signing code was extracted from our own earlier Drupal module x402_pay, and the
+Ombú market itself existed before the hackathon. The x402 library is
 contributed by Quebracho. It already runs in production on mainnet at
 [ombu.quebracho.digital](https://ombu.quebracho.digital), and powers the
 Drupal module [x402_pay](https://www.drupal.org/project/x402_pay).
