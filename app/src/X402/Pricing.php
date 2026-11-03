@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\X402;
 
+use Quebracho\X402\Budget;
 use Quebracho\X402\EvmExact;
 use Quebracho\X402\Networks;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
@@ -18,7 +19,7 @@ final class Pricing
     /**
      * @param list<string>          $paidTools
      * @param array<string, string> $prices
-     * @param array<string, int>    $timeouts  maxTimeoutSeconds per tool; default Networks::TIMEOUT
+     * @param array<string, mixed>  $timeouts  maxTimeoutSeconds per tool, 1..Budget::MAX_TIMEOUT; default Networks::TIMEOUT
      * @param array<string, mixed>  $durations worst-case seconds from the claim to the settle, per tool
      */
     public function __construct(
@@ -30,8 +31,15 @@ final class Pricing
         #[Autowire(env: 'json:X402_TIMEOUTS')] private readonly array $timeouts = [],
         #[Autowire(env: 'json:X402_DURATIONS')] private readonly array $durations = [],
     ) {
+        foreach ($this->timeouts as $tool => $seconds) {
+            // A buyer (Budget) never signs longer than MAX_TIMEOUT: a longer offer would sell nothing.
+            if (!\is_int($seconds) || $seconds < 1 || $seconds > Budget::MAX_TIMEOUT) {
+                throw new \InvalidArgumentException("X402_TIMEOUTS[$tool] must be an integer from 1 to ".Budget::MAX_TIMEOUT.'.');
+            }
+        }
         foreach ($this->durations as $tool => $seconds) {
-            // A duration no fresh signature can cover would refuse every paid call of that tool.
+            // A duration no fresh signature can cover would refuse every paid call of that tool;
+            // one second of headroom for the signing itself.
             if (!\is_int($seconds) || $seconds < 0 || $seconds + EvmExact::SLACK >= ($this->timeouts[$tool] ?? Networks::TIMEOUT)) {
                 throw new \InvalidArgumentException("X402_DURATIONS[$tool] must be an integer under its X402_TIMEOUTS minus ".EvmExact::SLACK.' s.');
             }

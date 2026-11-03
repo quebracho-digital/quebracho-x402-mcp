@@ -6,6 +6,7 @@ namespace App\Tests\X402;
 
 use App\X402\Pricing;
 use Mcp\Capability\Attribute\McpTool;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class PricingTest extends TestCase
@@ -60,9 +61,37 @@ final class PricingTest extends TestCase
         self::assertNull($pricing(['name' => 'echo']));
     }
 
-    public function testADurationNoSignatureCanCoverIsAConfigError(): void
+    /** @return iterable<string, array{array<string, mixed>, array<string, mixed>}> */
+    public static function badConfig(): iterable
+    {
+        yield 'timeout not a number' => [['analyze_terms' => 'abc'], []];
+        yield 'timeout as a string' => [['analyze_terms' => '120'], []];
+        yield 'negative timeout' => [['analyze_terms' => -5], []];
+        yield 'zero timeout' => [['analyze_terms' => 0], []];
+        yield 'timeout over Budget::MAX_TIMEOUT' => [['analyze_terms' => 601], []];
+        yield 'a day' => [['analyze_terms' => 86400], []];
+        yield 'duration as a string' => [[], ['analyze_terms' => '30']];
+        yield 'negative duration' => [[], ['analyze_terms' => -1]];
+        yield 'duration plus slack reaches the 60 s default' => [[], ['analyze_terms' => 54]];
+        yield 'duration over its own timeout' => [['analyze_terms' => 120], ['analyze_terms' => 114]];
+    }
+
+    /**
+     * @param array<string, mixed> $timeouts
+     * @param array<string, mixed> $durations
+     */
+    #[DataProvider('badConfig')]
+    public function testABadTimeoutOrDurationIsAConfigError(array $timeouts, array $durations): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        new Pricing(['analyze_terms'], 'eip155:84532', '0.01', self::PAY_TO, [], [], ['analyze_terms' => 60]);
+        new Pricing(['analyze_terms'], 'eip155:84532', '0.01', self::PAY_TO, [], $timeouts, $durations);
+    }
+
+    public function testTheLargestDurationsThatFit(): void
+    {
+        $edge = new Pricing(['analyze_terms', 'wisdom'], 'eip155:84532', '0.01', self::PAY_TO, [], ['analyze_terms' => 600, 'wisdom' => 1], ['analyze_terms' => 593, 'echo' => 53, 'free' => 0]);
+        self::assertSame(593, $edge->duration(['name' => 'analyze_terms']));
+        self::assertSame(53, $edge->duration(['name' => 'echo']));
+        self::assertSame(1, $edge(['name' => 'wisdom'])[0]['maxTimeoutSeconds']);
     }
 }
