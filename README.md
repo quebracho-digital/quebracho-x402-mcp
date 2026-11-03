@@ -205,7 +205,7 @@ a super beta. The payment is on a testnet, but the Hugging Face call is real.
 
 **Flooding.** A testnet payment costs the caller nothing and each call spends
 our Hugging Face credit, so `analyze_terms` is rate limited with Symfony's
-`rate-limiter`: `TERMS_LIMIT_IP` calls per client per hour (10) and
+`rate-limiter`: `TERMS_LIMIT_IP` calls per client per hour (5) and
 `TERMS_LIMIT_DAY` in total per day (500). A refused call is a tool error, so
 nothing is charged. A call costs roughly a quarter of a cent at DeepSeek V4.1
 Flash's listed prices (our estimate; the Hugging Face bill is not checked yet).
@@ -295,7 +295,7 @@ ddev exec --dir /var/www/html/app bin/console app:screening check 0x…
 | `HF_TOKEN` | empty | Your Hugging Face token, for `app:ask --hf`. Put it in `app/.env.local`. |
 | `X402_PRICES` | `{"analyze_terms":"0.02"}` | A tool's own price in USD, when it is not `X402_PRICE`. |
 | `TERMS_MODEL` | `deepseek-ai/DeepSeek-V4.1-Flash` | The model behind `analyze_terms` (super beta): open weights on Inference Providers; needs `HF_TOKEN`. |
-| `TERMS_LIMIT_IP` / `TERMS_LIMIT_DAY` | `10` / `500` | `analyze_terms` calls per client IP per hour and in total per day; over the limit is a tool error, nothing charged. |
+| `TERMS_LIMIT_IP` / `TERMS_LIMIT_DAY` | `5` / `500` | `analyze_terms` calls per client IP per hour and in total per day; over the limit is a tool error, nothing charged. |
 | `HF_MODEL` | `openai/gpt-oss-20b` | The model `--hf` uses: any chat model on Inference Providers with tool calling. |
 | `X402_BUDGETS` | `{"eip155:84532":"0.05"}` | The agent's spending cap per run, in USD, JSON by network. A network not listed is never paid (Arc mainnet is left out on purpose: add it in `.env.local` with a non-public key). |
 | `X402_MAX_PER_PAYMENT` | `{"eip155:84532":"0.02"}` | Ceiling for one single payment, same shape. |
