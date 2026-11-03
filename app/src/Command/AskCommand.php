@@ -70,6 +70,9 @@ final class AskCommand
         foreach ($this->receipts->refused as ['req' => $req, 'reason' => $reason]) {
             $io->text(\sprintf('Not paid: %s atomic on %s to %s (%s)', $req['amount'] ?? '?', $req['network'] ?? '?', $req['payTo'] ?? '?', $reason));
         }
+        if ([] !== array_filter($this->receipts->all, static fn (array $r) => true !== $r['receipt']['success'])) {
+            $io->warning('A settlement failed. The public testnet facilitator is shared and fails about one in six on its side: nothing was delivered or charged to you. Run the command again.');
+        }
         if ([] === $this->receipts->all) {
             $io->text('Nothing paid.');
         }

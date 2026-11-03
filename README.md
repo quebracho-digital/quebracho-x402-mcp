@@ -6,7 +6,8 @@ lets any PHP service sell, or any PHP agent buy, over
 API keys, no accounts. This repo holds the library (`packages/x402`) and a
 Symfony MCP server with a Symfony AI agent (`app/`) that show it working.
 
-Built for the Symfony AI & MCP Hackathon (team Ombu). The x402 library is
+Built for the Symfony AI & MCP Hackathon (team Ombu). The version we submitted is
+the tag `hackathon-submission`; `main` may move on after it. The x402 library is
 contributed by Quebracho. It already runs in production on mainnet at
 [ombu.quebracho.digital](https://ombu.quebracho.digital), and powers the
 Drupal module [x402_pay](https://www.drupal.org/project/x402_pay).
