@@ -30,7 +30,7 @@ final class OmbuSearchToolTest extends TestCase
         self::assertSame('https://ombu.example/market.md?search=domain', $sent);
         self::assertSame(
             "- [Check domain](https://ombu.example/service/a.md): `Orthogonal · Data enrichment · \$0.01`\n"
-            ."- [Create domain](https://ombu.example/service/b.md): `AgentMail · Infrastructure · \$10`",
+            .'- [Create domain](https://ombu.example/service/b.md): `AgentMail · Infrastructure · $10`',
             $out,
         );
     }
