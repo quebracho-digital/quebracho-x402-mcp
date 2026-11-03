@@ -232,17 +232,25 @@ agent summarised six categories. Not every flagged quote is a clause (one
 a super beta. The payment is on a testnet, but the Hugging Face call is real.
 
 **Flooding.** A testnet payment costs the caller nothing and each call spends
-our Hugging Face credit, so two limits with Symfony's `rate-limiter` (with
+our Hugging Face credit, so three limits with Symfony's `rate-limiter` (with
 `lock`, flock, against parallel requests). Every `POST /mcp` counts against
-`MCP_LIMIT_IP` per client IP per minute (60), checked in a `kernel.request`
-listener (`App\EventListener\McpRateLimit`) before the x402 middleware: a flood
-gets a 429 and reaches no signature check, payee screening or facilitator
-`/verify`, and nothing is claimed or charged. `analyze_terms` also has
-`TERMS_LIMIT_DAY` calls in total per day (500), inside the tool: over it is a
-tool error, so nothing is charged (an empty text, one over 1,200 words or over
-12,000 characters is refused before it uses that limit). The client is the IP behind `TRUSTED_PROXIES` (default `private_ranges`; add Cloudflare's ranges in
-production, and never trust `X-Forwarded-For` from anyone else). `private_ranges` trusts any private address as a proxy, so a client that reaches PHP from one (a LAN, a published Docker port) can forge `X-Forwarded-For` and get a new bucket each time; in production list your real proxies instead. Under DDEV alone every caller reaches PHP as the
-Docker gateway, so locally the limit is one bucket for the host; a per-client limit needs a real proxy in front
+`MCP_LIMIT_IP` per client per minute (60), checked in a `kernel.request`
+listener (`App\EventListener\McpRateLimit`, right after routing) before the x402
+middleware: a flood reaches no signature check, payee screening or facilitator
+`/verify`, and nothing is claimed or charged. Over the limit the answer is HTTP
+429 with a `Retry-After` header (seconds, at least 1) and a JSON-RPC error,
+`{"jsonrpc":"2.0","id":<the request's id>,"error":{"code":-32000,"message":"Rate limit reached for /mcp. Nothing was charged; try later."}}`;
+the id is `null` for a batch, a notification or a body over 8 KB (not parsed).
+`analyze_terms` then has its own limits inside the tool: `TERMS_LIMIT_IP` calls
+per client per hour (5), so one client cannot spend the whole day, and
+`TERMS_LIMIT_DAY` in total per day (500). Over either is a tool error, so
+nothing is charged (an empty text, one over 1,200 words or over 12,000
+characters is refused before it uses any limit).
+
+The client is the IP behind `TRUSTED_PROXIES`, an IPv6 address counted by its
+/64 (one host usually holds the whole /64). Default `private_ranges`; add Cloudflare's ranges in
+production, and never trust `X-Forwarded-For` from anyone else. `private_ranges` trusts any private address as a proxy, so a client that reaches PHP from one (a LAN, a published Docker port) can forge `X-Forwarded-For` and get a new bucket each time; in production list your real proxies instead. Under DDEV alone every caller reaches PHP as the
+Docker gateway, so locally **every limit is one bucket shared by everything on the host** (the agent, the smoke test, your browser); a per-client limit needs a real proxy in front
 (Cloudflare, nginx) that passes the client IP.
 
 **Slow tools.** The seller settles after the tool answers, so a signature
@@ -250,9 +258,16 @@ must still be valid then. `analyze_terms` offers a 120 s signature
 (`X402_TIMEOUTS`, 60 s for every other tool) and declares a worst case of 60 s
 from the claim to the settle (`X402_DURATIONS`: 40 s Hugging Face cap plus 20 s
 for the settle). A payment with less validity left than that plus 6 s is
-refused before the claim (`invalid_exact_evm_payload_authorization_valid_before`),
-so nothing runs or is charged and the buyer signs again. A tool not in
-`X402_DURATIONS` is checked exactly as before.
+refused before the claim with `invalid_exact_evm_payload_authorization_valid_before`:
+the same x402 code as an expired signature, here meaning "valid now, but too
+short for this tool". Nothing runs or is charged and the buyer signs again. A
+tool not in `X402_DURATIONS` is checked exactly as before.
+
+**Job tools are never free.** `Pricing` treats any tool whose name ends in
+`_start` or `_result` as paid, even when `X402_PAID_TOOLS` leaves it out
+(fail closed: a missing entry would otherwise run it for free), and a `_start`
+tool settles its payment before running (`extra.paymentFlow = upfront`). A
+`_status` tool is free unless listed.
 
 A call costs roughly a quarter of a cent at DeepSeek V4.1
 Flash's listed prices (our estimate; the Hugging Face bill is not checked yet).
@@ -336,16 +351,16 @@ ddev exec --dir /var/www/html/app bin/console app:screening check 0x…
 | `X402_NETWORK` | `eip155:84532` | CAIP-2 network (Base Sepolia). |
 | `X402_PRICE` | `0.01` | Price per paid call, in USD. |
 | `X402_PAY_TO` | `0x7e51…6510` | Who gets paid. **This is the author's wallet.** Change it to yours. |
-| `X402_PAID_TOOLS` | `wisdom,analyze_terms` | Comma-separated tool names that cost money. |
+| `X402_PAID_TOOLS` | `wisdom,analyze_terms` | Comma-separated tool names that cost money. Tools named `*_start` or `*_result` are always paid, listed or not. |
 | `X402_FACILITATOR` | `mock` | Must be set explicitly: `mock` (verified signatures, nothing settled) or a facilitator URL such as `https://x402.org/facilitator` (real settle: on Base Sepolia by default, on a mainnet when `X402_NETWORK` is one you registered). Anything else fails closed: every `/mcp` request errors, nothing is served for free. |
 | `X402_BUYER_KEY` | web3.js docs key | The agent's buyer key: the public web3.js key, holds testnet USDC; anyone can spend it. For a mainnet use your own key in `.env.local`, never in a committed file. |
 | `HF_TOKEN` | empty | Your Hugging Face token, for `app:ask --hf`. Put it in `app/.env.local`. |
 | `X402_PRICES` | `{"analyze_terms":"0.02"}` | A tool's own price in USD, when it is not `X402_PRICE`. |
-| `X402_TIMEOUTS` | `{"analyze_terms":120}` | A tool's own `maxTimeoutSeconds` (how long its signature lives), when it is not 60. |
-| `X402_DURATIONS` | `{"analyze_terms":60}` | A tool's worst case in seconds from the claim to the settle; a payment with less validity left (plus 6 s) is refused before the claim. Must stay under the tool's timeout minus 6 s, or the app refuses to start. A tool not listed: no check. |
+| `X402_TIMEOUTS` | `{"analyze_terms":120}` | A tool's own `maxTimeoutSeconds` (how long its signature lives), when it is not 60: an integer from 1 to 600. A bad value here or in `X402_DURATIONS` does not stop the app from booting: every request to `/mcp` answers 500 (nothing runs, nothing is charged) until it is fixed. `AppKernelTest` checks the committed `.env`. |
+| `X402_DURATIONS` | `{"analyze_terms":60}` | A tool's worst case in seconds from the claim to the settle; a payment with less validity left (plus 6 s) is refused before the claim. Must stay under the tool's timeout minus 6 s. A tool not listed: no check. |
 | `TERMS_MODEL` | `deepseek-ai/DeepSeek-V4.1-Flash` | The model behind `analyze_terms` (super beta): open weights on Inference Providers; needs `HF_TOKEN`. |
-| `MCP_LIMIT_IP` | `60` | `POST /mcp` requests per client IP per minute, refused with 429 before any payment is checked. |
-| `TERMS_LIMIT_DAY` | `500` | `analyze_terms` calls in total per day; over the limit is a tool error, nothing charged. |
+| `MCP_LIMIT_IP` | `60` | `POST /mcp` requests per client per minute (an IPv6 client by its /64), refused with 429 before any payment is checked. |
+| `TERMS_LIMIT_IP` / `TERMS_LIMIT_DAY` | `5` / `500` | `analyze_terms` calls per client per hour and in total per day; over either is a tool error, nothing charged. |
 | `HF_MODEL` | `openai/gpt-oss-20b` | The model `--hf` uses: any chat model on Inference Providers with tool calling. |
 | `X402_BUDGETS` | `{"eip155:84532":"0.05"}` | The agent's spending cap per run, in USD, JSON by network. A network not listed is never paid (Arc mainnet is left out on purpose: add it in `.env.local` with a non-public key). |
 | `X402_MAX_PER_PAYMENT` | `{"eip155:84532":"0.02"}` | Ceiling for one single payment, same shape. |
