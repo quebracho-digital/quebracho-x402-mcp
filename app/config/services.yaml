@@ -81,7 +81,14 @@ services:
     # Buyer side, for app:ask: pays paid tools in band within X402_BUDGET_USD.
     Quebracho\X402\PayingMcpClient:
         arguments:
-            $client: '@psr18.http_client'
+            # No redirects: a 307 must never carry the signed payment to another host.
+            $client: !service
+                class: Symfony\Component\HttpClient\Psr18Client
+                arguments:
+                    - !service
+                        class: Symfony\Contracts\HttpClient\HttpClientInterface
+                        factory: ['Symfony\Component\HttpClient\HttpClient', 'create']
+                        arguments: [{max_redirects: 0}]
             $schemes:
                 - !service
                     class: Quebracho\X402\EvmExact

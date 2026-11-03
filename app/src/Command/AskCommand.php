@@ -41,7 +41,11 @@ final class AskCommand
     ): int {
         $server = $this->buyer->get('self');
         $io->text('Tools on the server: '.implode(', ', array_map(static fn ($t) => $t->name, $server->getTools())));
-        $io->text('Tools on Ombú: '.implode(', ', array_map(static fn ($t) => $t->name, $this->buyer->get('ombu')->getTools())));
+        try {
+            $io->text('Tools on Ombú: '.implode(', ', array_map(static fn ($t) => $t->name, $this->buyer->get('ombu')->getTools())));
+        } catch (\Throwable $e) {
+            $io->text('Ombú unreachable, continuing without it: '.$e->getMessage());
+        }
 
         if (null !== $tool) {
             $result = $server->callTool($tool, []);

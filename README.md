@@ -53,7 +53,7 @@ Code: [f7ef5f0](https://github.com/quebracho-digital/ombu/commit/f7ef5f0) (endpo
 and the two free tools) and [f5fd6f0](https://github.com/quebracho-digital/ombu/commit/f5fd6f0)
 (selling listings over MCP).
 
-`app:ask` connects to that Ombú MCP as a second client (`OMBU_MCP_URL`, six lines
+`app:ask` connects to that Ombú MCP as a second client for search (buying there is not wired yet: Ombú sells on Arc mainnet, and the demo buyer has a Base Sepolia budget only) (`OMBU_MCP_URL`, six lines
 of YAML in `config/packages`), next to its own server. The agent therefore has
 two ways to search: our faceted `ombu_search` and Ombú's unfiltered
 `ombu_search_services`. That is a feature demo (any number of MCP servers, any
@@ -65,7 +65,7 @@ tools it needs.
 | Path | What it is |
 |---|---|
 | `packages/x402/` | `quebracho/x402`: framework-agnostic library (PSR-7/15/17/18, `ext-gmp`). Signs and verifies x402 payments. |
-| `app/` | Symfony 8.1 + `symfony/mcp-bundle`: an MCP server with a free `echo` tool, a free `ombu_search` tool (finds services on [Ombú](https://ombu.quebracho.digital), faceted by the server to Quebracho's own listings: `/market?seller[ours]=ours`, not changeable by the caller), a paid `wisdom` tool and a paid `analyze_terms` tool (super beta example, below), and `bin/console app:ask`, a Symfony AI agent that discovers, pays and calls them. |
+| `app/` | Symfony 8.1 + `symfony/mcp-bundle`: an MCP server with a free `echo` tool, a free `ombu_search` tool (finds services on [Ombú](https://ombu.quebracho.digital), faceted by the server to Quebracho's own listings, `/market?seller[ours]=ours`; this tool's caller cannot change the facet), a paid `wisdom` tool and a paid `analyze_terms` tool (super beta example, below), and `bin/console app:ask`, a Symfony AI agent that discovers, pays and calls them. |
 | `bin/smoke.sh` | End-to-end check over real HTTP: free call, unpaid call (PaymentRequired), paid call (result + receipt). |
 | `bin/inspect.py` | Stdlib-only Python MCP client: initialize, `tools/list`, free call, unpaid call (shows the PaymentRequired). No Node needed. |
 | `bin/pay.php` | Minimal buyer: turns a PaymentRequired tool result into the same call, paid. |

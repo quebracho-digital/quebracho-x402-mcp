@@ -56,4 +56,19 @@ final class OmbuSearchToolTest extends TestCase
 
         self::assertStringStartsWith('Ombu is unreachable', (new OmbuSearchTool($http))('x'));
     }
+
+    public function testTheFacetIsServerSideAndLastSoTheQueryCannotLiftIt(): void
+    {
+        $sent = null;
+        $http = new MockHttpClient(function (string $method, string $url) use (&$sent) {
+            $sent = $url;
+
+            return new MockResponse(self::MARKET);
+        });
+
+        (new OmbuSearchTool($http, 'https://ombu.example', ['seller' => ['ours' => 'ours']]))('x&seller[ours]=all');
+
+        self::assertStringEndsWith('&seller[ours]=ours', (string) $sent);
+        self::assertStringContainsString('search=x%26seller', (string) $sent);
+    }
 }
