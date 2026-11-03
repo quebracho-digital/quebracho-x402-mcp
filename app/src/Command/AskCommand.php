@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Command;
 
+use App\Mcp\AnalyzeTermsTool;
 use App\X402\Receipts;
 use Quebracho\X402\Networks;
 use Symfony\AI\Agent\AgentInterface;
@@ -56,6 +57,10 @@ final class AskCommand
                 default => 'settled in '.$receipt['transaction'],
             }));
             $io->text('Receipt: '.json_encode($receipt, \JSON_UNESCAPED_SLASHES));
+            if ('analyze_terms' === $name) {
+                // The agent summarises the tool's answer and drops the notice; the user must still see it.
+                $io->warning(AnalyzeTermsTool::NOTICE);
+            }
         }
         foreach ($this->receipts->refused as ['req' => $req, 'reason' => $reason]) {
             $io->text(\sprintf('Not paid: %s atomic on %s to %s (%s)', $req['amount'] ?? '?', $req['network'] ?? '?', $req['payTo'] ?? '?', $reason));

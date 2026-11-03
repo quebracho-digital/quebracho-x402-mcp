@@ -52,7 +52,7 @@ services built on the Drupal module, which runs on the same library.
 | Path | What it is |
 |---|---|
 | `packages/x402/` | `quebracho/x402`: framework-agnostic library (PSR-7/15/17/18, `ext-gmp`). Signs and verifies x402 payments. |
-| `app/` | Symfony 8.1 + `symfony/mcp-bundle`: an MCP server with a free `echo` tool, a free `ombu_search` tool (finds services on [Ombú](https://ombu.quebracho.digital)) and a paid `wisdom` tool, and `bin/console app:ask`, a Symfony AI agent that discovers, pays and calls them. |
+| `app/` | Symfony 8.1 + `symfony/mcp-bundle`: an MCP server with a free `echo` tool, a free `ombu_search` tool (finds services on [Ombú](https://ombu.quebracho.digital)), a paid `wisdom` tool and a paid `analyze_terms` tool (super beta example, below), and `bin/console app:ask`, a Symfony AI agent that discovers, pays and calls them. |
 | `bin/smoke.sh` | End-to-end check over real HTTP: free call, unpaid call (PaymentRequired), paid call (result + receipt). |
 | `bin/inspect.py` | Stdlib-only Python MCP client: initialize, `tools/list`, free call, unpaid call (shows the PaymentRequired). No Node needed. |
 | `bin/pay.php` | Minimal buyer: turns a PaymentRequired tool result into the same call, paid. |
@@ -134,13 +134,38 @@ ddev exec -d /var/www/html/app bin/console app:ask "give me a paid piece of engi
 ```
 
 ```
- Tools on the server: echo, ombu_search, wisdom
+ Tools on the server: analyze_terms, echo, ombu_search, wisdom
  Paid tool "wisdom": 0.01 USDC (10000 atomic) on eip155:84532 to 0x7e51…6510, settled
  Receipt: {"success":true,"transaction":"","network":"eip155:84532","payer":"0x2c75…5c23"}
 
 Answer
 ------
 Here is a paid piece of engineering advice: "Verify the effect, not the mechanism." ...
+```
+
+### `analyze_terms`: read the terms before you accept them (SUPER BETA)
+
+> **Super beta, an example for the hackathon demo. Not legal advice.** A model
+> can miss clauses or flag the wrong ones. Read the quotes in the document.
+
+A paid tool (0.02 USDC, `X402_PRICES`) that flags the clauses of a terms of
+service or privacy policy, up to 1,200 words, in 19 categories (arbitration,
+unilateral changes, data sharing, tracking, auto-renewal...). It shows what an
+x402 tool can wrap without any infrastructure of ours: the model is
+`Qwen/Qwen3.8-27B` (open weights) on Hugging Face Inference Providers, called
+with your `HF_TOKEN`, and the price covers the call.
+
+Each category comes with quotes the model had to copy exactly, and the server
+checks every quote against your text and **drops the ones that are not in it**
+(`quotes_dropped` says how many). A reply that is not JSON, or a text that is
+too long, is a tool error, so nothing is charged. The categories and the
+prompt come from `terms-eval`, the set Lapacho used to compare models, where
+this model found 99% of its quotes verbatim on 13 real documents; the model
+was not tested again here. The text is fenced as data, so a clause that says
+"ignore your instructions" is not obeyed.
+
+```bash
+ddev exec -d /var/www/html/app bin/console app:ask --hf "Use analyze_terms on this text: <paste up to 1200 words>"
 ```
 
 No local LLM? `--hf` runs the same agent on [Hugging Face Inference Providers](https://huggingface.co/docs/inference-providers): put your token in `app/.env.local` and nothing else is needed (the Symfony AI bridge `symfony/ai-hugging-face-platform`).
@@ -222,10 +247,12 @@ ddev exec --dir /var/www/html/app bin/console app:screening check 0x…
 | `X402_NETWORK` | `eip155:84532` | CAIP-2 network (Base Sepolia). |
 | `X402_PRICE` | `0.01` | Price per paid call, in USD. |
 | `X402_PAY_TO` | `0x7e51…6510` | Who gets paid. **This is the author's wallet.** Change it to yours. |
-| `X402_PAID_TOOLS` | `wisdom` | Comma-separated tool names that cost money. |
+| `X402_PAID_TOOLS` | `wisdom,analyze_terms` | Comma-separated tool names that cost money. |
 | `X402_FACILITATOR` | `mock` | Must be set explicitly: `mock` (verified signatures, nothing settled) or a facilitator URL such as `https://x402.org/facilitator` (real settle: on Base Sepolia by default, on a mainnet when `X402_NETWORK` is one you registered). Anything else fails closed: every `/mcp` request errors, nothing is served for free. |
 | `X402_BUYER_KEY` | web3.js docs key | The agent's buyer key: the public web3.js key, holds testnet USDC; anyone can spend it. For a mainnet use your own key in `.env.local`, never in a committed file. |
 | `HF_TOKEN` | empty | Your Hugging Face token, for `app:ask --hf`. Put it in `app/.env.local`. |
+| `X402_PRICES` | `{"analyze_terms":"0.02"}` | A tool's own price in USD, when it is not `X402_PRICE`. |
+| `TERMS_MODEL` | `Qwen/Qwen3.8-27B` | The model behind `analyze_terms` (super beta): open weights on Inference Providers; needs `HF_TOKEN`. |
 | `HF_MODEL` | `openai/gpt-oss-20b` | The model `--hf` uses: any chat model on Inference Providers with tool calling. |
 | `X402_BUDGET_USD` | `0.05` | The agent's spending cap per run on `X402_NETWORK`. |
 | `X402_SCREENING_API_KEY` | empty | Chainalysis sanctions API key. Empty: only our lists and OFAC's. |
