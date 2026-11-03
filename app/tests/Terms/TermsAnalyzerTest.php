@@ -9,6 +9,8 @@ use App\Terms\TermsAnalyzer;
 use Mcp\Exception\ToolCallException;
 use PHPUnit\Framework\TestCase;
 use Symfony\AI\Platform\Test\MockPlatformFactory;
+use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\RequestStack;
 use Symfony\Component\RateLimiter\RateLimiterFactory;
 use Symfony\Component\RateLimiter\Storage\InMemoryStorage;
 
@@ -27,9 +29,11 @@ final class TermsAnalyzerTest extends TestCase
         return new TermsAnalyzer($platform, 'some/model');
     }
 
-    private function tool(TermsAnalyzer $analyzer, int $perDay = 500): AnalyzeTermsTool
+    private function tool(TermsAnalyzer $analyzer, int $perIp = 10, int $perDay = 500, ?RequestStack $requests = null): AnalyzeTermsTool
     {
-        return new AnalyzeTermsTool($analyzer, new RateLimiterFactory(['id' => 'day', 'policy' => 'fixed_window', 'limit' => $perDay, 'interval' => '1 day'], new InMemoryStorage()));
+        $limiter = static fn (string $id, int $limit) => new RateLimiterFactory(['id' => $id, 'policy' => 'fixed_window', 'limit' => $limit, 'interval' => '1 day'], new InMemoryStorage());
+
+        return new AnalyzeTermsTool($analyzer, $limiter('ip', $perIp), $limiter('day', $perDay), $requests ?? new RequestStack());
     }
 
     public function testKeepsOnlyQuotesFoundInTheTextAndCountsTheRest(): void
@@ -110,6 +114,47 @@ in Delaware'],
         $tool('');
     }
 
+    public function testAClientOverItsLimitGetsAToolErrorAndTheModelIsNotCalled(): void
+    {
+        $calls = 0;
+        $platform = MockPlatformFactory::createPlatform(function () use (&$calls) {
+            ++$calls;
+
+            return '{"arbitration": ["binding arbitration in Delaware"]}';
+        });
+        $tool = $this->tool(new TermsAnalyzer($platform, 'some/model'), perIp: 1);
+
+        $tool(self::TEXT);
+        try {
+            $tool(self::TEXT);
+            self::fail('The second call should be refused.');
+        } catch (ToolCallException $e) {
+            self::assertStringContainsString('Rate limit', $e->getMessage());
+        }
+        self::assertSame(1, $calls);
+    }
+
+    public function testEachClientIpHasItsOwnBucketAndTheDayLimitIsShared(): void
+    {
+        $ok = $this->analyzer('{"arbitration": ["binding arbitration in Delaware"]}');
+        $requests = new RequestStack();
+        $from = static function (string $ip) use ($requests): void {
+            while (null !== $requests->pop()) {
+            }
+            $requests->push(Request::create('/mcp', 'POST', server: ['REMOTE_ADDR' => $ip]));
+        };
+        $tool = $this->tool($ok, perIp: 1, perDay: 2, requests: $requests);
+
+        $from('203.0.113.1');
+        $tool(self::TEXT);
+        $from('203.0.113.2');
+        $tool(self::TEXT);
+
+        $this->expectException(ToolCallException::class);
+        $from('203.0.113.3');
+        $tool(self::TEXT);
+    }
+
     public function testOverTheDayLimitIsAToolErrorAndTheModelIsNotCalled(): void
     {
         $calls = 0;
@@ -123,16 +168,28 @@ in Delaware'],
         $tool(self::TEXT);
         try {
             $tool(self::TEXT);
-            self::fail('The second call should be refused.');
+            self::fail('The second call of the day should be refused.');
         } catch (ToolCallException $e) {
             self::assertStringContainsString('Rate limit', $e->getMessage());
         }
         self::assertSame(1, $calls);
     }
 
-    public function testABadTextIsRefusedBeforeItUsesTheDaysOnlyCall(): void
+    public function testAnIpv6ClientIsOneBucketPer64(): void
     {
-        $tool = $this->tool($this->analyzer('{"arbitration": ["binding arbitration in Delaware"]}'), perDay: 1);
+        $requests = new RequestStack();
+        $tool = $this->tool($this->analyzer('{"arbitration": ["binding arbitration in Delaware"]}'), perIp: 1, requests: $requests);
+
+        $requests->push(Request::create('/mcp', 'POST', server: ['REMOTE_ADDR' => '2001:db8:1:2::1']));
+        $tool(self::TEXT);
+        $requests->push(Request::create('/mcp', 'POST', server: ['REMOTE_ADDR' => '2001:db8:1:2::2']));
+        $this->expectException(ToolCallException::class);
+        $tool(self::TEXT);
+    }
+
+    public function testABadTextIsRefusedBeforeItUsesTheClientsOnlyCall(): void
+    {
+        $tool = $this->tool($this->analyzer('{"arbitration": ["binding arbitration in Delaware"]}'), perIp: 1, perDay: 1);
 
         foreach (['', str_repeat('x', TermsAnalyzer::MAX_CHARS + 1)] as $bad) {
             try {
