@@ -239,7 +239,18 @@ production, and never trust `X-Forwarded-For` from anyone else). `private_ranges
 Docker gateway, so locally the limit is one bucket for the host; a per-client limit needs a real proxy in front
 (Cloudflare, nginx) that passes the client IP. A refused call is a tool error, so
 nothing is charged (an empty text, one over 1,200 words or over 12,000 characters is refused before it uses any limit).
-The limiter lives inside the tool, so the work done before it (signature check, payee screening, `/verify`) is not covered: rate limit `/mcp` where you deploy it (for example a Cloudflare rule). A call costs roughly a quarter of a cent at DeepSeek V4.1
+The limiter lives inside the tool, so the work done before it (signature check, payee screening, `/verify`) is not covered: rate limit `/mcp` where you deploy it (for example a Cloudflare rule).
+
+**Slow tools.** The seller settles after the tool answers, so a signature
+must still be valid then. `analyze_terms` offers a 120 s signature
+(`X402_TIMEOUTS`, 60 s for every other tool) and declares a worst case of 60 s
+from the claim to the settle (`X402_DURATIONS`: 40 s Hugging Face cap plus 20 s
+for the settle). A payment with less validity left than that plus 6 s is
+refused before the claim (`invalid_exact_evm_payload_authorization_valid_before`),
+so nothing runs or is charged and the buyer signs again. A tool not in
+`X402_DURATIONS` is checked exactly as before.
+
+A call costs roughly a quarter of a cent at DeepSeek V4.1
 Flash's listed prices (our estimate; the Hugging Face bill is not checked yet).
 
 No local LLM? `--hf` runs the same agent on [Hugging Face Inference Providers](https://huggingface.co/docs/inference-providers): put your token in `app/.env.local` and nothing else is needed (the Symfony AI bridge `symfony/ai-hugging-face-platform`).
@@ -326,6 +337,8 @@ ddev exec --dir /var/www/html/app bin/console app:screening check 0x…
 | `X402_BUYER_KEY` | web3.js docs key | The agent's buyer key: the public web3.js key, holds testnet USDC; anyone can spend it. For a mainnet use your own key in `.env.local`, never in a committed file. |
 | `HF_TOKEN` | empty | Your Hugging Face token, for `app:ask --hf`. Put it in `app/.env.local`. |
 | `X402_PRICES` | `{"analyze_terms":"0.02"}` | A tool's own price in USD, when it is not `X402_PRICE`. |
+| `X402_TIMEOUTS` | `{"analyze_terms":120}` | A tool's own `maxTimeoutSeconds` (how long its signature lives), when it is not 60. |
+| `X402_DURATIONS` | `{"analyze_terms":60}` | A tool's worst case in seconds from the claim to the settle; a payment with less validity left (plus 6 s) is refused before the claim. Must stay under the tool's timeout minus 6 s, or the app refuses to start. A tool not listed: no check. |
 | `TERMS_MODEL` | `deepseek-ai/DeepSeek-V4.1-Flash` | The model behind `analyze_terms` (super beta): open weights on Inference Providers; needs `HF_TOKEN`. |
 | `TERMS_LIMIT_IP` / `TERMS_LIMIT_DAY` | `5` / `500` | `analyze_terms` calls per client IP per hour and in total per day; over the limit is a tool error, nothing charged. |
 | `HF_MODEL` | `openai/gpt-oss-20b` | The model `--hf` uses: any chat model on Inference Providers with tool calling. |

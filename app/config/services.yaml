@@ -28,7 +28,7 @@ services:
             # Quebracho's own listings: /market?seller[ours]=ours. Not an env var: nothing at runtime changes it.
             $facet: {seller: {ours: ours}}
 
-    # Hugging Face calls (analyze_terms, app:ask --hf): at most 40 s in total, under the 60 s a signed payment lives.
+    # Hugging Face calls (analyze_terms, app:ask --hf): at most 40 s in total, inside X402_DURATIONS for analyze_terms.
     app.hf_http_client:
         class: Symfony\Contracts\HttpClient\HttpClientInterface
         factory: ['Symfony\Component\HttpClient\HttpClient', 'create']
@@ -51,6 +51,8 @@ services:
             $verify: !closure ['@App\X402\Facilitator', 'verify']
             # A claim whose payment charged nothing is freed: the buyer may retry.
             $release: !closure ['@Quebracho\X402\FileClaims', 'release']
+            # A slow tool (X402_DURATIONS) refuses a signature that would expire before its settle.
+            $duration: !closure ['@App\X402\Pricing', 'duration']
             $responses: '@mcp.psr17_factory'
             $streams: '@mcp.psr17_factory'
             # AddressCheck on the payer, answered by App\X402\Screening.
@@ -87,14 +89,14 @@ services:
     # Buyer side, for app:ask: pays paid tools in band within X402_BUDGETS and X402_MAX_PER_PAYMENT, only to X402_PAYTO_ALLOW.
     Quebracho\X402\PayingMcpClient:
         arguments:
-            # No redirects: a 307 must never carry the signed payment to another host. Waits up to 120 s: more than the 60 s a signed payment lives plus the seller's settle (the library README says so); a buyer that hangs up early can pay for an answer it never reads.
+            # No redirects: a 307 must never carry the signed payment to another host. Waits up to 180 s: more than the longest signature we offer (X402_TIMEOUTS, 120 s for analyze_terms) plus the seller's settle (the library README says so); a buyer that hangs up early can pay for an answer it never reads.
             $client: !service
                 class: Symfony\Component\HttpClient\Psr18Client
                 arguments:
                     - !service
                         class: Symfony\Contracts\HttpClient\HttpClientInterface
                         factory: ['Symfony\Component\HttpClient\HttpClient', 'create']
-                        arguments: [{max_redirects: 0, timeout: 30, max_duration: 120}]
+                        arguments: [{max_redirects: 0, timeout: 30, max_duration: 180}]
             $schemes:
                 - !service
                     class: Quebracho\X402\EvmExact
