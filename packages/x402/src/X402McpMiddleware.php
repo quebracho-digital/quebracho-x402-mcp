@@ -181,8 +181,16 @@ final class X402McpMiddleware implements MiddlewareInterface
             } elseif (isset($out['error'])) {
                 // Upfront and the tool answered with a JSON-RPC error: the money moved,
                 // so the buyer still gets the receipt (its transaction) in error.data.
-                $data = $out['error']['data'] ?? [];
-                $out['error']['data'] = (is_array($data) ? $data : ['data' => $data]) + [self::PAYMENT_RESPONSE => $receipt];
+                // An object is extended; anything else (a list, a string) is kept under "data".
+                $data = $out['error']['data'] ?? null;
+                $data = match (true) {
+                    null === $data, [] === $data => [],
+                    is_array($data) && !array_is_list($data) => $data,
+                    default => ['data' => $data],
+                };
+                // Ours always wins: a tool must not plant its own receipt.
+                $data[self::PAYMENT_RESPONSE] = $receipt;
+                $out['error']['data'] = $data;
             }
 
             return $out;

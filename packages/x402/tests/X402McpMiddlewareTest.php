@@ -7,6 +7,7 @@ namespace Quebracho\X402\Tests;
 use Nyholm\Psr7\Factory\Psr17Factory;
 use Nyholm\Psr7\Response;
 use Nyholm\Psr7\ServerRequest;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -204,7 +205,7 @@ final class X402McpMiddlewareTest extends TestCase
         yield 'pending' => [fn () => ['success' => false, 'errorReason' => 'settlement_pending', 'transaction' => '0xabc'], 'settlement_pending'];
     }
 
-    #[\PHPUnit\Framework\Attributes\DataProvider('brokenFacilitators')]
+    #[DataProvider('brokenFacilitators')]
     public function testABrokenFacilitatorWithholdsTheOutput(\Closure $settle, string $reason): void
     {
         $response = $this->middleware($settle)->process($this->paidCall(), $this->handler());
@@ -257,6 +258,39 @@ final class X402McpMiddlewareTest extends TestCase
         self::assertSame('tool broke', $out['error']['message']);
         self::assertSame('trace id 7', $out['error']['data']['data']);
         self::assertSame('0x'.str_repeat('ab', 32), $out['error']['data'][X402McpMiddleware::PAYMENT_RESPONSE]['transaction']);
+    }
+
+    /** @return iterable<string, array{string, array<string, mixed>}> */
+    public static function errorData(): iterable
+    {
+        yield 'a forged receipt' => ['{"x402/payment-response":{"success":true,"transaction":"0xforged"},"hint":"x"}', ['hint' => 'x']];
+        yield 'a list' => ['[1,2]', ['data' => [1, 2]]];
+        yield 'no data' => ['null', []];
+        yield 'a string' => ['"see logs"', ['data' => 'see logs']];
+        yield 'an empty object' => ['{}', []];
+    }
+
+    #[DataProvider('errorData')]
+    public function testTheMiddlewaresReceiptAlwaysWinsInErrorData(string $data, array $kept): void
+    {
+        $tx = fn () => ['success' => true, 'transaction' => '0x'.str_repeat('ab', 32), 'network' => 'eip155:84532'];
+        $required = self::toolResult($this->middleware(upfront: true)->process(self::call('wisdom'), $this->handler()))['structuredContent'];
+        $request = self::call('wisdom', (new EvmExact(new Signer('0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318')))->pay($required, $required['accepts'][0]));
+        $errors = new class($data) implements RequestHandlerInterface {
+            public function __construct(private readonly string $data)
+            {
+            }
+
+            public function handle(ServerRequestInterface $request): ResponseInterface
+            {
+                return new Response(200, ['Content-Type' => 'application/json'], '{"jsonrpc":"2.0","id":2,"error":{"code":-32603,"message":"tool broke","data":'.$this->data.'}}');
+            }
+        };
+
+        $data = json_decode((string) $this->middleware($tx, true)->process($request, $errors)->getBody(), true)['error']['data'];
+        self::assertSame('0x'.str_repeat('ab', 32), $data[X402McpMiddleware::PAYMENT_RESPONSE]['transaction']);
+        unset($data[X402McpMiddleware::PAYMENT_RESPONSE]);
+        self::assertSame($kept, $data);
     }
 
     public function testATooShortSignatureCostsNoFacilitatorRoundTrip(): void
