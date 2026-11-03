@@ -99,11 +99,18 @@ exactly as without them):
 - `duration: fn(array $params): int` is the tool's worst case in seconds from
   the claim until the settle is sent. An EVM signature whose `validBefore`
   leaves less than that plus `EvmExact::SLACK` (6 s), on `EvmExact`'s clock, is
-  refused before the claim (`invalid_exact_evm_payload_authorization_valid_before`,
+  refused right after the offline verify (no facilitator round trip) and again
+  just before the claim, once the online verify took its time
+  (`invalid_exact_evm_payload_authorization_valid_before`,
   the spec's code: here "too short for this tool"); a scheme
   without `validBefore` is refused (`unsupported_scheme`) when a duration is
   declared. Give that tool a longer `maxTimeoutSeconds`
   (`Networks::requirements(..., $timeout)`).
+
+Upfront over MCP: once the money moved the receipt always goes back, in
+`result._meta["x402/payment-response"]`, or in
+`error.data["x402/payment-response"]` when the tool answered with a JSON-RPC
+error (a scalar `data` is kept under `data.data`).
 
 ## Buyer
 
