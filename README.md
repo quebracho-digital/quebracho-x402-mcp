@@ -20,8 +20,8 @@ Drupal module [x402_pay](https://www.drupal.org/project/x402_pay).
 - **Why:** agents can call tools but cannot pay for them. API keys and accounts do not scale to machines.
 - **How:** the agent calls a tool, gets a price (402), signs within a budget, retries with the payment, and receives the result with an on-chain receipt.
 - **Safe by construction:** verify is not paid. One signature buys one delivery, a replay never runs the handler, smart-wallet signatures are refused, gas is bounded, and addresses are screened. Each defence has a test.
-- **Proven:** 152 library tests with no network, EVM, Solana and NEAR (experimental) schemes, and a real USDC settle on Base Sepolia.
-- **Used by:** ombu.quebracho.digital, in production on mainnet, and the Drupal module [x402_pay](https://www.drupal.org/project/x402_pay): release 1.0.0-beta3 on drupal.org runs on this library (`quebracho/x402 ^0.2`). The library grew from that module, so one codebase serves Drupal and Symfony.
+- **Proven:** 153 library tests with no network, EVM, Solana and NEAR (experimental) schemes, a real USDC settle on Base Sepolia, and a real purchase on Arc mainnet through Ombú's MCP server.
+- **Used by:** ombu.quebracho.digital, in production on mainnet, and the Drupal module [x402_pay](https://www.drupal.org/project/x402_pay): release 1.0.0-beta3 on drupal.org runs on this library (`quebracho/x402 ^0.3`). The library grew from that module, so one codebase serves Drupal and Symfony.
 - **Try it:** `bin/smoke.sh` after `ddev start` (below). Mock mode needs no wallet and no faucet.
 
 ## How the pieces fit
