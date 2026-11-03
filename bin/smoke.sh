@@ -10,7 +10,7 @@ c -H "Mcp-Session-Id: $S" "$U" -d '{"jsonrpc":"2.0","method":"notifications/init
 CALL='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"wisdom","arguments":{}}}'
 
 echo "== echo (free)"
-c -H "Mcp-Session-Id: $S" "$U" -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{"text":"hola hackathon"}}}'; echo
+c -H "Mcp-Session-Id: $S" "$U" -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{"text":"hello hackathon"}}}'; echo
 
 echo "== wisdom, unpaid"
 REQUIRED=$(c -H "Mcp-Session-Id: $S" "$U" -d "$CALL")

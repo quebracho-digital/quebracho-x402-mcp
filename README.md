@@ -24,12 +24,35 @@ Drupal module [x402_pay](https://www.drupal.org/project/x402_pay).
 - **Used by:** ombu.quebracho.digital, in production on mainnet, and the Drupal module [x402_pay](https://www.drupal.org/project/x402_pay): release 1.0.0-beta3 on drupal.org runs on this library (`quebracho/x402 ^0.2`). The library grew from that module, so one codebase serves Drupal and Symfony.
 - **Try it:** `bin/smoke.sh` after `ddev start` (below). Mock mode needs no wallet and no faucet.
 
+## How the pieces fit
+
+```mermaid
+flowchart TD
+  AG["Symfony AI agent<br/>app:ask"] -->|"tools/call"| PC
+  subgraph lib ["quebracho/x402 (the library)"]
+    PC["PayingMcpClient<br/>budget, AddressCheck"]
+    MW["X402McpMiddleware<br/>verify, claim, settle"]
+  end
+  PC -->|"402, then signed payment"| MW
+  MW -->|"verified and claimed once"| TL["Symfony MCP server<br/>echo, wisdom, ombu_search"]
+  MW -->|"settle after success"| FA["Facilitator"]
+  FA --> CH[("Base Sepolia, Arc, ...")]
+  TL -->|"ombu_search"| OM["Ombú market<br/>ombu.quebracho.digital"]
+  OM --- DR["Drupal x402_pay"]
+  DR -.->|"runs on"| lib
+```
+
+The library is the product: the seller middleware and the buyer client are the
+two boxes in it. `app/` shows both working with Symfony AI and the PHP MCP SDK.
+[Ombú](https://github.com/quebracho-digital/ombu) is a live market of x402
+services built on the Drupal module, which runs on the same library.
+
 ## What's inside
 
 | Path | What it is |
 |---|---|
 | `packages/x402/` | `quebracho/x402`: framework-agnostic library (PSR-7/15/17/18, `ext-gmp`). Signs and verifies x402 payments. |
-| `app/` | Symfony 8.1 + `symfony/mcp-bundle`: an MCP server with a free `echo` tool and a paid `wisdom` tool, and `bin/console app:ask`, a Symfony AI agent that discovers, pays and calls them. |
+| `app/` | Symfony 8.1 + `symfony/mcp-bundle`: an MCP server with a free `echo` tool, a free `ombu_search` tool (finds services on [Ombú](https://ombu.quebracho.digital)) and a paid `wisdom` tool, and `bin/console app:ask`, a Symfony AI agent that discovers, pays and calls them. |
 | `bin/smoke.sh` | End-to-end check over real HTTP: free call, unpaid call (PaymentRequired), paid call (result + receipt). |
 | `bin/inspect.py` | Stdlib-only Python MCP client: initialize, `tools/list`, free call, unpaid call (shows the PaymentRequired). No Node needed. |
 | `bin/pay.php` | Minimal buyer: turns a PaymentRequired tool result into the same call, paid. |
@@ -50,7 +73,7 @@ Expected output, abridged:
 
 ```
 == echo (free)
-{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"hola hackathon"}],...}}
+{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"hello hackathon"}],...}}
 == wisdom, unpaid
 {"jsonrpc":"2.0","id":2,"result":{"isError":true,"structuredContent":{"x402Version":2,...
 == wisdom, paid
@@ -107,17 +130,17 @@ LLM_API_KEY=...
 ```
 
 ```bash
-ddev exec -d /var/www/html/app bin/console app:ask "dame un consejo de ingeniería pago"
+ddev exec -d /var/www/html/app bin/console app:ask "give me a paid piece of engineering advice"
 ```
 
 ```
- Tools on the server: echo, wisdom
+ Tools on the server: echo, ombu_search, wisdom
  Paid tool "wisdom": 0.01 USDC (10000 atomic) on eip155:84532 to 0x7e51…6510, settled
  Receipt: {"success":true,"transaction":"","network":"eip155:84532","payer":"0x2c75…5c23"}
 
 Answer
 ------
-Aquí tienes un consejo de ingeniería pago: "Verifica el efecto, no el mecanismo." ...
+Here is a paid piece of engineering advice: "Verify the effect, not the mechanism." ...
 ```
 
 No LLM at hand? `--tool wisdom` calls the tool directly through the same
