@@ -135,7 +135,7 @@ final class Sale
         }
         // ponytail: EVM only (EIP-3009 validBefore); a scheme without one cannot carry a slow tool.
         $before = $this->payment['payload']['authorization']['validBefore'] ?? null;
-        if (!is_string($before) || !ctype_digit($before)) {
+        if (!is_string($before) || !preg_match('/^[0-9]{1,19}$/', $before)) {
             return 'unsupported_scheme';
         }
 
