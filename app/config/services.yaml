@@ -28,6 +28,12 @@ services:
             # Quebracho's own listings: /market?seller[ours]=ours. Not an env var: nothing at runtime changes it.
             $facet: {seller: {ours: ours}}
 
+    # Hugging Face calls (analyze_terms, app:ask --hf): at most 40 s in total, under the 60 s a signed payment lives.
+    app.hf_http_client:
+        class: Symfony\Contracts\HttpClient\HttpClientInterface
+        factory: ['Symfony\Component\HttpClient\HttpClient', 'create']
+        arguments: [{timeout: 15, max_duration: 40}]
+
     Quebracho\X402\EvmExact: ~
 
     # One claim per payment, durable across processes on this host.
@@ -88,7 +94,7 @@ services:
                     - !service
                         class: Symfony\Contracts\HttpClient\HttpClientInterface
                         factory: ['Symfony\Component\HttpClient\HttpClient', 'create']
-                        arguments: [{max_redirects: 0, timeout: 10, max_duration: 30}]
+                        arguments: [{max_redirects: 0, timeout: 20, max_duration: 55}]
             $schemes:
                 - !service
                     class: Quebracho\X402\EvmExact

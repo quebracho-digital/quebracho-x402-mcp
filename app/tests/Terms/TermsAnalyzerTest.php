@@ -154,4 +154,27 @@ in Delaware'],
         $from('203.0.113.3');
         $tool(self::TEXT);
     }
+
+    public function testABadTextIsRefusedBeforeItUsesTheClientsOnlyCall(): void
+    {
+        $tool = $this->tool($this->analyzer('{"arbitration": ["binding arbitration in Delaware"]}'), perIp: 1);
+
+        foreach (['', str_repeat('x', TermsAnalyzer::MAX_CHARS + 1)] as $bad) {
+            try {
+                $tool($bad);
+                self::fail('A bad text should be refused.');
+            } catch (ToolCallException) {
+            }
+        }
+
+        self::assertStringContainsString('binding arbitration', $tool(self::TEXT), 'the refusals did not use the limit');
+    }
+
+    public function testAOneWordQuoteIsNotAVerifiedQuote(): void
+    {
+        $out = $this->analyzer('{"arbitration": ["any", "binding arbitration in Delaware"]}')->analyze(self::TEXT);
+
+        self::assertSame(['arbitration' => ['binding arbitration in Delaware']], $out['categories']);
+        self::assertSame(1, $out['quotes_dropped']);
+    }
 }

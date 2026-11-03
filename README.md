@@ -226,10 +226,10 @@ a super beta. The payment is on a testnet, but the Hugging Face call is real.
 our Hugging Face credit, so `analyze_terms` is rate limited with Symfony's
 `rate-limiter` (with `lock`, flock, against parallel requests): `TERMS_LIMIT_IP` calls per client per hour (5) and
 `TERMS_LIMIT_DAY` in total per day (500). The client is the IP behind `TRUSTED_PROXIES` (default `private_ranges`; add Cloudflare's ranges in
-production, and never trust `X-Forwarded-For` from anyone else). Under DDEV alone every caller reaches PHP as the
+production, and never trust `X-Forwarded-For` from anyone else). `private_ranges` trusts any private address as a proxy, so a client that reaches PHP from one (a LAN, a published Docker port) can forge `X-Forwarded-For` and get a new bucket each time; in production list your real proxies instead. Under DDEV alone every caller reaches PHP as the
 Docker gateway, so locally the limit is one bucket for the host; a per-client limit needs a real proxy in front
 (Cloudflare, nginx) that passes the client IP. A refused call is a tool error, so
-nothing is charged (an empty or too long text is refused before it uses any limit).
+nothing is charged (an empty text, one over 1,200 words or over 12,000 characters is refused before it uses any limit).
 The limiter lives inside the tool, so the work done before it (signature check, payee screening, `/verify`) is not covered: rate limit `/mcp` where you deploy it (for example a Cloudflare rule). A call costs roughly a quarter of a cent at DeepSeek V4.1
 Flash's listed prices (our estimate; the Hugging Face bill is not checked yet).
 

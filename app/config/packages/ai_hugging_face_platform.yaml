@@ -4,3 +4,5 @@ ai:
         huggingface:
             api_key: '%env(HF_TOKEN)%'
             api_catalog: true
+            # Bounded: a slow model must not outlive the signed payment (60 s) and the buyer's wait.
+            http_client: 'app.hf_http_client'

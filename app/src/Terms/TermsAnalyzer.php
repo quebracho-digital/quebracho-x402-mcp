@@ -26,6 +26,10 @@ use Symfony\Component\DependencyInjection\Attribute\Target;
 final class TermsAnalyzer
 {
     public const MAX_WORDS = 1200;
+    /** A single "word" of megabytes passes a word count: cap the characters too (about 10 per word). */
+    public const MAX_CHARS = 12000;
+    /** A quote shorter than this proves nothing: "the" is in every text. */
+    private const MIN_QUOTE = 12;
 
     public const CATEGORIES = [
         'limitation_of_liability' => 'Limits or excludes the provider\'s liability for damages, losses or failures of the service.',
@@ -64,8 +68,8 @@ final class TermsAnalyzer
     {
         $text = trim($text);
         $words = '' === $text ? 0 : \count(preg_split('/\s+/u', $text) ?: []);
-        if (0 === $words || $words > self::MAX_WORDS) {
-            throw new \InvalidArgumentException(\sprintf('Send between 1 and %d words (got %d); this beta reads one piece at a time.', self::MAX_WORDS, $words));
+        if (0 === $words || $words > self::MAX_WORDS || mb_strlen($text) > self::MAX_CHARS) {
+            throw new \InvalidArgumentException(\sprintf('Send between 1 and %d words and at most %d characters (got %d words, %d characters); this beta reads one piece at a time.', self::MAX_WORDS, self::MAX_CHARS, $words, mb_strlen($text)));
         }
 
         return $text;
@@ -101,7 +105,7 @@ final class TermsAnalyzer
                 continue;
             }
             foreach ($quotes as $quote) {
-                if (\is_string($quote) && '' !== trim($quote) && str_contains($haystack, $this->normalize($quote))) {
+                if (\is_string($quote) && mb_strlen(trim($quote)) >= self::MIN_QUOTE && str_contains($haystack, $this->normalize($quote))) {
                     $found[$id][] = trim($quote);
                 } else {
                     ++$dropped;
