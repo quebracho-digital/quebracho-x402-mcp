@@ -28,6 +28,8 @@ use Quebracho\X402\X402Middleware;
  */
 final class SaleTest extends TestCase
 {
+    use TempClaims;
+
     private int $runs = 0;
     /** @var list<PaymentOutcome> */
     private array $outcomes = [];
@@ -36,7 +38,7 @@ final class SaleTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->claims = new FileClaims(sys_get_temp_dir().'/x402-claims-'.bin2hex(random_bytes(8)));
+        $this->claims = new FileClaims($this->claimsDir());
         $this->req = Networks::requirements('eip155:84532', '0.01', '0x000000000000000000000000000000000000dEaD');
     }
 

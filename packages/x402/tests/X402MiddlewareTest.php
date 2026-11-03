@@ -21,6 +21,8 @@ use Quebracho\X402\X402Middleware;
 
 final class X402MiddlewareTest extends TestCase
 {
+    use TempClaims;
+
     private int $runs = 0;
 
     private function middleware(?\Closure $settle = null): X402Middleware
@@ -28,7 +30,7 @@ final class X402MiddlewareTest extends TestCase
         $req = Networks::requirements('eip155:84532', '0.01', '0x000000000000000000000000000000000000dEaD');
         $f = new Psr17Factory();
 
-        return new X402Middleware([new EvmExact()], fn (ServerRequestInterface $r) => '/free' === $r->getUri()->getPath() ? null : [$req], (new FileClaims(sys_get_temp_dir().'/x402-claims-'.bin2hex(random_bytes(8))))->__invoke(...), $f, $f, $settle ?? Settlement::mock());
+        return new X402Middleware([new EvmExact()], fn (ServerRequestInterface $r) => '/free' === $r->getUri()->getPath() ? null : [$req], (new FileClaims($this->claimsDir()))->__invoke(...), $f, $f, $settle ?? Settlement::mock());
     }
 
     private function handler(int $status = 200): RequestHandlerInterface

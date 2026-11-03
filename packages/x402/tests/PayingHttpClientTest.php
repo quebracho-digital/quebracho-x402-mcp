@@ -27,13 +27,15 @@ use Quebracho\X402\X402Middleware;
  */
 final class PayingHttpClientTest extends TestCase
 {
+    use TempClaims;
+
     public int $served = 0;
 
     private function seller(): ClientInterface
     {
         $f = new Psr17Factory();
         $req = Networks::requirements('eip155:84532', '0.01', '0x000000000000000000000000000000000000dEaD');
-        $middleware = new X402Middleware([new EvmExact()], fn () => [$req], (new FileClaims(sys_get_temp_dir().'/x402-claims-'.bin2hex(random_bytes(8))))->__invoke(...), $f, $f, Settlement::mock());
+        $middleware = new X402Middleware([new EvmExact()], fn () => [$req], (new FileClaims($this->claimsDir()))->__invoke(...), $f, $f, Settlement::mock());
         $test = $this;
         $handler = new class($test, $f) implements RequestHandlerInterface {
             public function __construct(private PayingHttpClientTest $test, private Psr17Factory $f)
