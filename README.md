@@ -143,6 +143,15 @@ Answer
 Here is a paid piece of engineering advice: "Verify the effect, not the mechanism." ...
 ```
 
+No local LLM? `--hf` runs the same agent on [Hugging Face Inference Providers](https://huggingface.co/docs/inference-providers): put your token in `app/.env.local` and nothing else is needed (the Symfony AI bridge `symfony/ai-hugging-face-platform`).
+
+```bash
+echo 'HF_TOKEN=hf_your_token' >> app/.env.local
+ddev exec -d /var/www/html/app bin/console app:ask --hf "give me a paid piece of engineering advice"
+```
+
+It uses `openai/gpt-oss-20b` (open weights, tool calling; a run costs a few hundred tokens). Any chat model with tool calling works: set `HF_MODEL`.
+
 No LLM at hand? `--tool wisdom` calls the tool directly through the same
 paying client. In mock mode `transaction` is empty: nothing moves on chain.
 
@@ -216,6 +225,8 @@ ddev exec --dir /var/www/html/app bin/console app:screening check 0x…
 | `X402_PAID_TOOLS` | `wisdom` | Comma-separated tool names that cost money. |
 | `X402_FACILITATOR` | `mock` | Must be set explicitly: `mock` (verified signatures, nothing settled) or a facilitator URL such as `https://x402.org/facilitator` (real settle: on Base Sepolia by default, on a mainnet when `X402_NETWORK` is one you registered). Anything else fails closed: every `/mcp` request errors, nothing is served for free. |
 | `X402_BUYER_KEY` | web3.js docs key | The agent's buyer key: the public web3.js key, holds testnet USDC; anyone can spend it. For a mainnet use your own key in `.env.local`, never in a committed file. |
+| `HF_TOKEN` | empty | Your Hugging Face token, for `app:ask --hf`. Put it in `app/.env.local`. |
+| `HF_MODEL` | `openai/gpt-oss-20b` | The model `--hf` uses: any chat model on Inference Providers with tool calling. |
 | `X402_BUDGET_USD` | `0.05` | The agent's spending cap per run on `X402_NETWORK`. |
 | `X402_SCREENING_API_KEY` | empty | Chainalysis sanctions API key. Empty: only our lists and OFAC's. |
 | `X402_SCREENING_CACHE_TTL` | `86400` | Seconds an API answer (clean or sanctioned) is kept. |

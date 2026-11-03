@@ -1,0 +1,6 @@
+ai:
+    platform:
+        # Hugging Face Inference Providers: only HF_TOKEN, no local server (bin/console app:ask --hf).
+        huggingface:
+            api_key: '%env(HF_TOKEN)%'
+            api_catalog: true

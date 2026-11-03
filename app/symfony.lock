@@ -62,6 +62,18 @@
             "config/packages/ai_generic_platform.yaml"
         ]
     },
+    "symfony/ai-hugging-face-platform": {
+        "version": "0.15",
+        "recipe": {
+            "repo": "github.com/symfony/recipes",
+            "branch": "main",
+            "version": "0.1",
+            "ref": "8cd3b775bd6916b51cce9fc7186d01947dc13015"
+        },
+        "files": [
+            "config/packages/ai_hugging_face_platform.yaml"
+        ]
+    },
     "symfony/console": {
         "version": "8.1",
         "recipe": {

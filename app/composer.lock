@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "0679b87af2c82da129bdada254964ab0",
+    "content-hash": "9102c8a24bd1fed4226fa4fb49768567",
     "packages": [
         {
             "name": "doctrine/deprecations",
@@ -1668,7 +1668,7 @@
             "dist": {
                 "type": "path",
                 "url": "../packages/x402",
-                "reference": "66878a3c069a12b0f49d19d790fc0577af3c41a6"
+                "reference": "f70039b5b828b06f5d25ab6332cabb6ba472d1a3"
             },
             "require": {
                 "ext-gmp": "*",
@@ -2067,6 +2067,94 @@
                 }
             ],
             "time": "2026-10-22T23:44:24+00:00"
+        },
+        {
+            "name": "symfony/ai-hugging-face-platform",
+            "version": "v0.15.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/symfony/ai-hugging-face-platform.git",
+                "reference": "509d344aafd42ad06c913625f20e0bc9ac81e7fd"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/symfony/ai-hugging-face-platform/zipball/509d344aafd42ad06c913625f20e0bc9ac81e7fd",
+                "reference": "509d344aafd42ad06c913625f20e0bc9ac81e7fd",
+                "shasum": ""
+            },
+            "require": {
+                "php": ">=8.2",
+                "symfony/ai-generic-platform": "^0.15",
+                "symfony/ai-platform": "^0.15",
+                "symfony/console": "^7.3|^8.0",
+                "symfony/http-client": "^7.3|^8.0"
+            },
+            "require-dev": {
+                "phpstan/phpstan": "^2.1",
+                "phpstan/phpstan-phpunit": "^2.0",
+                "phpstan/phpstan-strict-rules": "^2.0",
+                "phpunit/phpunit": "^11.5.53"
+            },
+            "type": "symfony-ai-platform",
+            "extra": {
+                "thanks": {
+                    "url": "https://github.com/symfony/ai",
+                    "name": "symfony/ai"
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Symfony\\AI\\Platform\\Bridge\\HuggingFace\\": ""
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "Christopher Hertel",
+                    "email": "mail@christopher-hertel.de"
+                },
+                {
+                    "name": "Oskar Stark",
+                    "email": "oskarstark@googlemail.com"
+                },
+                {
+                    "name": "Symfony Community",
+                    "homepage": "https://symfony.com/contributors"
+                }
+            ],
+            "description": "HuggingFace platform bridge for Symfony AI",
+            "keywords": [
+                "Bridge",
+                "ai",
+                "huggingface",
+                "platform"
+            ],
+            "support": {
+                "source": "https://github.com/symfony/ai-hugging-face-platform/tree/v0.15.0"
+            },
+            "funding": [
+                {
+                    "url": "https://symfony.com/sponsor",
+                    "type": "custom"
+                },
+                {
+                    "url": "https://github.com/fabpot",
+                    "type": "github"
+                },
+                {
+                    "url": "https://github.com/nicolas-grekas",
+                    "type": "github"
+                },
+                {
+                    "url": "https://tidelift.com/funding/github/packagist/symfony/symfony",
+                    "type": "tidelift"
+                }
+            ],
+            "time": "2026-10-22T23:44:24+00:00",
+            "published-time": "2026-10-23T07:54:33+00:00"
         },
         {
             "name": "symfony/ai-mcp-tool",
@@ -7481,5 +7569,5 @@
         "ext-iconv": "*"
     },
     "platform-dev": {},
-    "plugin-api-version": "2.9.0"
+    "plugin-api-version": "2.11.0"
 }

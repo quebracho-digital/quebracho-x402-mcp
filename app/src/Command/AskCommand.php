@@ -25,7 +25,8 @@ use Symfony\Component\DependencyInjection\Attribute\Target;
 final class AskCommand
 {
     public function __construct(
-        private readonly AgentInterface $agent,
+        #[Target('default')] private readonly AgentInterface $agent,
+        #[Target('huggingface')] private readonly AgentInterface $huggingface,
         #[Target('buyer')] private readonly McpClientInterface $buyer,
         private readonly Receipts $receipts,
     ) {
@@ -35,6 +36,7 @@ final class AskCommand
         SymfonyStyle $io,
         #[Argument('What to ask the agent')] string $question = '',
         #[Option('Call this MCP tool directly, without the LLM')] ?string $tool = null,
+        #[Option('Use Hugging Face Inference Providers (HF_TOKEN, HF_MODEL) instead of the LLM_* server')] bool $hf = false,
     ): int {
         $server = $this->buyer->get('self');
         $io->text('Tools on the server: '.implode(', ', array_map(static fn ($t) => $t->name, $server->getTools())));
@@ -43,7 +45,7 @@ final class AskCommand
             $result = $server->callTool($tool, []);
             $answer = implode("\n", array_map(static fn ($c) => $c->text ?? json_encode($c), $result->content));
         } else {
-            $answer = $this->agent->call(new MessageBag(Message::ofUser($question)))->getContent();
+            $answer = ($hf ? $this->huggingface : $this->agent)->call(new MessageBag(Message::ofUser($question)))->getContent();
         }
 
         foreach ($this->receipts->all as ['tool' => $name, 'req' => $req, 'receipt' => $receipt]) {
