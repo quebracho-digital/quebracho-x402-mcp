@@ -133,3 +133,15 @@ An accepted decision is never rewritten: if it changes, a new one replaces it.
   - `EvmExact::verify` refuses an amount that is not a plain positive integer (`invalid_payment_requirements`); `Networks::requirements` already did.
   - The library README now lists each protection by layer, and the known limits.
 - Consequences: no behaviour change for offers built with `Networks::requirements`. Needs re-split and push of `packages/x402` to quebracho-digital/x402 to publish.
+
+## D14 — Mainnet is in production: Ethereum is built in to read its blacklist, Concordium leaves the repo (2026-11-03)
+
+- Status: accepted (Leo: "ya estamos en mainnet, por ahora solo usamos ethereum para consultar la blacklist, eso no consume gas, el resto dependera del uso que le den y las blockchains que agreguen"; "[Concordium] sino se puede, borralo ... todavia no podemos empezar a codear concordium hasta el 19 de noviembre")
+- Context: Ombú runs on Arc mainnet through `x402_pay`, so "testnets only" in `Networks.php` and `SECURITY.md` was false. `TokenBlacklist` knew only testnet USDC and Tether's USDT on Ethereum, so a frozen address on a mainnet passed. `ConcordiumExact` (b83b145) was experimental, had no facilitator and failed `phpstan` and `php-cs-fixer`, which blocked the pre-push audit.
+- Decision:
+  - Ethereum mainnet is a built-in network, to be read: its USDC and USDT blacklist is an `eth_call`, which costs no gas. Paying there costs real gas, so it is documented, not promoted.
+  - `TOKENS` lists Circle's native USDC on Ethereum, Base, Polygon, Avalanche, Optimism, Arbitrum and Arc (5042), each read from a public RPC. They are asked only once a site registers the network; no other mainnet is built in.
+  - The README documents how to add a blockchain: register it, name the token's blacklist function (and the contract), and check both with a real `eth_call`.
+  - `Concordium` and `ConcordiumExact` are removed (`git show b83b145` recovers them). `eip155:1` was the "unknown network" in four tests; they use `eip155:7`.
+- Consequences: a payment on `eip155:1` is no longer `invalid_network`; a seller chooses its networks, so none is charged unless offered. The library has 152 tests.
+

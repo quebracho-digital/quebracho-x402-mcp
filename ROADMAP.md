@@ -1,6 +1,6 @@
 # Roadmap and tasks
 
-Built for the Symfony AI & MCP Hackathon (deadline 2026-11-22; we submit before 11-08, D10).
+Built for the Symfony AI & MCP Hackathon (deadline 2026-11-22; we submit before then, D10).
 Decisions are recorded in [DECISIONS.md](DECISIONS.md).
 
 ## Plan
@@ -17,7 +17,8 @@ Decisions are recorded in [DECISIONS.md](DECISIONS.md).
 | 10-29 | Online verify, claim release, 502 when the facilitator is down, upfront flow, resource, outcome event (G2–G5, G8, G10) | done |
 | 10-30 → 11-03 | Solana (G6), network catalogue (G1), G9, G11–G12, Packagist (G13), NEAR strict screening | done (G13: split at v0.2.1; Packagist lists v0.2.0 until its update hook is set) |
 | 11-04 → 11-07 | `bin/smoke.sh` is the demo (README quickstart), minimal CI (done), 90 s video | video pending |
-| **before 11-08** | **Submit** | |
+| 11-03 | Mainnet: the library runs in production in Ombú (Arc); blacklist of mainnet USDC; Ethereum built in (read only); Concordium removed (D14) | done |
+| **before 11-22 18:00 CET** | **Submit** (form, public repo, new 90 s video) | |
 
 ## Tasks (hackathon and app)
 

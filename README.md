@@ -20,7 +20,7 @@ Drupal module [x402_pay](https://www.drupal.org/project/x402_pay).
 - **Why:** agents can call tools but cannot pay for them. API keys and accounts do not scale to machines.
 - **How:** the agent calls a tool, gets a price (402), signs within a budget, retries with the payment, and receives the result with an on-chain receipt.
 - **Safe by construction:** verify is not paid. One signature buys one delivery, a replay never runs the handler, smart-wallet signatures are refused, gas is bounded, and addresses are screened. Each defence has a test.
-- **Proven:** 173 library tests with no network, EVM, Solana and NEAR (experimental) schemes, and a real USDC settle on Base Sepolia.
+- **Proven:** 152 library tests with no network, EVM, Solana and NEAR (experimental) schemes, and a real USDC settle on Base Sepolia.
 - **Used by:** ombu.quebracho.digital, in production on mainnet, and the Drupal module [x402_pay](https://www.drupal.org/project/x402_pay): release 1.0.0-beta3 on drupal.org runs on this library (`quebracho/x402 ^0.2`). The library grew from that module, so one codebase serves Drupal and Symfony.
 - **Try it:** `bin/smoke.sh` after `ddev start` (below). Mock mode needs no wallet and no faucet.
 
@@ -214,8 +214,8 @@ ddev exec --dir /var/www/html/app bin/console app:screening check 0x…
 | `X402_PRICE` | `0.01` | Price per paid call, in USD. |
 | `X402_PAY_TO` | `0x7e51…6510` | Who gets paid. **This is the author's wallet.** Change it to yours. |
 | `X402_PAID_TOOLS` | `wisdom` | Comma-separated tool names that cost money. |
-| `X402_FACILITATOR` | `mock` | Must be set explicitly: `mock` (verified signatures, nothing settled) or a facilitator URL such as `https://x402.org/facilitator` (real settle on testnet). Anything else fails closed: every `/mcp` request errors, nothing is served for free. |
-| `X402_BUYER_KEY` | web3.js docs key | The agent's buyer key: public, holds testnet USDC; anyone can spend it. Never put a key holding real funds in an env file. |
+| `X402_FACILITATOR` | `mock` | Must be set explicitly: `mock` (verified signatures, nothing settled) or a facilitator URL such as `https://x402.org/facilitator` (real settle: on Base Sepolia by default, on a mainnet when `X402_NETWORK` is one you registered). Anything else fails closed: every `/mcp` request errors, nothing is served for free. |
+| `X402_BUYER_KEY` | web3.js docs key | The agent's buyer key: the public web3.js key, holds testnet USDC; anyone can spend it. For a mainnet use your own key in `.env.local`, never in a committed file. |
 | `X402_BUDGET_USD` | `0.05` | The agent's spending cap per run on `X402_NETWORK`. |
 | `X402_SCREENING_API_KEY` | empty | Chainalysis sanctions API key. Empty: only our lists and OFAC's. |
 | `X402_SCREENING_CACHE_TTL` | `86400` | Seconds an API answer (clean or sanctioned) is kept. |
@@ -252,9 +252,7 @@ $client = new PayingHttpClient(
 );
 ```
 
-**Networks**: built in: Base Sepolia, Arc testnet, Ethereum Sepolia, Avalanche
-Fuji, Polygon Amoy. Any other EVM chain, mainnets included, whose token
-implements EIP-3009:
+**Networks**: built in are the demo testnets (Base Sepolia, Arc testnet, Ethereum Sepolia, Avalanche Fuji, Polygon Amoy) and Ethereum mainnet, which the library only reads (the blacklist of its USDC and USDT: an `eth_call`, no gas). Any other EVM chain, mainnets included, whose token implements EIP-3009, is added with `Networks::add()`. The steps, the contract and the blacklist function to use are in [Add a blockchain](packages/x402/README.md#add-a-blockchain):
 
 ```php
 $network = Networks::add(chainId: 4202, asset: '0x…', name: 'USDC', version: '2');
