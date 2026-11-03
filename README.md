@@ -208,7 +208,8 @@ our Hugging Face credit, so `analyze_terms` is rate limited with Symfony's
 `rate-limiter` (with `lock`, flock, against parallel requests): `TERMS_LIMIT_IP` calls per client per hour (5) and
 `TERMS_LIMIT_DAY` in total per day (500). The client is the IP behind `TRUSTED_PROXIES` (default `private_ranges`, which covers DDEV; add
 Cloudflare's ranges in production, and never trust `X-Forwarded-For` from anyone else). A refused call is a tool error, so
-nothing is charged. A call costs roughly a quarter of a cent at DeepSeek V4.1
+nothing is charged (an empty or too long text is refused before it uses any limit).
+The limiter lives inside the tool, so the work done before it (signature check, payee screening, `/verify`) is not covered: rate limit `/mcp` where you deploy it (for example a Cloudflare rule). A call costs roughly a quarter of a cent at DeepSeek V4.1
 Flash's listed prices (our estimate; the Hugging Face bill is not checked yet).
 
 No local LLM? `--hf` runs the same agent on [Hugging Face Inference Providers](https://huggingface.co/docs/inference-providers): put your token in `app/.env.local` and nothing else is needed (the Symfony AI bridge `symfony/ai-hugging-face-platform`).

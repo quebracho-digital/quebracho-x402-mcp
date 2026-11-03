@@ -61,13 +61,25 @@ final class TermsAnalyzer
      * @throws \InvalidArgumentException The text is empty or longer than MAX_WORDS
      * @throws \RuntimeException         The model did not answer with a JSON object
      */
-    public function analyze(string $text): array
+    /**
+     * The trimmed text, or why it is refused. Free: no model call, so the rate limit comes after it.
+     *
+     * @throws \InvalidArgumentException The text is empty or longer than MAX_WORDS
+     */
+    public function check(string $text): string
     {
         $text = trim($text);
         $words = '' === $text ? 0 : \count(preg_split('/\s+/u', $text) ?: []);
         if (0 === $words || $words > self::MAX_WORDS) {
             throw new \InvalidArgumentException(\sprintf('Send between 1 and %d words (got %d); this beta reads one piece at a time.', self::MAX_WORDS, $words));
         }
+
+        return $text;
+    }
+
+    public function analyze(string $text): array
+    {
+        $text = $this->check($text);
 
         // The text is data, never instructions: fenced with a nonce the text cannot know.
         $nonce = bin2hex(random_bytes(8));

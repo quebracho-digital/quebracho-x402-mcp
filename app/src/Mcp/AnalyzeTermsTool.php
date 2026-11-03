@@ -30,7 +30,13 @@ final class AnalyzeTermsTool
     #[McpTool(name: 'analyze_terms', description: 'SUPER BETA, an example for the hackathon demo, not legal advice. Flags the clauses of a terms of service or privacy policy (up to 1200 words) in 19 categories, each with a quote checked against your text. Paid.')]
     public function __invoke(string $text): string
     {
-        // Before the model call: a refused call throws, so nothing is charged and no credit is spent.
+        // A bad text costs nothing, so it must not use up anybody's limit.
+        try {
+            $text = $this->analyzer->check($text);
+        } catch (\InvalidArgumentException $e) {
+            throw new ToolCallException($e->getMessage(), 0, $e);
+        }
+        // Before the model call: a refused call throws, so nothing is charged and the model is not called.
         $ip = $this->requests->getCurrentRequest()?->getClientIp() ?? 'unknown';
         if (!$this->perClient->create($ip)->consume()->isAccepted() || !$this->perDay->create('all')->consume()->isAccepted()) {
             throw new ToolCallException('Rate limit reached for analyze_terms (a super beta example with a daily budget). Nothing was charged; try later.');
