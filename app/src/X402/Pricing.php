@@ -46,10 +46,18 @@ final class Pricing
     public function __invoke(array $params): ?array
     {
         $name = $params['name'];
+        // Fails closed: a job's deposit (_start) and its result (_result) are never free, listed or not.
+        $job = preg_match('/_(start|result)$/', $name);
+        if (!$job && !\in_array($name, $this->paidTools, true)) {
+            return null;
+        }
+        $req = Networks::requirements($this->network, (string) ($this->prices[$name] ?? $this->price), $this->payTo, (int) ($this->timeouts[$name] ?? Networks::TIMEOUT));
+        if (str_ends_with($name, '_start')) {
+            // The deposit settles before the job is queued.
+            $req['extra']['paymentFlow'] = 'upfront';
+        }
 
-        return \in_array($name, $this->paidTools, true)
-            ? [Networks::requirements($this->network, (string) ($this->prices[$name] ?? $this->price), $this->payTo, (int) ($this->timeouts[$name] ?? Networks::TIMEOUT))]
-            : null;
+        return [$req];
     }
 
     /**
