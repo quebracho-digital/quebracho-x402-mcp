@@ -53,7 +53,7 @@ Code: [f7ef5f0](https://github.com/quebracho-digital/ombu/commit/f7ef5f0) (endpo
 and the two free tools) and [f5fd6f0](https://github.com/quebracho-digital/ombu/commit/f5fd6f0)
 (selling listings over MCP).
 
-`app:ask` connects to that Ombú MCP as a second client for search (buying there is not wired yet: Ombú sells on Arc mainnet, and the demo buyer has a Base Sepolia budget only) (`OMBU_MCP_URL`, six lines
+`app:ask` connects to that Ombú MCP as a second client for search (buying there is disabled by config: Ombú sells on Arc mainnet, and the demo buyer has a Base Sepolia budget and a payee allowlist that leave it out) (`OMBU_MCP_URL`, six lines
 of YAML in `config/packages`), next to its own server. The agent therefore has
 two ways to search: our faceted `ombu_search` and Ombú's unfiltered
 `ombu_search_services`. That is a feature demo (any number of MCP servers, any

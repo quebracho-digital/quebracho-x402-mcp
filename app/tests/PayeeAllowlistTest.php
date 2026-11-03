@@ -24,6 +24,7 @@ final class PayeeAllowlistTest extends TestCase
     public function testPaysOnlyListedWalletsAndDeniesByDefault(): void
     {
         self::assertNull(self::verdict(self::OURS, strtolower(self::OURS)));
+        self::assertNull(self::verdict(strtolower(self::OURS), self::OURS), 'sellers send checksummed addresses');
         self::assertSame('payto_not_allowed', self::verdict(self::OURS, '0x000000000000000000000000000000000000dEaD'));
         self::assertSame('payto_not_allowed', self::verdict('', self::OURS), 'an empty list pays nobody');
     }
