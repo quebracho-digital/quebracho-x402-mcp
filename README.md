@@ -181,6 +181,30 @@ was not tested again here. The text is fenced as data, so a clause that says
 ddev exec -d /var/www/html/app bin/console app:ask --hf "Use analyze_terms on this text: <paste up to 1200 words>"
 ```
 
+**A real run (2026-11-03).** Text: the first 1,100 words of Ombú's own
+[terms of use](https://ombu.quebracho.digital/terms.md), with backticks, quotes
+and `$` removed so the shell would not touch them. The agent (`openai/gpt-oss-20b`
+on Hugging Face) called the tool, paid 0.02 USDC on Base Sepolia
+(`0x357319517c45ac4245c3cd988e58186382e7583dcf84f753cb075df44008851f`) and got:
+
+```json
+{
+  "model": "Qwen/Qwen3.8-27B",
+  "categories": {
+    "unilateral_change": ["it can change, fail or stop at any time, and these terms may change before it opens for real."],
+    "contract_by_using": ["By using Ombú you accept them."]
+  },
+  "quotes_dropped": 3
+}
+```
+
+Both quotes are literal in the text. `quotes_dropped: 3` means the model gave
+three quotes that were **not** in the text and the server threw them away (the
+agent's own gloss, "only returns the top-ranked matches", is wrong). Two
+categories out of a whole terms page is little: this is a super beta, we did not
+measure what it misses on this text, and the real cost of the call against the
+Hugging Face bill is still unchecked.
+
 No local LLM? `--hf` runs the same agent on [Hugging Face Inference Providers](https://huggingface.co/docs/inference-providers): put your token in `app/.env.local` and nothing else is needed (the Symfony AI bridge `symfony/ai-hugging-face-platform`).
 
 ```bash
