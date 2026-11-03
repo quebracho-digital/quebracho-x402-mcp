@@ -232,13 +232,17 @@ agent summarised six categories. Not every flagged quote is a clause (one
 a super beta. The payment is on a testnet, but the Hugging Face call is real.
 
 **Flooding.** A testnet payment costs the caller nothing and each call spends
-our Hugging Face credit, so three limits with Symfony's `rate-limiter` (with
+our Hugging Face credit, so four limits with Symfony's `rate-limiter` (with
 `lock`, flock, against parallel requests). Every `POST /mcp` counts against
-`MCP_LIMIT_IP` per client per minute (60), checked in a `kernel.request`
-listener (`App\EventListener\McpRateLimit`, right after routing) before the x402
+`MCP_LIMIT_IP` per client per minute (60) and, once within that, against
+`MCP_LIMIT_GLOBAL` for the whole server (600 per minute: one /48 holds 65,536
+/64 buckets). Both are checked in a `kernel.request` listener
+(`App\EventListener\McpRateLimit`, right after routing) before the x402
 middleware: a flood reaches no signature check, payee screening or facilitator
-`/verify`, and nothing is claimed or charged. Over the limit the answer is HTTP
-429 with a `Retry-After` header (seconds, at least 1) and a JSON-RPC error,
+`/verify`, and nothing is claimed or charged. A request whose Host or Origin
+the transport refuses (403, the bundle's `allowed_hosts`) is not counted. Over
+a limit the answer is HTTP 429 with a `Retry-After` header (seconds, at least
+1, exposed to browsers by `Access-Control-Expose-Headers`) and a JSON-RPC error,
 `{"jsonrpc":"2.0","id":<the request's id>,"error":{"code":-32000,"message":"Rate limit reached for /mcp. Nothing was charged; try later."}}`;
 the id is `null` for a batch, a notification or a body over 8 KB (not parsed).
 `analyze_terms` then has its own limits inside the tool: `TERMS_LIMIT_IP` calls
@@ -253,6 +257,24 @@ production, and never trust `X-Forwarded-For` from anyone else. `private_ranges`
 Docker gateway, so locally **every limit is one bucket shared by everything on the host** (the agent, the smoke test, your browser); a per-client limit needs a real proxy in front
 (Cloudflare, nginx) that passes the client IP.
 
+Symfony's `private_ranges` is wider than RFC 1918: besides 10/8, 172.16/12,
+192.168/16, loopback and link-local it also holds the TEST-NET ranges
+192.0.2.0/24, 198.51.100.0/24 and 203.0.113.0/24, 100.64.0.0/10 (carrier
+NAT), 198.18.0.0/15 (benchmarking), 0.0.0.0/8 and 240.0.0.0/4, and for IPv6
+::ffff:0:0/96 (every IPv4-mapped address), 2002::/16 (6to4), 2001::/32
+(Teredo), 2001:db8::/32 and 64:ff9b::/96 plus 64:ff9b:1::/48 (NAT64; list in
+`IpUtils::PRIVATE_SUBNETS`). A proxy that appends a client address from one of those to
+`X-Forwarded-For` makes that client look like a trusted hop, so the value the
+attacker wrote to its left picks the bucket. In production set
+`TRUSTED_PROXIES` to your real proxies, by address.
+
+The limiter state lives in the `cache.rate_limiter` pool (files under
+`var/cache/<env>/pools`) and its locks are flock files (`sf.*.lock`) in PHP's
+temp directory. Neither is pruned by itself: run
+`bin/console cache:pool:prune` from cron (hourly is plenty), and remove lock
+files older than a day, for example
+`find "$(php -r 'echo sys_get_temp_dir();')" -name 'sf.*.lock' -mtime +1 -delete`.
+
 **Slow tools.** The seller settles after the tool answers, so a signature
 must still be valid then. `analyze_terms` offers a 120 s signature
 (`X402_TIMEOUTS`, 60 s for every other tool) and declares a worst case of 60 s
@@ -263,11 +285,18 @@ the same x402 code as an expired signature, here meaning "valid now, but too
 short for this tool". Nothing runs or is charged and the buyer signs again. A
 tool not in `X402_DURATIONS` is checked exactly as before.
 
-**Job tools are never free.** `Pricing` treats any tool whose name ends in
-`_start` or `_result` as paid, even when `X402_PAID_TOOLS` leaves it out
-(fail closed: a missing entry would otherwise run it for free), and a `_start`
-tool settles its payment before running (`extra.paymentFlow = upfront`). A
-`_status` tool is free unless listed.
+**Job tools are never free.** A tool carrying the flag
+`#[PaidJob(role: 'start'|'result', pairedWith: ..., price: ...)]`
+(`App\X402\PaidJob`) is always paid, even when `X402_PAID_TOOLS` leaves it
+out (fail closed); the flag decides, not the name, so `nosuchtool_start` is
+never priced. A `start` tool settles its deposit before running
+(`extra.paymentFlow = upfront`), a `result` tool after it delivers. The flag is
+published in the tool's `_meta` in `tools/list`
+(`"x402/job": {"role": ..., "pairedWith": ...}`). The container build fails
+on a tool named `*_start` or `*_result` without the flag, on a flag missing
+from `_meta`, and on a pair that does not point back with the other role. A
+paid name that is no registered tool (a typo in `X402_PAID_TOOLS`) is a
+JSON-RPC `-32602` error before any payment is read.
 
 A call costs roughly a quarter of a cent at DeepSeek V4.1
 Flash's listed prices (our estimate; the Hugging Face bill is not checked yet).
@@ -344,14 +373,18 @@ ddev exec --dir /var/www/html/app bin/console app:screening check 0x…
 
 ## Configuration
 
-`app/.env` holds working defaults. Override them in `app/.env.local` (git-ignored):
+`app/.env` holds working defaults. Override them in `app/.env.local` (git-ignored).
+On every deploy, after `composer install`, run `bin/console app:x402:check`:
+Pricing, the limiters and the buyer's budget are otherwise only built on the
+first request, and the command exits 1 naming each bad value (including an
+`X402_TIMEOUTS` above `X402_BUYER_MAX_TIMEOUT`, which our own agent would refuse).
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `X402_NETWORK` | `eip155:84532` | CAIP-2 network (Base Sepolia). |
 | `X402_PRICE` | `0.01` | Price per paid call, in USD. |
 | `X402_PAY_TO` | `0x7e51…6510` | Who gets paid. **This is the author's wallet.** Change it to yours. |
-| `X402_PAID_TOOLS` | `wisdom,analyze_terms` | Comma-separated tool names that cost money. Tools named `*_start` or `*_result` are always paid, listed or not. |
+| `X402_PAID_TOOLS` | `wisdom,analyze_terms` | Comma-separated tool names that cost money. A `#[PaidJob]` tool is always paid, listed or not; a listed name that is no tool is refused (`-32602`). |
 | `X402_FACILITATOR` | `mock` | Must be set explicitly: `mock` (verified signatures, nothing settled) or a facilitator URL such as `https://x402.org/facilitator` (real settle: on Base Sepolia by default, on a mainnet when `X402_NETWORK` is one you registered). Anything else fails closed: every `/mcp` request errors, nothing is served for free. |
 | `X402_BUYER_KEY` | web3.js docs key | The agent's buyer key: the public web3.js key, holds testnet USDC; anyone can spend it. For a mainnet use your own key in `.env.local`, never in a committed file. |
 | `HF_TOKEN` | empty | Your Hugging Face token, for `app:ask --hf`. Put it in `app/.env.local`. |
@@ -360,6 +393,7 @@ ddev exec --dir /var/www/html/app bin/console app:screening check 0x…
 | `X402_DURATIONS` | `{"analyze_terms":60}` | A tool's worst case in seconds from the claim to the settle; a payment with less validity left (plus 6 s) is refused before the claim. Must stay under the tool's timeout minus 6 s. A tool not listed: no check. |
 | `TERMS_MODEL` | `deepseek-ai/DeepSeek-V4.1-Flash` | The model behind `analyze_terms` (super beta): open weights on Inference Providers; needs `HF_TOKEN`. |
 | `MCP_LIMIT_IP` | `60` | `POST /mcp` requests per client per minute (an IPv6 client by its /64), refused with 429 before any payment is checked. |
+| `MCP_LIMIT_GLOBAL` | `600` | `POST /mcp` requests per minute for the whole server, counted only for clients within their own limit. |
 | `TERMS_LIMIT_IP` / `TERMS_LIMIT_DAY` | `5` / `500` | `analyze_terms` calls per client per hour and in total per day; over either is a tool error, nothing charged. |
 | `HF_MODEL` | `openai/gpt-oss-20b` | The model `--hf` uses: any chat model on Inference Providers with tool calling. |
 | `X402_BUDGETS` | `{"eip155:84532":"0.05"}` | The agent's spending cap per run, in USD, JSON by network. A network not listed is never paid (Arc mainnet is left out on purpose: add it in `.env.local` with a non-public key). |
