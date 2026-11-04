@@ -159,13 +159,20 @@ final class Networks
      * contract (name(), version()), since a wrong one makes every signature
      * invalid. Whether the chain is a testnet is the caller's responsibility.
      *
+     * $blacklist names the function TokenBlacklist asks about this token's
+     * holders (a key of TokenBlacklist::FUNCTIONS, e.g. 'isBlacklisted' for
+     * Circle's USDC). Null: the token is not asked.
+     *
      * @throws \InvalidArgumentException
-     *                                   A malformed chain id or token address
+     *                                   A malformed chain id or token address, or an unknown blacklist function
      */
-    public static function add(int $chainId, string $asset, string $name, string $version, int $decimals = 6, string $label = '', string $rpc = '', string $explorer = ''): string
+    public static function add(int $chainId, string $asset, string $name, string $version, int $decimals = 6, string $label = '', string $rpc = '', string $explorer = '', ?string $blacklist = null): string
     {
         if ($chainId <= 0 || !preg_match('/^0x[0-9a-fA-F]{40}$/', $asset)) {
             throw new \InvalidArgumentException('A chain id is positive and a token address is 0x followed by 40 hex characters.');
+        }
+        if (null !== $blacklist && !isset(TokenBlacklist::FUNCTIONS[$blacklist])) {
+            throw new \InvalidArgumentException(\sprintf('Unknown blacklist function "%s": use %s.', $blacklist, implode(', ', array_keys(TokenBlacklist::FUNCTIONS))));
         }
         $network = "eip155:$chainId";
         self::$added[$network] = [
@@ -175,6 +182,7 @@ final class Networks
             'extra' => ['name' => $name, 'version' => $version],
             'rpc' => $rpc,
             'explorer' => $explorer,
+            'blacklist' => $blacklist,
         ];
 
         return $network;

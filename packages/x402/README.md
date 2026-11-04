@@ -66,9 +66,10 @@ any `Facilitator` (all PSR-18 + PSR-17):
   any x402 facilitator by URL (`/verify`, `/settle`, `/supported`, `feePayer()`
   for Solana). A settle counts only when consistent: 2xx, `success: true`, a
   transaction, our network, the payer who signed. Verified on Base Sepolia.
-- Circle: `HttpFacilitator::CIRCLE` with an API key (`$bearer`), or keyless
+- Circle: `new CircleFacilitator($http, $psr17, $psr17, $bearer, $seller)`
+  (URL `CircleFacilitator::URL`), with an API key (`$bearer`), or keyless
   with the payTo key (`$seller` signs the seller proof). A pending settle is
-  polled at `/status`.
+  polled at `/status`; only this one has that route (`PaymentStatus`).
 - `new ChainFacilitator(new Rpc(...), $gasWallet, 'eip155:5042002', $lock)`:
   no third party; simulates with `eth_call`, sends `transferWithAuthorization`
   from a gas wallet, waits for the receipt (`settlement_pending` keeps the hash).
@@ -174,12 +175,14 @@ Networks::add(
     label: 'Base (USDC)',
     rpc: 'https://mainnet.base.org',          // used for the blacklist and for sweeping
     explorer: 'https://basescan.org/tx/',
+    blacklist: 'isBlacklisted',              // the function asked about this token's holders (step 2)
 );
 ```
 
-**2. Tell the blacklist which function to ask.** Each token names its own, and
-none is assumed: an asset that is not listed is **not asked** (it passes). The
-functions the library knows, all `(address) returns (bool)`:
+**2. Name the blacklist function**, the `blacklist:` argument above. Each token
+names its own, and none is assumed: a network registered without it is **not
+asked** (it passes). An unknown name throws at `add()`. The functions the
+library knows, all `(address) returns (bool)`:
 
 | Token | Function | Selector |
 |---|---|---|
@@ -200,7 +203,8 @@ read from a public RPC on 2026-11-03 (they are asked once you register the netwo
 | Arbitrum One | 42161 | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` |
 | Arc | 5042 | `0x3600000000000000000000000000000000000000` |
 
-For any other token, name its function without editing the library:
+`$tokens` is for a token that is already registered (one added before
+`blacklist:` existed), or to override the function of one:
 
 ```php
 new TokenBlacklist($client, $requests, $streams, tokens: [

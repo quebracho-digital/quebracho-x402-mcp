@@ -9,6 +9,28 @@ use Quebracho\X402\Networks;
 
 final class NetworksTest extends TestCase
 {
+    protected function tearDown(): void
+    {
+        Networks::reset();
+    }
+
+    public function testBlacklistIsStoredAndMustBeAKnownFunction(): void
+    {
+        $network = Networks::add(4202, '0x0000000000000000000000000000000000000001', 'Test USD', '1', blacklist: 'isBlacklisted');
+        self::assertSame('isBlacklisted', Networks::find($network)['blacklist']);
+
+        $plain = Networks::add(4203, '0x0000000000000000000000000000000000000001', 'Test USD', '1');
+        self::assertNull(Networks::find($plain)['blacklist']);
+
+        try {
+            Networks::add(4204, '0x0000000000000000000000000000000000000001', 'Test USD', '1', blacklist: 'isbad');
+            self::fail('an unknown function');
+        } catch (\InvalidArgumentException $e) {
+            self::assertStringContainsString('isbad', $e->getMessage());
+        }
+        self::assertFalse(Networks::has('eip155:4204'), 'a refused add registers nothing');
+    }
+
     public function testAddsAnyEvmChain(): void
     {
         $network = Networks::add(4202, '0x0000000000000000000000000000000000000001', 'Test USD', '1');

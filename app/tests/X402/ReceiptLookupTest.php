@@ -89,15 +89,17 @@ final class ReceiptLookupTest extends TestCase
     {
         $answer = static fn (array $body) => new MockHttpClient(static fn (string $method, string $url) => new JsonMockResponse($body + ['requested' => $url]));
         $state = $this->pending(['paymentId' => 'circle-1']);
+        $circle = 'https://api.circle.com/v1/facilitator/x402';
 
-        $completed = $this->lookup($this->node(null), $answer(['status' => 'completed', 'transaction' => self::TX, 'payer' => self::PAYER]))($state);
+        $completed = $this->lookup($this->node(null), $answer(['status' => 'completed', 'transaction' => self::TX, 'payer' => self::PAYER]), $circle)($state);
         $this->assertSame(['success' => true, 'transaction' => self::TX, 'network' => self::NET, 'payer' => self::PAYER], $completed);
 
-        $failed = $this->lookup($this->node(null), $answer(['status' => 'failed', 'reason' => 'insufficient_funds']))($state);
+        $failed = $this->lookup($this->node(null), $answer(['status' => 'failed', 'reason' => 'insufficient_funds']), $circle)($state);
         $this->assertSame(['success' => false, 'errorReason' => 'insufficient_funds', 'transaction' => '', 'network' => self::NET], $failed);
 
-        $this->assertNull($this->lookup($this->node(null), $answer(['status' => 'pending']))($state));
-        $this->assertNull($this->lookup($this->node(null), new MockHttpClient(static fn () => new MockResponse('', ['http_code' => 500])))($state));
+        $this->assertNull($this->lookup($this->node(null), $answer(['status' => 'pending']), $circle)($state));
+        $this->assertNull($this->lookup($this->node(null), new MockHttpClient(static fn () => new MockResponse('', ['http_code' => 500])), $circle)($state));
+        $this->assertNull($this->lookup($this->node(null), $answer(['status' => 'completed', 'transaction' => self::TX]))($state), 'a generic facilitator has no status route');
         $this->assertNull($this->lookup($this->node(null), mode: 'mock')($state), 'the mock facilitator has no status');
     }
 }

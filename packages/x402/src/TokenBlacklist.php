@@ -18,8 +18,9 @@ use Psr\Http\Message\StreamFactoryInterface;
  * RPC (`Networks`), about the requirement's own asset.
  *
  * Each token names its own function, and none is assumed: TOKENS lists the
- * ones checked on chain, `network|asset` => function. **An asset not in the
- * list is not asked** (it passes), so add yours with `$tokens`. Only EVM
+ * ones checked on chain, `network|asset` => function, and a network registered
+ * with Networks::add($blacklist) names its token's. **An asset in neither is
+ * not asked** (it passes); `$tokens` adds or overrides one. Only EVM
  * networks; Solana and NEAR pass untouched (their freeze state lives elsewhere).
  *
  * A node that cannot answer, or a token that lacks the function, throws, which
@@ -101,7 +102,7 @@ final class TokenBlacklist
     public function __invoke(AddressCheck $check): void
     {
         $asset = (string) ($check->req['asset'] ?? '');
-        $function = $this->tokens[strtolower($check->network.'|'.$asset)] ?? null;
+        $function = $this->tokens[strtolower($check->network.'|'.$asset)] ?? $this->declared($check->network, $asset);
         if (null === $function || !str_starts_with($check->network, 'eip155:')) {
             return;
         }
@@ -129,5 +130,16 @@ final class TokenBlacklist
         if (0 !== gmp_cmp(Rpc::number($answer), 0)) {
             $check->reject('address_blacklisted');
         }
+    }
+
+    /**
+     * The function a network declared with Networks::add($blacklist) for its own token, or NULL.
+     */
+    private function declared(string $network, string $asset): ?string
+    {
+        $registered = Networks::find($network) ?? [];
+        $function = $registered['blacklist'] ?? null;
+
+        return is_string($function) && strtolower((string) ($registered['asset'] ?? '')) === strtolower($asset) ? $function : null;
     }
 }

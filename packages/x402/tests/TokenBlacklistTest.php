@@ -212,6 +212,34 @@ final class TokenBlacklistTest extends TestCase
         $this->listener($this->answer(self::FREE), tokens: ['eip155:777|0x1' => 'isbad']);
     }
 
+    public function testADeclaredBlacklistIsAskedForItsOwnToken(): void
+    {
+        $usdc = '0x1111111111111111111111111111111111111111';
+        Networks::add(777, $usdc, 'Some Token', '1', rpc: 'https://x.example', blacklist: 'isBlacklisted');
+        $check = $this->check('eip155:777');
+        ($this->listener($this->answer(self::FROZEN)))($check);
+
+        self::assertSame('address_blacklisted', $check->reason());
+        self::assertSame('0xfe575a87', substr($this->calls[0]['params'][0]['data'], 0, 10));
+        self::assertSame($usdc, $this->calls[0]['params'][0]['to']);
+
+        // Another asset on the same chain is not that token: not asked.
+        $other = new AddressCheck(AddressCheck::PAYER, 'eip155:777', self::ADDRESS, ['network' => 'eip155:777', 'asset' => '0x2222222222222222222222222222222222222222']);
+        ($this->listener($this->answer(self::FROZEN)))($other);
+        self::assertNull($other->reason());
+        self::assertCount(1, $this->calls);
+    }
+
+    public function testTheTokensArgumentWinsOverTheDeclaredFunction(): void
+    {
+        $usdc = '0x1111111111111111111111111111111111111111';
+        Networks::add(777, $usdc, 'Some Token', '1', rpc: 'https://x.example', blacklist: 'isBlacklisted');
+        $check = $this->check('eip155:777');
+        ($this->listener($this->answer(self::FROZEN), tokens: ['eip155:777|'.$usdc => 'getBlackListStatus']))($check);
+
+        self::assertSame('0x59bf1abe', substr($this->calls[0]['params'][0]['data'], 0, 10));
+    }
+
     public function testNetworksWithoutAnEvmBlacklistPassWithoutAskingAnyone(): void
     {
         foreach (['solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1', 'near:testnet'] as $network) {

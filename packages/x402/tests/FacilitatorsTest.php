@@ -11,14 +11,16 @@ use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 use Quebracho\X402\ChainFacilitator;
+use Quebracho\X402\CircleFacilitator;
 use Quebracho\X402\Eip712;
 use Quebracho\X402\FacilitatorException;
 use Quebracho\X402\HttpFacilitator;
+use Quebracho\X402\PaymentStatus;
 use Quebracho\X402\Rpc;
 use Quebracho\X402\Signer;
 
 /**
- * HttpFacilitator (any URL, Circle) and ChainFacilitator against a scripted PSR-18 client.
+ * HttpFacilitator (any URL), CircleFacilitator and ChainFacilitator against a scripted PSR-18 client.
  */
 final class FacilitatorsTest extends TestCase
 {
@@ -49,13 +51,22 @@ final class FacilitatorsTest extends TestCase
         };
     }
 
-    private function http(array $responses, ?string $bearer = null, ?Signer $seller = null): HttpFacilitator
+    private function circle(array $responses, ?string $bearer = null, ?Signer $seller = null): CircleFacilitator
+    {
+        $f = new Psr17Factory();
+
+        return new CircleFacilitator($this->client(function () use (&$responses) {
+            return array_shift($responses);
+        }), $f, $f, $bearer, $seller, pollDelaySeconds: 0);
+    }
+
+    private function http(array $responses): HttpFacilitator
     {
         $f = new Psr17Factory();
 
         return new HttpFacilitator($this->client(function () use (&$responses) {
             return array_shift($responses);
-        }), $f, $f, HttpFacilitator::CIRCLE.'/', $bearer, $seller, pollDelaySeconds: 0);
+        }), $f, $f, 'https://x402.example/facilitator/');
     }
 
     /**
@@ -200,10 +211,10 @@ final class FacilitatorsTest extends TestCase
     public function testKeylessProofSignsTheExactBodySent(): void
     {
         $seller = new Signer('0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80');
-        $this->assertTrue($this->http([$this->json(200, ['isValid' => true])], seller: $seller)->verify($this->payment(), $this->req())['isValid']);
+        $this->assertTrue($this->circle([$this->json(200, ['isValid' => true])], seller: $seller)->verify($this->payment(), $this->req())['isValid']);
 
         $request = $this->sent[0];
-        $this->assertSame(HttpFacilitator::CIRCLE.'/verify', (string) $request->getUri());
+        $this->assertSame(CircleFacilitator::URL.'/verify', (string) $request->getUri());
         $this->assertSame(['x402Version' => 2, 'paymentPayload' => $this->payment(), 'paymentRequirements' => $this->req()], json_decode((string) $request->getBody(), true));
         $proof = json_decode(base64_decode(strtr($request->getHeaderLine('Facilitator-Seller-Proof'), '-_', '+/')), true);
         $digest = Eip712::hash(['name' => 'Circle Facilitator Seller Request', 'version' => '1', 'chainId' => 5042002], ['SellerRequest' => [
@@ -217,7 +228,7 @@ final class FacilitatorsTest extends TestCase
     {
         // Solana is no EVM network for the proof: nothing leaves, and the refusal frees the claim.
         $seller = new Signer('0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80');
-        $result = $this->http([], seller: $seller)->settle($this->payment(), ['network' => 'solana:devnet'] + $this->req());
+        $result = $this->circle([], seller: $seller)->settle($this->payment(), ['network' => 'solana:devnet'] + $this->req());
 
         $this->assertSame(['seller_proof_failed', '', 'solana:devnet'], [$result['errorReason'], $result['transaction'], $result['network']]);
         $this->assertFalse($result['success']);
@@ -226,41 +237,41 @@ final class FacilitatorsTest extends TestCase
 
     public function testBearerReplacesTheProof(): void
     {
-        $this->http([$this->json(200, ['isValid' => true])], 'KEY', new Signer('0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'))->verify($this->payment(), $this->req());
+        $this->circle([$this->json(200, ['isValid' => true])], 'KEY', new Signer('0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'))->verify($this->payment(), $this->req());
         $this->assertSame('Bearer KEY', $this->sent[0]->getHeaderLine('Authorization'));
         $this->assertFalse($this->sent[0]->hasHeader('Facilitator-Seller-Proof'));
     }
 
     public function testPendingSettleIsPolled(): void
     {
-        $result = $this->http([
+        $result = $this->circle([
             $this->json(200, ['success' => false, 'extensions' => ['settlement-status' => ['paymentId' => 'pay-1']]]),
             $this->json(200, ['status' => 'pending']),
             $this->json(200, ['status' => 'completed', 'transaction' => self::TX, 'network' => self::NETWORK, 'payer' => self::BUYER]),
         ], 'KEY')->settle($this->payment(), $this->req());
 
         $this->assertTrue($result['success']);
-        $this->assertSame(HttpFacilitator::CIRCLE.'/status/pay-1', (string) $this->sent[2]->getUri());
+        $this->assertSame(CircleFacilitator::URL.'/status/pay-1', (string) $this->sent[2]->getUri());
     }
 
     public function testStillPendingAfterPollingKeepsThePaymentId(): void
     {
         $pending = $this->json(200, ['success' => false, 'extensions' => ['settlement-status' => ['paymentId' => 'pay-1']]]);
-        $result = $this->http([$pending, ...array_fill(0, 5, $this->json(200, ['status' => 'pending']))], 'K')->settle($this->payment(), $this->req());
+        $result = $this->circle([$pending, ...array_fill(0, 5, $this->json(200, ['status' => 'pending']))], 'K')->settle($this->payment(), $this->req());
         $this->assertSame(['settlement_pending', 'pay-1'], [$result['errorReason'], $result['paymentId']]);
     }
 
     public function testOnlyAConsistentSettleCounts(): void
     {
         $good = ['success' => true, 'transaction' => self::TX, 'network' => self::NETWORK, 'payer' => strtolower(self::BUYER)];
-        $this->assertSame($good, $this->http([$this->json(200, $good)], 'K')->settle($this->payment(), $this->req()));
+        $this->assertSame($good, $this->http([$this->json(200, $good)])->settle($this->payment(), $this->req()));
         foreach (['no transaction' => ['transaction' => ''], 'other network' => ['network' => 'eip155:7'], 'other payer' => ['payer' => self::PAY_TO]] as $case => $change) {
-            $this->assertFalse($this->http([$this->json(200, $change + $good)], 'K')->settle($this->payment(), $this->req())['success'], $case);
+            $this->assertFalse($this->http([$this->json(200, $change + $good)])->settle($this->payment(), $this->req())['success'], $case);
         }
-        $this->assertSame('insufficient_funds', $this->http([$this->json(402, ['success' => false, 'errorReason' => 'insufficient_funds'])], 'K')->settle($this->payment(), $this->req())['errorReason']);
+        $this->assertSame('insufficient_funds', $this->http([$this->json(402, ['success' => false, 'errorReason' => 'insufficient_funds'])])->settle($this->payment(), $this->req())['errorReason']);
         foreach (['503 with a success body' => $this->json(503, $good), 'HTML 502' => new Response(502, [], '<html>')] as $case => $response) {
             try {
-                $this->http([$response], 'K')->settle($this->payment(), $this->req());
+                $this->http([$response])->settle($this->payment(), $this->req());
                 $this->fail($case);
             } catch (FacilitatorException) {
                 $this->addToAssertionCount(1);
@@ -273,5 +284,19 @@ final class FacilitatorsTest extends TestCase
         $kinds = ['kinds' => [['scheme' => 'exact', 'network' => 'solana:devnet', 'extra' => ['feePayer' => 'CKPK']]]];
         $this->assertSame('CKPK', $this->http([$this->json(200, $kinds)])->feePayer('solana:devnet'));
         $this->assertNull($this->http([$this->json(200, $kinds)])->feePayer(self::NETWORK));
+    }
+
+    public function testGenericVerifyAddsNoCircleHeaders(): void
+    {
+        $this->assertTrue($this->http([$this->json(200, ['isValid' => true])])->verify($this->payment(), $this->req())['isValid']);
+        $this->assertSame('https://x402.example/facilitator/verify', (string) $this->sent[0]->getUri());
+        $this->assertFalse($this->sent[0]->hasHeader('Facilitator-Seller-Proof'));
+        $this->assertFalse($this->sent[0]->hasHeader('Authorization'));
+    }
+
+    public function testOnlyCircleHasAStatusRoute(): void
+    {
+        $this->assertInstanceOf(PaymentStatus::class, $this->circle([]));
+        $this->assertNotInstanceOf(PaymentStatus::class, $this->http([]));
     }
 }
