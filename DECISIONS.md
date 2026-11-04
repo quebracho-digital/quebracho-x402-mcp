@@ -156,3 +156,17 @@ An accepted decision is never rewritten: if it changes, a new one replaces it.
   - A header hook that refuses (for example a seller proof that cannot be built) answers `seller_proof_failed` and frees the claim; it no longer throws out of `settle`, which had been lost in the split.
   - The shim and the copied poll loop are removed in 1.0, together with the rest of the 0.2.x compatibility.
 - Consequences: a caller that passes a bearer to Circle through `HttpFacilitator` gets the same answer as with 0.2.1. Callers that move to `CircleFacilitator` see no difference. Tests: `FacilitatorsTest` (bearer polling, refusal freeing the claim, the 0.2.1 call with a seller). The published 0.3.0 is checked separately by `CompatibilityTest`.
+- Timing of the poll: changed by D16 (ver D16).
+
+## D16 — The first /status query goes out at once; the poll delay sits only between queries (2026-11-04)
+
+- Date: 2026-11-04
+- Status: accepted (Leo: "corrige el orden del polling")
+- Context: the poll loop slept `pollDelaySeconds` before every `/status` query, the first included. With a facilitator that returns a `paymentId` but has no `/status` route, the first query failed with an HTTP error, `FacilitatorException` ended the loop, and the settle had already waited the delay for nothing. The v0.2.1 loop had the same order; D15 copied it.
+- Decision:
+  - `HttpFacilitator::settleWithPoll` and `CircleFacilitator::settle` query `/status` immediately; `sleep($pollDelaySeconds)` runs only before each later query.
+  - Unchanged: the `$pollAttempts` limit on queries, the stop on `FacilitatorException`, the `completed`/`failed` handling, and `settlement_pending` with the `paymentId` when it is still pending.
+  - This changes the timing only. The results are D15's.
+- Consequences:
+  - D15 is partially modified in timing: a settle waits at most `(pollAttempts − 1) × pollDelaySeconds` (4 s by default, not 5 s), and not at all before the first query. The v0.2.1 wait before the first query is not kept.
+  - Tests: `testTheFirstStatusQueryGoesOutBeforeAnyDelay` uses a 60 s delay; a leading sleep would fail its elapsed-time check after a real minute. The other polling tests run with a 0 s delay, so they do not measure timing.

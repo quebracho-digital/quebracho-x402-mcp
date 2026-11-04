@@ -300,6 +300,65 @@ final class FacilitatorsTest extends TestCase
         $this->assertNotInstanceOf(PaymentStatus::class, $this->http([]));
     }
 
+    private function statusQueries(): int
+    {
+        return count(array_filter($this->sent, fn (RequestInterface $r) => str_contains((string) $r->getUri(), '/status/')));
+    }
+
+    public function testTheFirstStatusQueryGoesOutBeforeAnyDelay(): void
+    {
+        // /status answers 404: the first query fails and polling stops. The delay is 60 s, so a sleep before that
+        // first query would make this test take a minute and fail on the elapsed time. Nothing sleeps: the query is first.
+        $f = new Psr17Factory();
+        $pending = fn () => $this->json(200, ['success' => false, 'extensions' => ['settlement-status' => ['paymentId' => 'pay-3']]]);
+        $facilitators = [
+            'http' => fn ($client) => new HttpFacilitator($client, $f, $f, 'https://x402.example/facilitator', 'KEY', null, 60, 5),
+            'circle' => fn ($client) => new CircleFacilitator($client, $f, $f, 'KEY', null, 60, 5),
+        ];
+        foreach ($facilitators as $name => $build) {
+            $this->sent = [];
+            $responses = [$pending(), $this->json(404, ['message' => 'not found'])];
+            $client = $this->client(function () use (&$responses) {
+                return array_shift($responses);
+            });
+            $started = microtime(true);
+            $result = $build($client)->settle($this->payment(), $this->req());
+
+            $this->assertLessThan(10.0, microtime(true) - $started, $name);
+            $this->assertSame(['settlement_pending', 'pay-3'], [$result['errorReason'], $result['paymentId']], $name);
+            $this->assertCount(2, $this->sent, $name);
+            $this->assertSame(1, $this->statusQueries(), $name);
+        }
+    }
+
+    public function testPersistentlyPendingSettleQueriesExactlyPollAttempts(): void
+    {
+        $pending = $this->json(200, ['success' => false, 'extensions' => ['settlement-status' => ['paymentId' => 'pay-4']]]);
+        $f = new Psr17Factory();
+        $responses = [$pending, ...array_fill(0, 3, $this->json(200, ['status' => 'pending']))];
+        $client = $this->client(function () use (&$responses) {
+            return array_shift($responses);
+        });
+        $result = (new HttpFacilitator($client, $f, $f, 'https://x402.example/facilitator', 'KEY', null, 0, 3))->settle($this->payment(), $this->req());
+
+        $this->assertSame(['settlement_pending', 'pay-4', false], [$result['errorReason'], $result['paymentId'], $result['success']]);
+        $this->assertSame(3, $this->statusQueries());
+        $this->assertCount(4, $this->sent);
+    }
+
+    public function testCompletedOnTheSecondQueryIsSuccess(): void
+    {
+        $result = $this->circle([
+            $this->json(200, ['success' => false, 'extensions' => ['settlement-status' => ['paymentId' => 'pay-5']]]),
+            $this->json(200, ['status' => 'pending']),
+            $this->json(200, ['status' => 'completed', 'transaction' => self::TX, 'network' => self::NETWORK, 'payer' => self::BUYER]),
+        ], 'KEY')->settle($this->payment(), $this->req());
+
+        $this->assertTrue($result['success']);
+        $this->assertSame(self::TX, $result['transaction']);
+        $this->assertSame(2, $this->statusQueries());
+    }
+
     /**
      * Runs $build with the deprecations silenced, and returns its result.
      */

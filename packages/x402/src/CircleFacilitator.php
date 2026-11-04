@@ -14,7 +14,8 @@ use Psr\Http\Message\StreamFactoryInterface;
  * - An API key ($bearer), or keyless with the payTo key ($seller signs a seller
  *   proof on each call). With a bearer, no proof is sent.
  * - A settle still pending (it has a paymentId) is polled at /status, up to
- *   $pollAttempts times, $pollDelaySeconds apart; still pending, it comes back
+ *   $pollAttempts times: the first query goes out at once, and $pollDelaySeconds
+ *   pass only between queries (DECISIONS.md D16). Still pending, it comes back
  *   as settlement_pending with that paymentId.
  *
  * @see https://developers.circle.com/facilitator-service/quickstart
@@ -57,8 +58,11 @@ final class CircleFacilitator implements Facilitator, PaymentStatus
             return ['success' => false, 'errorReason' => 'seller_proof_failed', 'transaction' => '', 'network' => $req['network']];
         }
         $id = $out['extensions']['settlement-status']['paymentId'] ?? null;
+        // The first /status query is immediate; the delay sits between queries only (DECISIONS.md D16).
         for ($i = 0; true !== ($out['success'] ?? null) && is_string($id) && preg_match('/^[\w-]+$/', $id) && $i < $this->pollAttempts; ++$i) {
-            sleep($this->pollDelaySeconds);
+            if ($i > 0) {
+                sleep($this->pollDelaySeconds);
+            }
             try {
                 $status = $this->status($id, $req['network']);
             } catch (FacilitatorException) {

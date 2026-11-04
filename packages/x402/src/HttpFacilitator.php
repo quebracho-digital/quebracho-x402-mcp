@@ -84,7 +84,8 @@ final class HttpFacilitator implements Facilitator
 
     /**
      * As v0.2.1 settled, for every caller: a pending settle with a paymentId is polled at /status, with or without
-     * $seller or $bearer (paridad exacta con 0.2.1, decidida por Leo, DECISIONS.md D15).
+     * $seller or $bearer. The results are v0.2.1's (DECISIONS.md D15); the timing is not: the first query goes out
+     * at once and the delay sits only between queries (DECISIONS.md D16, "corrige el orden del polling").
      * ponytail: a copy of CircleFacilitator::settle's poll, kept here because HttpFacilitator cannot build CircleFacilitator
      * (it composes this class). Delete with the 0.2.x shim in 1.0.
      */
@@ -93,7 +94,9 @@ final class HttpFacilitator implements Facilitator
         $out = $this->settleRaw($payment, $req);
         $id = $out['extensions']['settlement-status']['paymentId'] ?? null;
         for ($i = 0; true !== ($out['success'] ?? null) && is_string($id) && preg_match('/^[\w-]+$/', $id) && $i < $this->pollAttempts; ++$i) {
-            sleep($this->pollDelaySeconds);
+            if ($i > 0) {
+                sleep($this->pollDelaySeconds);
+            }
             try {
                 $status = $this->get("/status/$id", 'status', $req['network']);
             } catch (FacilitatorException) {
