@@ -100,7 +100,7 @@ final class Sale
      * payment costs nothing). ['state' => ...] to replay, ['refuse' => reason] to answer with, or
      * NULL to admit it as new.
      *
-     * @return ?array{state?: array<string, mixed>, refuse?: string}
+     * @return ?array{state?: array<string, mixed>, run?: array<string, mixed>, refuse?: string}
      */
     public function stored(PaymentLedger $ledger, ?\Closure $lookup): ?array
     {
@@ -114,12 +114,27 @@ final class Sale
         }
 
         return match ($state['status'] ?? null) {
-            'delivered', 'settled' => isset($state['response']) ? ['state' => $state] : ['refuse' => 'already_settled'],
+            'delivered', 'settled' => $this->answer($state),
             'pending' => $this->confirm($ledger, $key, $state, $lookup),
             'claimed' => ['refuse' => 'in_progress'],
             // Unknown: never admit it again.
             default => ['refuse' => 'already_settled'],
         };
+    }
+
+    /**
+     * A stored settled state's answer: its response replays; without one, 'run' when the handler never
+     * ran (upfront: charged, nothing delivered yet), else refused (the default flow ran it, and kept no copy).
+     *
+     * @return array{state?: array<string, mixed>, run?: array<string, mixed>, refuse?: string}
+     */
+    private function answer(array $state): array
+    {
+        if (isset($state['response'])) {
+            return ['state' => $state];
+        }
+
+        return false === ($state['handler_ran'] ?? true) ? ['run' => $state] : ['refuse' => 'already_settled'];
     }
 
     /**
@@ -179,7 +194,7 @@ final class Sale
      * A pending payment: asks the lookup what the chain did. Confirmed, it becomes settled; refuted, it is
      * freed; unknown (or the lookup failed) it stays pending.
      *
-     * @return ?array{state?: array<string, mixed>, refuse?: string}
+     * @return ?array{state?: array<string, mixed>, run?: array<string, mixed>, refuse?: string}
      */
     private function confirm(PaymentLedger $ledger, string $key, array $state, ?\Closure $lookup): ?array
     {
@@ -201,7 +216,7 @@ final class Sale
         $state['status'] = isset($state['response']) ? 'delivered' : 'settled';
         $ledger->put($key, $state, self::ttl($this->payment));
 
-        return isset($state['response']) ? ['state' => $state] : ['refuse' => 'already_settled'];
+        return $this->answer($state);
     }
 
     /**

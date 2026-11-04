@@ -6,6 +6,7 @@ namespace Quebracho\X402\Tests;
 
 use PHPUnit\Framework\TestCase;
 use Quebracho\X402\FileLedger;
+use Quebracho\X402\LedgerUnavailableException;
 
 final class FileLedgerTest extends TestCase
 {
@@ -51,6 +52,36 @@ final class FileLedgerTest extends TestCase
         $ledger->put('k', ['status' => 'delivered'], -1);
         self::assertNull($ledger->get('k'));
         self::assertNull($this->ledger()->get('never-written'));
+    }
+
+    /** A path whose directory cannot exist: a regular file stands where the ledger's directory should be. */
+    private function unusableLedger(): array
+    {
+        $file = (string) tempnam(sys_get_temp_dir(), 'x402-file-');
+
+        return [new FileLedger($file.'/ledger'), $file];
+    }
+
+    public function testAnUnusableDirectoryMakesAClaimLedgerUnavailable(): void
+    {
+        [$ledger, $file] = $this->unusableLedger();
+        try {
+            $this->expectException(LedgerUnavailableException::class);
+            $ledger->claim('k', 600);
+        } finally {
+            unlink($file);
+        }
+    }
+
+    public function testAnUnusableDirectoryMakesAPutLedgerUnavailable(): void
+    {
+        [$ledger, $file] = $this->unusableLedger();
+        try {
+            $this->expectException(LedgerUnavailableException::class);
+            $ledger->put('k', ['status' => 'settled'], 600);
+        } finally {
+            unlink($file);
+        }
     }
 
     public function testPruneRemovesOnlyTheExpired(): void

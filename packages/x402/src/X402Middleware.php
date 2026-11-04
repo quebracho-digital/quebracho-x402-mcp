@@ -103,14 +103,23 @@ final class X402Middleware implements MiddlewareInterface
             return $this->required($accepts, $resource, 'The payment matches none of the accepted offers');
         }
         $sale = $this->sale($payment, $req);
+        $run = null;
         try {
             if (null !== $this->ledger) {
                 $stored = $sale->stored($this->ledger, $this->lookup);
                 if (null !== $stored) {
-                    return isset($stored['refuse']) ? $this->json(409, ['error' => $stored['refuse']]) : $this->replay($stored['state']);
+                    if (isset($stored['refuse'])) {
+                        return $this->json(409, ['error' => $stored['refuse']]);
+                    }
+                    if (!isset($stored['run'])) {
+                        return $this->replay($stored['state']);
+                    }
+                    // Paid upfront, handler never ran: run it now, no second settle. 'claimed' keeps a concurrent retry out.
+                    $run = $stored['run'];
+                    $sale->remember($this->ledger, ['status' => 'claimed', 'receipt' => $run['receipt'], 'handler_ran' => false]);
                 }
             }
-            $reason = $sale->admit();
+            $reason = null === $run ? $sale->admit() : null;
         } catch (LedgerUnavailableException) {
             // Before the handler: nothing charged, nothing run.
             return $this->json(503, ['error' => 'ledger_unavailable']);
@@ -122,25 +131,18 @@ final class X402Middleware implements MiddlewareInterface
             return $this->required($accepts, $resource, $reason);
         }
 
+        if (null !== $run) {
+            return $this->deliverUpfront($request, $handler, $sale, $run['receipt']);
+        }
         if ($sale->upfront()) {
             // Money first; once it moved, the receipt goes with whatever the handler answers.
             $receipt = $sale->settle();
-            $this->record($sale, $receipt);
+            $this->record($sale, $receipt, null, false);
             if (true !== $receipt['success']) {
                 return $this->failed($accepts, $resource, $receipt);
             }
 
-            try {
-                $response = $handler->handle($request);
-            } catch (\Throwable $e) {
-                // Paid and failed: recorded, so the seller can refund by hand.
-                $sale->ran(500);
-                throw $e;
-            }
-            $sale->ran($response->getStatusCode());
-            $this->record($sale, $receipt, $response);
-
-            return $response->withHeader(PaymentHeaders::RESPONSE, PaymentHeaders::encode($receipt));
+            return $this->deliverUpfront($request, $handler, $sale, $receipt);
         }
 
         try {
@@ -180,25 +182,52 @@ final class X402Middleware implements MiddlewareInterface
     }
 
     /**
+     * Upfront, the money has moved: runs the handler and stores its answer with the receipt. A handler that
+     * does not deliver (a non-2xx, or an exception) leaves the state 'settled' with handler_ran false, so a
+     * retry runs the handler again, with no second settle.
+     */
+    private function deliverUpfront(ServerRequestInterface $request, RequestHandlerInterface $handler, Sale $sale, array $receipt): ResponseInterface
+    {
+        try {
+            $response = $handler->handle($request);
+        } catch (\Throwable $e) {
+            // Paid and failed: recorded, so the seller can refund by hand; the buyer's retry runs it again.
+            $this->record($sale, $receipt, null, false);
+            $sale->ran(500);
+            throw $e;
+        }
+        $status = $response->getStatusCode();
+        $sale->ran($status);
+        $delivered = $status >= 200 && $status < 300;
+        $this->record($sale, $receipt, $delivered ? $response : null, $delivered);
+
+        return $response->withHeader(PaymentHeaders::RESPONSE, PaymentHeaders::encode($receipt));
+    }
+
+    /**
      * Stores what happened, when there is a ledger: a settled payment (with the response, if any), or a
-     * pending one whose claim was kept.
+     * pending one whose claim was kept. $handlerRan false marks an upfront payment whose handler has not
+     * delivered yet.
      *
      * A store that fails here comes after the money may have moved (or was refused): the answer is given anyway,
      * never a 503 that would tell the buyer nothing was charged. The claim stays until its TTL, so no second
      * payment is taken; the buyer's retry gets 409 in_progress or already_settled instead of a replay.
+     * Any exception counts, not only LedgerUnavailableException: a store that fails in another way (a DB
+     * error, a bad state) after a settle must not turn a paid sale into a 500 the buyer cannot act on.
      */
-    private function record(Sale $sale, array $receipt, ?ResponseInterface $response = null): void
+    private function record(Sale $sale, array $receipt, ?ResponseInterface $response = null, bool $handlerRan = true): void
     {
         if (null === $this->ledger) {
             return;
         }
+        $mark = $handlerRan ? [] : ['handler_ran' => false];
         try {
             if (true === $receipt['success']) {
-                $sale->remember($this->ledger, ['status' => 'settled', 'receipt' => $receipt], $response);
+                $sale->remember($this->ledger, ['status' => 'settled', 'receipt' => $receipt] + $mark, $response);
             } elseif ($sale->held()) {
-                $sale->remember($this->ledger, ['status' => 'pending', 'receipt' => $receipt], $response);
+                $sale->remember($this->ledger, ['status' => 'pending', 'receipt' => $receipt] + $mark, $response);
             }
-        } catch (LedgerUnavailableException) {
+        } catch (\Throwable) {
             // ponytail: no outcome event for a lost store; the settle's PaymentOutcome already went out.
         }
     }

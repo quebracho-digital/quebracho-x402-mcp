@@ -24,7 +24,9 @@ $middleware = new X402Middleware([new EvmExact()], $price, $claim, $psr17, $psr1
 
 `$claim` makes each payment buy one delivery, even before it settles:
 `(new FileClaims('/var/x402-claims'))(...)` on one host, or any atomic
-`fn(string $key): bool` (DB unique key, Redis `SET NX`) on several.
+`fn(string $key): bool` (DB unique key, Redis `SET NX`) on several. To keep
+more than the claim (the stored response, pending settles), pass a ledger: see
+[Payment ledger](#payment-ledger).
 
 Unpaid → `402` with `PAYMENT-REQUIRED`. Paid → verify offline, claim, run the
 handler, settle only on 2xx, answer with `PAYMENT-RESPONSE`. `$settle` is a
@@ -55,21 +57,71 @@ Optional, by name, on both middlewares:
 - A tool result with `isError` is not charged and goes out as it is: a paid
   tool must not put what it sells in its errors.
 - `$events` also receives a `PaymentOutcome` (settled, not_settled, failed,
-  rejected) per paid request; a listener that throws cannot undo a sale.
+  rejected, failed_after_settle) per paid request; its `error` holds the
+  exception behind a reason (verify that threw, facilitator down), for logs
+  only. A listener that throws cannot undo a sale.
+
+### Payment ledger
+
+`PaymentLedger` keeps each payment's state across requests and processes, by
+name on both middlewares. It replaces `$claim` and `$release` (the signature
+still takes `$claim`; it is not used then):
+
+```php
+use Quebracho\X402\{EvmExact, FileLedger, X402Middleware};
+
+$middleware = new X402Middleware([new EvmExact()], $price, $claim, $psr17, $psr17, $settle,
+    ledger: new FileLedger('/var/x402-ledger'),   // one host; several hosts need a shared store
+    lookup: $lookup,                              // optional, see "pending" below
+);
+```
+
+`claim($key, $ttl)` must be atomic (of N concurrent calls exactly one returns
+TRUE), `get`, `put` and `release` complete the interface. `FileLedger` is one
+host: one JSON file per key. A store that cannot answer throws
+`LedgerUnavailableException`, and nothing is charged: before the handler runs,
+HTTP answers `503 ledger_unavailable` and MCP answers the PaymentRequired with
+`error: ledger_unavailable` in-band.
+
+- **States.** `claimed` (in progress: a retry gets `409 in_progress`);
+  `settled` (charged, no response kept: `409 already_settled`); `delivered`
+  (charged, the 2xx response kept: a retry gets it again, not run again, with
+  the receipt); `pending` (may have charged, not confirmed: see below).
+- **What is kept.** Only a 2xx response of at most 1 MiB, base64 in the state.
+  Its TTL is `min(600, validBefore − now)`; each state expires with it.
+- **The store is read only after the signature verifies offline**: the nonce
+  is public, so anyone can copy a payment, and a forged copy costs no read.
+- **Pending.** A settle that may have charged and is not confirmed (its claim
+  kept) is asked of `lookup(array $state): ?array` when the buyer retries: a
+  receipt with `success: true` settles it (the response is then replayed), one
+  with `success: false` frees it (the retry runs as new), `NULL` (or a lookup
+  that throws) keeps it pending and answers `409 settlement_pending`.
+- **A failed store after a settle does not become an error.** If a
+  `LedgerUnavailableException` comes when the outcome is stored after a
+  successful settle, the response still goes out: the money has moved. The claim
+  stays until its TTL, so the buyer cannot pay twice.
 
 ### Facilitators
 
 `$settle = fn ($payment, $req) => $facilitator->settle($payment, $req);` with
 any `Facilitator` (all PSR-18 + PSR-17):
 
-- `new HttpFacilitator($http, $psr17, $psr17, 'https://x402.org/facilitator')`:
-  any x402 facilitator by URL (`/verify`, `/settle`, `/supported`, `feePayer()`
-  for Solana). A settle counts only when consistent: 2xx, `success: true`, a
+- `new HttpFacilitator($http, $psr17, $psr17, 'https://x402.org/facilitator', $bearer)`:
+  the generic client, any x402 facilitator by URL with an optional bearer key
+  (`verify`, `settle`, `supported`, `feePayer()` for Solana). A settle counts only when consistent: 2xx, `success: true`, a
   transaction, our network, the payer who signed. Verified on Base Sepolia.
 - Circle: `new CircleFacilitator($http, $psr17, $psr17, $bearer, $seller)`
   (URL `CircleFacilitator::URL`), with an API key (`$bearer`), or keyless
   with the payTo key (`$seller` signs the seller proof). A pending settle is
-  polled at `/status`; only this one has that route (`PaymentStatus`).
+  polled at `/status` by its `paymentId`; only this one has that route
+  (`PaymentStatus`). Still pending after polling, it answers
+  `settlement_pending` with that `paymentId`, which the ledger's lookup uses.
+
+  Migrating from 0.1.x: `HttpFacilitator::CIRCLE` is a deprecated alias of
+  `CircleFacilitator::URL`, kept so old code still compiles. Through
+  `HttpFacilitator` that URL is verify and settle only: keyless Circle needs the
+  seller proof and the `/status` poll, which only `CircleFacilitator` sends.
+  Move those callers to `new CircleFacilitator(...)`.
 - `new ChainFacilitator(new Rpc(...), $gasWallet, 'eip155:5042002', $lock)`:
   no third party; simulates with `eth_call`, sends `transferWithAuthorization`
   from a gas wallet, waits for the receipt (`settlement_pending` keeps the hash).
@@ -164,7 +216,7 @@ is yours to add.
 Any EVM chain whose token implements EIP-3009 (`transferWithAuthorization`).
 Three steps; the third is what keeps a frozen address from costing you a tool run.
 
-**1. Register the network**, once, when the site boots:
+**1. Register the network**, once, when the site boots (`blacklist:` is step 2):
 
 ```php
 Networks::add(
@@ -179,10 +231,11 @@ Networks::add(
 );
 ```
 
-**2. Name the blacklist function**, the `blacklist:` argument above. Each token
-names its own, and none is assumed: a network registered without it is **not
-asked** (it passes). An unknown name throws at `add()`. The functions the
-library knows, all `(address) returns (bool)`:
+**2. Name the blacklist function**, with `blacklist:` in step 1 (a key of
+`TokenBlacklist::FUNCTIONS`). Each token names its own, and none is assumed: a
+network registered with `blacklist: null` (the default) is **not asked** (it
+passes). An unknown name throws at `add()`. The functions the library knows,
+all `(address) returns (bool)`:
 
 | Token | Function | Selector |
 |---|---|---|
@@ -292,7 +345,8 @@ who signed) is "paid"; anything else withholds the output.
   per address, nonce, number), so `0xAB…` and `0xab…` cannot make two claims.
 - **A replay never runs the handler.** The official middlewares run it and then
   find the nonce spent; here the copy is refused first, so a replay costs the
-  seller nothing.
+  seller nothing. With a ledger, a replay of a delivered payment gets its stored
+  response back (see Payment ledger), still without running anything.
 - **A claim is freed only when nothing can have been charged** (the handler
   delivered nothing, or the facilitator clearly refused). It is kept on
   `settlement_pending`, `facilitator_unavailable`, `unexpected_settle_error`
@@ -351,8 +405,11 @@ who signed) is "paid"; anything else withholds the output.
   legacy USDT's) on-chain blacklist before a signature is spent.
 
 *Known limits*
-- Pending or silent settles are logged, not reconciled automatically.
-- `FileClaims` is single-host; several hosts need an atomic store.
+- Pending or silent settles are reconciled only when the buyer retries and a
+  `lookup` answers; nothing sweeps them on a timer. Without a lookup they stay
+  pending until their TTL.
+- `FileClaims` and `FileLedger` are single-host; several hosts need an atomic
+  store.
 - A third-party HTTP facilitator may accept at `/verify` and still fail at
   `/settle` (state changed in between); the gas is then its cost, not ours.
   Use `ChainFacilitator` to carry that yourself.

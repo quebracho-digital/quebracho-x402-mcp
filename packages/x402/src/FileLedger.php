@@ -17,13 +17,12 @@ final class FileLedger implements PaymentLedger
     {
     }
 
+    /**
+     * @throws LedgerUnavailableException when the directory or its lock cannot be used (I/O), nothing claimed
+     */
     public function claim(string $key, int $ttl): bool
     {
         $lock = $this->lock();
-        if (null === $lock) {
-            // Cannot serialise, so cannot prove it is fresh: refuse.
-            return false;
-        }
         try {
             $file = $this->path($key);
             if (null !== $this->read($file)) {
@@ -33,7 +32,7 @@ final class FileLedger implements PaymentLedger
             @unlink($file);
             $handle = @fopen($file, 'x');
             if (false === $handle) {
-                return false;
+                throw new LedgerUnavailableException("Cannot claim in the x402 ledger {$this->dir}.");
             }
             fwrite($handle, $this->encode(['status' => 'claimed'], $ttl));
             fclose($handle);
@@ -50,18 +49,20 @@ final class FileLedger implements PaymentLedger
         return $this->read($this->path($key));
     }
 
+    /**
+     * @throws LedgerUnavailableException on an I/O failure; the state is unchanged
+     */
     public function put(string $key, array $state, int $ttl): void
     {
         $this->ensureDir();
         $file = $this->path($key);
-        $tmp = tempnam($this->dir, 'put');
+        $tmp = @tempnam($this->dir, 'put');
         if (false === $tmp) {
-            throw new \RuntimeException("Cannot write the x402 ledger in {$this->dir}.");
+            throw new LedgerUnavailableException("Cannot write the x402 ledger in {$this->dir}.");
         }
-        file_put_contents($tmp, $this->encode($state, $ttl));
-        if (!rename($tmp, $file)) {
+        if (false === @file_put_contents($tmp, $this->encode($state, $ttl)) || !@rename($tmp, $file)) {
             @unlink($tmp);
-            throw new \RuntimeException("Cannot write the x402 ledger entry {$file}.");
+            throw new LedgerUnavailableException("Cannot write the x402 ledger entry {$file}.");
         }
     }
 
@@ -110,20 +111,30 @@ final class FileLedger implements PaymentLedger
     }
 
     /**
-     * @return resource|null
+     * @return resource
+     *
+     * @throws LedgerUnavailableException when the lock file cannot be opened or locked
      */
     private function lock()
     {
         $this->ensureDir();
         $lock = @fopen($this->dir.'/.lock', 'c');
+        if (false === $lock) {
+            throw new LedgerUnavailableException("Cannot open the x402 ledger lock in {$this->dir}.");
+        }
+        if (!flock($lock, LOCK_EX)) {
+            fclose($lock);
 
-        return false !== $lock && flock($lock, LOCK_EX) ? $lock : null;
+            throw new LedgerUnavailableException("Cannot lock the x402 ledger in {$this->dir}.");
+        }
+
+        return $lock;
     }
 
     private function ensureDir(): void
     {
         if (!is_dir($this->dir) && !@mkdir($this->dir, 0700, true) && !is_dir($this->dir)) {
-            throw new \RuntimeException("Cannot create the x402 ledger directory {$this->dir}.");
+            throw new LedgerUnavailableException("Cannot create the x402 ledger directory {$this->dir}.");
         }
     }
 }

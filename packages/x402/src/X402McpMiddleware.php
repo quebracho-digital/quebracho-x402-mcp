@@ -141,16 +141,26 @@ final class X402McpMiddleware implements MiddlewareInterface
         }
         $payer = null !== $this->payer ? fn (string $from): ?string => ($this->payer)($params, $from) : null;
         $sale = $this->sale($payment, $req, $payer, null !== $this->duration ? ($this->duration)($params) : 0);
+        $run = null;
+        $reason = null;
         try {
             if (null !== $this->ledger) {
                 $stored = $sale->stored($this->ledger, $this->lookup);
                 if (null !== $stored) {
-                    return isset($stored['refuse']) ? $this->required($id, $accepts, $resource, $stored['refuse']) : $this->replay($id, $accepts, $resource, $stored['state']);
+                    if (isset($stored['refuse'])) {
+                        return $this->required($id, $accepts, $resource, $stored['refuse']);
+                    }
+                    if (!isset($stored['run'])) {
+                        return $this->replay($id, $accepts, $resource, $stored['state']);
+                    }
+                    // Paid upfront, tool never ran: run it now, no second settle. 'claimed' keeps a concurrent retry out.
+                    $run = $stored['run'];
+                    $sale->remember($this->ledger, ['status' => 'claimed', 'receipt' => $run['receipt'], 'handler_ran' => false]);
                 }
             }
             // ponytail: verify runs before the MCP session check and costs an
             // ecrecover; rate-limit the route where it is deployed.
-            $reason = $sale->admit();
+            $reason = null === $run ? $sale->admit() : null;
         } catch (LedgerUnavailableException) {
             // Before the tool: nothing charged, nothing run.
             return $this->required($id, $accepts, $resource, 'ledger_unavailable');
@@ -159,11 +169,11 @@ final class X402McpMiddleware implements MiddlewareInterface
             return $this->required($id, $accepts, $resource, $reason);
         }
 
-        $receipt = null;
-        if ($sale->upfront()) {
+        $receipt = $run['receipt'] ?? null;
+        if (null === $run && $sale->upfront()) {
             // Money first; once it moved, the receipt goes with whatever the tool answers.
             $receipt = $sale->settle();
-            $this->record($sale, $receipt, null, $id);
+            $this->record($sale, $receipt, null, $id, false);
             if (true !== $receipt['success']) {
                 return $this->required($id, $accepts, $resource, $receipt['errorReason']);
             }
@@ -172,12 +182,23 @@ final class X402McpMiddleware implements MiddlewareInterface
         try {
             $response = $handler->handle($request);
         } catch (\Throwable $e) {
-            null === $receipt ? $sale->abandon(null) : $sale->ran(500);
+            if (null === $receipt) {
+                $sale->abandon(null);
+            } else {
+                // Paid and the tool failed: stays 'settled' with handler_ran false, so a retry runs it again.
+                $this->record($sale, $receipt, null, $id, false);
+                $sale->ran(500);
+            }
             throw $e;
         }
         if (200 !== $response->getStatusCode()) {
             // The transport refused it (session, protocol): nothing ran.
-            null === $receipt ? $sale->abandon($response->getStatusCode()) : $sale->ran($response->getStatusCode());
+            if (null === $receipt) {
+                $sale->abandon($response->getStatusCode());
+            } else {
+                $this->record($sale, $receipt, null, $id, false);
+                $sale->ran($response->getStatusCode());
+            }
 
             return $response;
         }
@@ -205,7 +226,9 @@ final class X402McpMiddleware implements MiddlewareInterface
         });
         if (null === $delivered) {
             if (null !== $receipt) {
-                // Paid upfront: the answer goes as it is.
+                // Paid upfront: the tool ran (handler_ran stays true), its answer goes as it is.
+                $this->record($sale, $receipt, null, $id);
+
                 return $response;
             }
             // ponytail: our answer is not in the body (a live stream, e.g. a tool
@@ -275,19 +298,21 @@ final class X402McpMiddleware implements MiddlewareInterface
      * Stores what happened, when there is a ledger: a settled payment (with the answer, if any), or a
      * pending one whose claim was kept. $id is the call's JSON-RPC id, for a replay.
      */
-    private function record(Sale $sale, ?array $receipt, ?ResponseInterface $response, mixed $id): void
+    private function record(Sale $sale, ?array $receipt, ?ResponseInterface $response, mixed $id, bool $handlerRan = true): void
     {
         if (null === $this->ledger || null === $receipt) {
             return;
         }
+        $mark = $handlerRan ? [] : ['handler_ran' => false];
         // A failed store after a settle keeps the answer, as in X402Middleware::record (the claim holds until its TTL).
+        // Any exception, not only LedgerUnavailableException: the money already moved (see X402Middleware::record).
         try {
             if (true === $receipt['success']) {
-                $sale->remember($this->ledger, ['status' => 'settled', 'receipt' => $receipt, 'id' => $id], $response);
+                $sale->remember($this->ledger, ['status' => 'settled', 'receipt' => $receipt, 'id' => $id] + $mark, $response);
             } elseif ($sale->held()) {
-                $sale->remember($this->ledger, ['status' => 'pending', 'receipt' => $receipt, 'id' => $id], $response);
+                $sale->remember($this->ledger, ['status' => 'pending', 'receipt' => $receipt, 'id' => $id] + $mark, $response);
             }
-        } catch (LedgerUnavailableException) {
+        } catch (\Throwable) {
             // ponytail: no outcome event for a lost store; the settle's PaymentOutcome already went out.
         }
     }
