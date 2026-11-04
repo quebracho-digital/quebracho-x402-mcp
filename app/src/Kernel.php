@@ -21,20 +21,27 @@ class Kernel extends BaseKernel implements CompilerPassInterface
     }
 
     /**
-     * app.mcp_tools: every registered MCP tool by name, with its #[PaidJob] flag
-     * (PaidJob::catalog), for Pricing. A job tool without the flag stops the build.
+     * app.mcp_tools: every tool an MCP server serves, by name, with its #[PaidJob]
+     * flag and input schema (PaidJob::catalog), for Pricing. Read from the tools
+     * McpPass registered on each server builder (it ran before: this pass is at
+     * -10000), so a service id, an alias or a class the registry matches is
+     * counted exactly as the bundle serves it.
      */
     public function process(ContainerBuilder $container): void
     {
-        $handlers = [];
-        foreach ($container->findTaggedServiceIds('mcp.tool') as $id => $tags) {
-            $class = $container->getParameterBag()->resolveValue($container->getDefinition($id)->getClass() ?? $id);
-            foreach ($tags as $tag) {
-                $handlers[] = [$class, $tag['method'] ?? '__invoke'];
+        $calls = [];
+        foreach (array_keys($container->getParameter('mcp.servers.elements')) as $server) {
+            foreach ($container->getDefinition("mcp.server.$server.builder")->getMethodCalls() as [$call, $args]) {
+                if ('addTool' === $call) {
+                    $calls[] = $args;
+                }
             }
         }
-        // Only what a server serves (mcp.yaml registry): a tagged tool outside it is no tool here.
-        $served = array_merge(...array_values(array_map(static fn (array $kinds) => $kinds['tools'] ?? [], $container->getParameter('mcp.servers.elements'))));
-        $container->setParameter('app.mcp_tools', PaidJob::catalog($handlers, $served));
+        $tools = PaidJob::served($calls);
+        // A "%" in a schema (a description) would read as a parameter placeholder.
+        array_walk_recursive($tools, static function (mixed &$v): void {
+            $v = \is_string($v) ? str_replace('%', '%%', $v) : $v;
+        });
+        $container->setParameter('app.mcp_tools', $tools);
     }
 }

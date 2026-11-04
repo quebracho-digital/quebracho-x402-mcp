@@ -118,6 +118,11 @@ services:
 
 when@test:
     services:
-        # A tagged MCP tool outside the served registry (App\Mcp\): app.mcp_tools must not list it (AppKernelTest).
-        App\Tests\X402\JobToolsFixture:
+        # Served by id: the registry (App\Mcp\) matches this id although the class is outside it.
+        # app.mcp_tools must list (and Pricing charge) its #[PaidJob] tools (AppKernelTest).
+        App\Mcp\AliasedJobs:
+            class: App\Tests\X402\JobToolsFixture
+            autoconfigure: true
+        # A tagged MCP tool outside the registry: not served, so not in app.mcp_tools.
+        App\Tests\X402\InvokableJobStartFixture:
             autoconfigure: true

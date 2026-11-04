@@ -59,16 +59,23 @@ final class AppKernelTest extends KernelTestCase
 
         self::assertSame(60, $hook('duration')(['name' => 'analyze_terms']));
         self::assertSame(0, $hook('duration')(['name' => 'wisdom']));
-        self::assertSame('Missing required argument(s): text', $hook('validate')(['name' => 'analyze_terms', 'arguments' => []]));
+        self::assertStringStartsWith("Invalid parameters for tool 'analyze_terms'", (string) $hook('validate')(['name' => 'analyze_terms', 'arguments' => []]));
         self::assertNull($hook('validate')(['name' => 'analyze_terms', 'arguments' => ['text' => 'x']]));
     }
 
-    public function testTheCatalogHoldsTheServedToolsOnly(): void
+    public function testTheCatalogHoldsExactlyWhatTheServerServes(): void
     {
         $tools = self::getContainer()->getParameter('app.mcp_tools');
         \assert(\is_array($tools));
-        self::assertEqualsCanonicalizing(['analyze_terms', 'echo', 'ombu_search', 'wisdom'], array_keys($tools));
-        self::assertSame(['text'], $tools['analyze_terms']['required']);
+        // The test env serves JobToolsFixture under the id App\Mcp\AliasedJobs (the registry
+        // matches the id, not the class) and tags InvokableJobStartFixture outside the registry.
+        self::assertEqualsCanonicalizing(['analyze_terms', 'echo', 'ombu_search', 'wisdom', 'demo_start', 'demo_result', 'demo_status'], array_keys($tools));
+        self::assertSame(['text'], json_decode($tools['analyze_terms']['schema'], true)['required']);
+        self::assertStringContainsString('100%percent%', $tools['demo_start']['schema'], 'a "%name%" survives the container');
+
+        // Served by id, so priced: before, a #[PaidJob] tool served this way was free.
+        $start = self::getContainer()->get(Pricing::class)(['name' => 'demo_start']);
+        self::assertSame('upfront', $start[0]['extra']['paymentFlow'] ?? null);
     }
 
     public function testTheBuyerSignsNoLongerThanX402BuyerMaxTimeout(): void

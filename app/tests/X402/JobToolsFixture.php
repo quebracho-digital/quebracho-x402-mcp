@@ -12,6 +12,9 @@ use Mcp\Capability\Attribute\McpTool;
  */
 final class JobToolsFixture
 {
+    /**
+     * @param string $text the document, 100%percent%: a "%name%" would read as a container parameter unless App\Kernel escapes it
+     */
     #[McpTool(name: 'demo_start', meta: [PaidJob::META => ['role' => 'start', 'pairedWith' => 'demo_result']])]
     #[PaidJob('start', pairedWith: 'demo_result', price: '0.005')]
     public function start(string $text): string

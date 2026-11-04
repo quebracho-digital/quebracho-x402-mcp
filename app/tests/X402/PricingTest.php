@@ -7,6 +7,7 @@ namespace App\Tests\X402;
 use App\X402\PaidJob;
 use App\X402\Pricing;
 use Mcp\Capability\Attribute\McpTool;
+use Mcp\Server\RequestContext;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
@@ -14,10 +15,10 @@ final class PricingTest extends TestCase
 {
     private const PAY_TO = '0x7e510E6B4c3E2121CB64CD0686a4f241Df326510';
     private const TOOLS = [
-        'wisdom' => ['job' => null, 'required' => []],
-        'analyze_terms' => ['job' => null, 'required' => ['text']],
-        'echo' => ['job' => null, 'required' => []],
-        'free' => ['job' => null, 'required' => []],
+        'wisdom' => ['job' => null, 'schema' => '{"type":"object","properties":{"topic":{"type":["null","string"],"default":null}}}'],
+        'analyze_terms' => ['job' => null, 'schema' => '{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}'],
+        'echo' => ['job' => null, 'schema' => '{"type":"object","properties":{}}'],
+        'free' => ['job' => null, 'schema' => '{"type":"object","properties":{}}'],
     ];
 
     /** @return list<array{0: class-string, 1: string}> every #[McpTool] handler in App\Mcp, plus the fixture's */
@@ -96,7 +97,7 @@ final class PricingTest extends TestCase
         yield 'X402_PRICES not a number' => ['0.01', ['wisdom' => 'abc'], self::TOOLS, 'X402_PRICES[wisdom]: '];
         yield 'X402_PRICES zero' => ['0.01', ['wisdom' => '0'], self::TOOLS, 'X402_PRICES[wisdom]: '];
         // Past PaidJob::catalog's check (a price the token cannot represent): Pricing names the flag.
-        yield 'PaidJob price too precise' => ['0.01', [], ['j_start' => ['job' => ['role' => 'start', 'pairedWith' => 'j_result', 'price' => '0.0000001'], 'required' => []]] + self::TOOLS, '#[PaidJob] price of j_start: '];
+        yield 'PaidJob price too precise' => ['0.01', [], ['j_start' => ['job' => ['role' => 'start', 'pairedWith' => 'j_result', 'price' => '0.0000001'], 'schema' => '{}']] + self::TOOLS, '#[PaidJob] price of j_start: '];
     }
 
     /**
@@ -110,19 +111,114 @@ final class PricingTest extends TestCase
         new Pricing(['wisdom'], 'eip155:84532', $price, self::PAY_TO, $prices, tools: $tools);
     }
 
+    public function testAPriceForAFreeToolIsAConfigError(): void
+    {
+        $this->expectExceptionMessage('X402_PRICES prices "echo", which is free');
+        new Pricing(['wisdom'], 'eip155:84532', '0.01', self::PAY_TO, ['echo' => '0.01'], tools: self::TOOLS);
+    }
+
+    public function testATimeoutTypoIsReportedBeforeTheDurationItBreaks(): void
+    {
+        // analyze_terms keeps the 60 s default, so its 60 s duration no longer fits: the typo is the cause.
+        $this->expectExceptionMessage('X402_TIMEOUTS names "analyze_term"');
+        new Pricing(['analyze_terms'], 'eip155:84532', '0.01', self::PAY_TO, [], ['analyze_term' => 120], ['analyze_terms' => 60], self::TOOLS);
+    }
+
     public function testAnUnusedDefaultPriceIsNotChecked(): void
     {
         self::assertNull((new Pricing([], 'eip155:84532', 'abc', self::PAY_TO, tools: self::TOOLS))(['name' => 'wisdom']));
     }
 
-    public function testValidateRefusesACallMissingWhatItsToolNeeds(): void
+    private static function edgeTools(): array
     {
-        $pricing = new Pricing(['analyze_terms'], 'eip155:84532', '0.01', self::PAY_TO, tools: self::TOOLS);
-        self::assertSame('Missing required argument(s): text', $pricing->validate(['name' => 'analyze_terms', 'arguments' => []]));
-        self::assertSame('Missing required argument(s): text', $pricing->validate(['name' => 'analyze_terms']));
-        self::assertSame('arguments must be an object', $pricing->validate(['name' => 'analyze_terms', 'arguments' => 'x']));
-        self::assertNull($pricing->validate(['name' => 'analyze_terms', 'arguments' => ['text' => 'ok']]));
-        self::assertNull($pricing->validate(['name' => 'wisdom', 'arguments' => []]));
+        $edge = new class {
+            #[McpTool(name: 'edge_start', meta: [PaidJob::META => ['role' => 'start', 'pairedWith' => 'edge_result']])]
+            #[PaidJob('start', 'edge_result')]
+            public function start(Color $color, ?string $nullable, string|int $union, RequestContext $ctx, string $n, int $withDefault = 1, ?\DateTimeImmutable $when = null): string
+            {
+                return 'job';
+            }
+
+            #[McpTool(name: 'edge_result', meta: [PaidJob::META => ['role' => 'result', 'pairedWith' => 'edge_start']])]
+            #[PaidJob('result', 'edge_start')]
+            public function result(string $jobId): string
+            {
+                return 'result';
+            }
+
+            #[McpTool(name: 'edge_none')]
+            public function none(): string
+            {
+                return 'none';
+            }
+        };
+
+        return PaidJob::catalog([[$edge::class, 'start'], [$edge::class, 'result'], [$edge::class, 'none']]);
+    }
+
+    public function testTheCatalogKeepsTheSchemaTheSdkGenerates(): void
+    {
+        $schema = json_decode(self::edgeTools()['edge_start']['schema'], true);
+        // Enums and nullables are required too; the injected context and defaults are not.
+        self::assertSame(['color', 'nullable', 'union', 'n'], $schema['required']);
+        self::assertSame(['red', 'blue'], $schema['properties']['color']['enum']);
+        self::assertArrayNotHasKey('ctx', $schema['properties']);
+    }
+
+    /** @return iterable<string, array{array<string, mixed>|string|null, ?string}> */
+    public static function startCalls(): iterable
+    {
+        $ok = ['color' => 'red', 'nullable' => null, 'union' => 5, 'n' => 'x'];
+        yield 'all fine' => [$ok, null];
+        yield 'optional ones given' => [$ok + ['withDefault' => 3, 'when' => null], null];
+        yield 'a union as string' => [['union' => 'five'] + $ok, null];
+        yield 'an extra key, as the SDK allows' => [$ok + ['extra' => 1], null];
+        yield 'n missing' => [array_diff_key($ok, ['n' => 1]), 'n'];
+        yield 'n null' => [['n' => null] + $ok, '/n'];
+        yield 'n a number' => [['n' => 123] + $ok, '/n'];
+        yield 'not an enum value' => [['color' => 'green'] + $ok, '/color'];
+        yield 'a union of neither' => [['union' => true] + $ok, '/union'];
+        yield 'a default of the wrong type' => [$ok + ['withDefault' => 'x'], '/withDefault'];
+        yield 'no arguments at all' => [null, 'color'];
+        yield 'arguments not an object' => ['x', 'Invalid parameters'];
+    }
+
+    /** @param array<string, mixed>|string|null $args */
+    #[DataProvider('startCalls')]
+    public function testValidateChecksTheArgumentsAgainstTheToolsSchema(array|string|null $args, ?string $error): void
+    {
+        $pricing = new Pricing([], 'eip155:84532', '0.01', self::PAY_TO, tools: self::edgeTools());
+        $reason = $pricing->validate(['name' => 'edge_start'] + (null === $args ? [] : ['arguments' => $args]));
+        null === $error ? self::assertNull($reason) : self::assertStringContainsString($error, (string) $reason);
+        if (null !== $error) {
+            self::assertStringStartsWith("Invalid parameters for tool 'edge_start'", (string) $reason);
+        }
+    }
+
+    public function testAToolWithoutArgumentsTakesAnEmptyCall(): void
+    {
+        $pricing = new Pricing(['edge_none'], 'eip155:84532', '0.01', self::PAY_TO, tools: self::edgeTools());
+        self::assertNull($pricing->validate(['name' => 'edge_none']));
+        self::assertNull($pricing->validate(['name' => 'edge_none', 'arguments' => []]));
+    }
+
+    public function testTheServedCatalogFailsClosedAndCountsOneHandlerOnce(): void
+    {
+        $plain = new class {
+            public function run(): void
+            {
+            }
+        };
+        // A served tool the catalog cannot read (here: no #[McpTool] to read) would be free.
+        try {
+            PaidJob::served([[[JobToolsFixture::class, 'status'], 'demo_status'], [[$plain::class, 'run'], 'plain']]);
+            self::fail('a served tool missing from the catalog must stop the build');
+        } catch (\LogicException $e) {
+            self::assertStringContainsString('MCP tool plain is served but not in app.mcp_tools', $e->getMessage());
+        }
+        // The same handler on two servers is one tool, not a duplicate name.
+        $twice = [[[JobToolsFixture::class, 'status'], 'demo_status'], [[JobToolsFixture::class, 'status'], 'demo_status']];
+        self::assertSame(['demo_status'], array_keys(PaidJob::served($twice)));
     }
 
     public function testAClassLevelFlagOnAnInvokableToolCounts(): void
@@ -134,18 +230,9 @@ final class PricingTest extends TestCase
             {
             }
         };
-        $tools = PaidJob::catalog([[InvokableJobStartFixture::class, '__invoke'], [$result::class, 'result']], [InvokableJobStartFixture::class, $result::class]);
+        $tools = PaidJob::catalog([[InvokableJobStartFixture::class, '__invoke'], [$result::class, 'result']]);
         self::assertSame('start', $tools['invokable_start']['job']['role'] ?? null);
-        self::assertSame(['n'], $tools['invokable_start']['required'], 'the request context is injected, not required');
-    }
-
-    public function testOnlyToolsInTheServedNamespacesCount(): void
-    {
-        $handlers = [[JobToolsFixture::class, 'start'], [JobToolsFixture::class, 'result'], [\App\Mcp\WisdomTool::class, '__invoke']];
-        self::assertSame(['wisdom'], array_keys(PaidJob::catalog($handlers, ['App\\Mcp\\'])));
-        self::assertSame(['demo_start', 'demo_result'], array_keys(PaidJob::catalog(\array_slice($handlers, 0, 2), ['App\\Tests\\'])));
-        self::assertSame([], PaidJob::catalog($handlers, []));
-        self::assertSame([], PaidJob::catalog($handlers, ['App\\Mc']), 'a namespace pattern ends in a backslash');
+        self::assertSame(['n'], json_decode($tools['invokable_start']['schema'], true)['required'], 'the request context is injected, not required');
     }
 
     /** @return iterable<string, array{object}> */

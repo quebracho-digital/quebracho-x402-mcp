@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\X402;
 
+use Mcp\Capability\Discovery\SchemaValidator;
 use Quebracho\X402\Budget;
 use Quebracho\X402\EvmExact;
 use Quebracho\X402\Networks;
@@ -18,12 +19,12 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 final class Pricing
 {
     /**
-     * @param list<string>                                                                                                $paidTools
-     * @param array<string, string>                                                                                       $prices
-     * @param array<string, mixed>                                                                                        $timeouts  maxTimeoutSeconds per tool, 1..Budget::MAX_TIMEOUT; default Networks::TIMEOUT
-     * @param array<string, mixed>                                                                                        $durations worst-case seconds from the claim to the settle, per tool
-     * @param array<string, array{job: ?array{role: string, pairedWith: string, price: ?string}, required: list<string>}> $tools
-     *                                                                                                                               every served tool by name (PaidJob::catalog)
+     * @param list<string>                                                                                        $paidTools
+     * @param array<string, string>                                                                               $prices
+     * @param array<string, mixed>                                                                                $timeouts  maxTimeoutSeconds per tool, 1..Budget::MAX_TIMEOUT; default Networks::TIMEOUT
+     * @param array<string, mixed>                                                                                $durations worst-case seconds from the claim to the settle, per tool
+     * @param array<string, array{job: ?array{role: string, pairedWith: string, price: ?string}, schema: string}> $tools
+     *                                                                                                                       every served tool by name (PaidJob::catalog)
      */
     public function __construct(
         #[Autowire(env: 'csv:X402_PAID_TOOLS')] private readonly array $paidTools,
@@ -35,6 +36,20 @@ final class Pricing
         #[Autowire(env: 'json:X402_DURATIONS')] private readonly array $durations = [],
         #[Autowire(param: 'app.mcp_tools')] private readonly array $tools = [],
     ) {
+        // A typo fails open: "wisdon" in X402_PAID_TOOLS leaves wisdom free. Every name must be a served tool.
+        foreach (['X402_PAID_TOOLS' => $this->paidTools, 'X402_PRICES' => array_keys($this->prices), 'X402_TIMEOUTS' => array_keys($this->timeouts), 'X402_DURATIONS' => array_keys($this->durations)] as $env => $names) {
+            foreach ($names as $name) {
+                if (!isset($this->tools[$name])) {
+                    throw new \InvalidArgumentException("$env names \"$name\", which is no tool this server serves.");
+                }
+            }
+        }
+        foreach ($this->prices as $name => $_) {
+            // Ignored otherwise: a price for a tool nobody pays for is a misread config.
+            if (null === ($this->tools[$name]['job'] ?? null) && !\in_array($name, $this->paidTools, true)) {
+                throw new \InvalidArgumentException("X402_PRICES prices \"$name\", which is free: add it to X402_PAID_TOOLS or remove the price.");
+            }
+        }
         foreach ($this->timeouts as $tool => $seconds) {
             // A buyer (Budget) never signs longer than MAX_TIMEOUT: a longer offer would sell nothing.
             if (!\is_int($seconds) || $seconds < 1 || $seconds > Budget::MAX_TIMEOUT) {
@@ -46,14 +61,6 @@ final class Pricing
             // one second of headroom for the signing itself.
             if (!\is_int($seconds) || $seconds < 0 || $seconds + EvmExact::SLACK >= ($this->timeouts[$tool] ?? Networks::TIMEOUT)) {
                 throw new \InvalidArgumentException("X402_DURATIONS[$tool] must be an integer under its X402_TIMEOUTS minus ".EvmExact::SLACK.' s.');
-            }
-        }
-        // A typo fails open: "wisdon" in X402_PAID_TOOLS leaves wisdom free. Every name must be a served tool.
-        foreach (['X402_PAID_TOOLS' => $this->paidTools, 'X402_PRICES' => array_keys($this->prices), 'X402_TIMEOUTS' => array_keys($this->timeouts), 'X402_DURATIONS' => array_keys($this->durations)] as $env => $names) {
-            foreach ($names as $name) {
-                if (!isset($this->tools[$name])) {
-                    throw new \InvalidArgumentException("$env names \"$name\", which is no tool this server serves.");
-                }
             }
         }
         // Every paid tool must be sellable, or it errors on its first call.
@@ -94,21 +101,22 @@ final class Pricing
     }
 
     /**
-     * For X402McpMiddleware's $validate, before any payment is read: a call
-     * missing an argument its tool needs is refused, so an upfront (_start)
-     * deposit is never charged for a call that cannot run.
-     *
-     * ponytail: presence only; a wrong type still reaches the tool (an error after an upfront settle).
+     * For X402McpMiddleware's $validate, before any payment is read: the call's
+     * arguments against its tool's input schema, with the SDK's own validator and
+     * the way CallToolHandler calls it. A call the tool would refuse is never
+     * charged, an upfront (_start) deposit included.
      */
     public function validate(array $params): ?string
     {
         $args = $params['arguments'] ?? [];
-        if (!\is_array($args)) {
-            return 'arguments must be an object';
+        $schema = $this->tools[$params['name']]['schema'] ?? null;
+        if (null === $schema) {
+            // ponytail: unreachable, the constructor refuses a paid name that is no tool; fail closed anyway.
+            return "Unknown tool: {$params['name']}";
         }
-        $missing = array_diff($this->tools[$params['name']]['required'] ?? [], array_keys($args));
+        $errors = (new SchemaValidator())->validateAgainstJsonSchema([] === $args ? new \stdClass() : $args, json_decode($schema, false, 512, \JSON_THROW_ON_ERROR));
 
-        return [] === $missing ? null : 'Missing required argument(s): '.implode(', ', $missing);
+        return [] === $errors ? null : "Invalid parameters for tool '{$params['name']}': ".implode('; ', array_map(static fn (array $e) => ('' !== $e['pointer'] ? $e['pointer'].': ' : '').$e['message'], $errors));
     }
 
     /**

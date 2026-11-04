@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\X402;
 
 use Mcp\Capability\Attribute\McpTool;
+use Mcp\Capability\Discovery\DocBlockParser;
+use Mcp\Capability\Discovery\SchemaGenerator;
 
 /**
  * Marks an MCP tool as one half of a paid job: `start` (the deposit, settled
@@ -34,23 +36,47 @@ final class PaidJob
     }
 
     /**
-     * Every tool the server serves, by name: its job flag (or NULL) and the
-     * arguments it cannot run without. Run at container compile time (App\Kernel)
-     * over the registered tools, so a mistake stops the build.
+     * The catalog of what McpPass registered: each builder addTool call's arguments,
+     * [[class, method], name, ...]. Fails closed: a served tool missing from the
+     * catalog would be priced as free.
      *
-     * @param iterable<array{0: class-string, 1: string}> $handlers [class, method] of each #[McpTool]
-     * @param list<string>                                $served   the registry's patterns (mcp.yaml): "*", a
-     *                                                              namespace ending in "\\", or a class
+     * @param iterable<array<int, mixed>> $calls
      *
-     * @return array<string, array{job: ?array{role: string, pairedWith: string, price: ?string}, required: list<string>}>
+     * @return array<string, array{job: ?array{role: string, pairedWith: string, price: ?string}, schema: string}>
      */
-    public static function catalog(iterable $handlers, array $served = ['*']): array
+    public static function served(iterable $calls): array
+    {
+        $handlers = [];
+        $names = [];
+        foreach ($calls as $args) {
+            // One tool on two servers is one handler.
+            $handlers[implode('::', $args[0])] = $args[0];
+            $names[] = $args[1];
+        }
+        $tools = self::catalog(array_values($handlers));
+        foreach ($names as $name) {
+            if (null !== $name && !isset($tools[$name])) {
+                throw new \LogicException("MCP tool $name is served but not in app.mcp_tools: Pricing would treat it as free.");
+            }
+        }
+
+        return $tools;
+    }
+
+    /**
+     * Every tool given, by name: its job flag (or NULL) and its input schema as
+     * the SDK generates it (JSON, for the validate hook). Run at container compile
+     * time (App\Kernel) over the tools the MCP servers serve, so a mistake stops the build.
+     *
+     * @param iterable<array{0: class-string, 1: string}> $handlers [class, method] of each served #[McpTool]
+     *
+     * @return array<string, array{job: ?array{role: string, pairedWith: string, price: ?string}, schema: string}>
+     */
+    public static function catalog(iterable $handlers): array
     {
         $tools = [];
+        $schemas = new SchemaGenerator(new DocBlockParser());
         foreach ($handlers as [$class, $method]) {
-            if (!self::serves($served, $class)) {
-                continue;
-            }
             $at = new \ReflectionMethod($class, $method);
             $attrs = $at->getAttributes(McpTool::class) ?: $at->getDeclaringClass()->getAttributes(McpTool::class);
             $jobs = $at->getAttributes(self::class) ?: $at->getDeclaringClass()->getAttributes(self::class);
@@ -72,15 +98,9 @@ final class PaidJob
             if (null !== $job?->price && !preg_match('/^(?!0+(\.0+)?$)\d+(\.\d+)?$/', $job->price)) {
                 throw new \LogicException("Tool $name: #[PaidJob] price must be a positive decimal in USD, not \"$job->price\".");
             }
-            // What the tool cannot run without; objects (a request context) are injected by the SDK.
-            $required = [];
-            foreach ($at->getParameters() as $p) {
-                $type = $p->getType();
-                if (!$p->isOptional() && !($type instanceof \ReflectionNamedType && !$type->isBuiltin())) {
-                    $required[] = $p->getName();
-                }
-            }
-            $tools[$name] = ['job' => null === $job ? null : ['role' => $job->role, 'pairedWith' => $job->pairedWith, 'price' => $job->price], 'required' => $required];
+            // The schema the SDK checks a call against (McpPass generates it the same way); JSON keeps {} apart from [].
+            $schema = json_encode($schemas->generate($at), \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_SLASHES);
+            $tools[$name] = ['job' => null === $job ? null : ['role' => $job->role, 'pairedWith' => $job->pairedWith, 'price' => $job->price], 'schema' => $schema];
         }
         foreach ($tools as $name => ['job' => $job]) {
             if (null === $job) {
@@ -93,17 +113,5 @@ final class PaidJob
         }
 
         return $tools;
-    }
-
-    /** @param list<string> $served */
-    private static function serves(array $served, string $class): bool
-    {
-        foreach ($served as $pattern) {
-            if ('*' === $pattern || $pattern === $class || (str_ends_with($pattern, '\\') && str_starts_with($class, $pattern))) {
-                return true;
-            }
-        }
-
-        return false;
     }
 }
