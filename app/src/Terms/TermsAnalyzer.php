@@ -96,11 +96,33 @@ final class TermsAnalyzer
 
         // The memo skips the model call only: the caller is still charged and rate limited. A throw in the
         // callback (no JSON, a refused text) saves nothing, so only valid answers are kept.
-        return $this->cache->get($this->cacheKey($text), function (ItemInterface $item) use ($text): array {
-            $item->expiresAfter(self::CACHE_TTL);
+        // A failing memo never fails the call: a read error is a miss, a write error keeps the answer. The
+        // model's own failure is rethrown, never taken for a cache one (it would ask the model twice).
+        $run = new MemoRun();
+        try {
+            return $this->cache->get($this->cacheKey($text), function (ItemInterface $item) use ($text, $run): array {
+                $item->expiresAfter(self::CACHE_TTL);
+                try {
+                    $run->answer = $this->ask($text);
+                } catch (\Throwable $e) {
+                    $run->failure = $e;
 
-            return $this->ask($text);
-        });
+                    throw $e;
+                }
+
+                return $run->answer;
+            });
+        } catch (\Throwable) {
+            if (null !== $run->failure) {
+                throw $run->failure;
+            }
+            if (null !== $run->answer) {
+                return $run->answer;
+            }
+            // The memo could not be read: ask the model.
+        }
+
+        return $this->ask($text);
     }
 
     /**

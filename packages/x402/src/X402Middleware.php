@@ -103,13 +103,18 @@ final class X402Middleware implements MiddlewareInterface
             return $this->required($accepts, $resource, 'The payment matches none of the accepted offers');
         }
         $sale = $this->sale($payment, $req);
-        if (null !== $this->ledger) {
-            $stored = $sale->stored($this->ledger, $this->lookup);
-            if (null !== $stored) {
-                return isset($stored['refuse']) ? $this->json(409, ['error' => $stored['refuse']]) : $this->replay($stored['state']);
+        try {
+            if (null !== $this->ledger) {
+                $stored = $sale->stored($this->ledger, $this->lookup);
+                if (null !== $stored) {
+                    return isset($stored['refuse']) ? $this->json(409, ['error' => $stored['refuse']]) : $this->replay($stored['state']);
+                }
             }
+            $reason = $sale->admit();
+        } catch (LedgerUnavailableException) {
+            // Before the handler: nothing charged, nothing run.
+            return $this->json(503, ['error' => 'ledger_unavailable']);
         }
-        $reason = $sale->admit();
         if (Sale::UNAVAILABLE === $reason) {
             return $this->json(502, ['error' => $reason]);
         }
@@ -177,16 +182,24 @@ final class X402Middleware implements MiddlewareInterface
     /**
      * Stores what happened, when there is a ledger: a settled payment (with the response, if any), or a
      * pending one whose claim was kept.
+     *
+     * A store that fails here comes after the money may have moved (or was refused): the answer is given anyway,
+     * never a 503 that would tell the buyer nothing was charged. The claim stays until its TTL, so no second
+     * payment is taken; the buyer's retry gets 409 in_progress or already_settled instead of a replay.
      */
     private function record(Sale $sale, array $receipt, ?ResponseInterface $response = null): void
     {
         if (null === $this->ledger) {
             return;
         }
-        if (true === $receipt['success']) {
-            $sale->remember($this->ledger, ['status' => 'settled', 'receipt' => $receipt], $response);
-        } elseif ($sale->held()) {
-            $sale->remember($this->ledger, ['status' => 'pending', 'receipt' => $receipt], $response);
+        try {
+            if (true === $receipt['success']) {
+                $sale->remember($this->ledger, ['status' => 'settled', 'receipt' => $receipt], $response);
+            } elseif ($sale->held()) {
+                $sale->remember($this->ledger, ['status' => 'pending', 'receipt' => $receipt], $response);
+            }
+        } catch (LedgerUnavailableException) {
+            // ponytail: no outcome event for a lost store; the settle's PaymentOutcome already went out.
         }
     }
 

@@ -141,15 +141,20 @@ final class X402McpMiddleware implements MiddlewareInterface
         }
         $payer = null !== $this->payer ? fn (string $from): ?string => ($this->payer)($params, $from) : null;
         $sale = $this->sale($payment, $req, $payer, null !== $this->duration ? ($this->duration)($params) : 0);
-        if (null !== $this->ledger) {
-            $stored = $sale->stored($this->ledger, $this->lookup);
-            if (null !== $stored) {
-                return isset($stored['refuse']) ? $this->required($id, $accepts, $resource, $stored['refuse']) : $this->replay($id, $accepts, $resource, $stored['state']);
+        try {
+            if (null !== $this->ledger) {
+                $stored = $sale->stored($this->ledger, $this->lookup);
+                if (null !== $stored) {
+                    return isset($stored['refuse']) ? $this->required($id, $accepts, $resource, $stored['refuse']) : $this->replay($id, $accepts, $resource, $stored['state']);
+                }
             }
+            // ponytail: verify runs before the MCP session check and costs an
+            // ecrecover; rate-limit the route where it is deployed.
+            $reason = $sale->admit();
+        } catch (LedgerUnavailableException) {
+            // Before the tool: nothing charged, nothing run.
+            return $this->required($id, $accepts, $resource, 'ledger_unavailable');
         }
-        // ponytail: verify runs before the MCP session check and costs an
-        // ecrecover; rate-limit the route where it is deployed.
-        $reason = $sale->admit();
         if (null !== $reason) {
             return $this->required($id, $accepts, $resource, $reason);
         }
@@ -275,10 +280,15 @@ final class X402McpMiddleware implements MiddlewareInterface
         if (null === $this->ledger || null === $receipt) {
             return;
         }
-        if (true === $receipt['success']) {
-            $sale->remember($this->ledger, ['status' => 'settled', 'receipt' => $receipt, 'id' => $id], $response);
-        } elseif ($sale->held()) {
-            $sale->remember($this->ledger, ['status' => 'pending', 'receipt' => $receipt, 'id' => $id], $response);
+        // A failed store after a settle keeps the answer, as in X402Middleware::record (the claim holds until its TTL).
+        try {
+            if (true === $receipt['success']) {
+                $sale->remember($this->ledger, ['status' => 'settled', 'receipt' => $receipt, 'id' => $id], $response);
+            } elseif ($sale->held()) {
+                $sale->remember($this->ledger, ['status' => 'pending', 'receipt' => $receipt, 'id' => $id], $response);
+            }
+        } catch (LedgerUnavailableException) {
+            // ponytail: no outcome event for a lost store; the settle's PaymentOutcome already went out.
         }
     }
 

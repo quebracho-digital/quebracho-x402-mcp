@@ -301,7 +301,12 @@ final class Sale
     private function free(): void
     {
         if ($this->claimed && null !== $this->release) {
-            ($this->release)(Settlement::key($this->payment));
+            try {
+                ($this->release)(Settlement::key($this->payment));
+            } catch (LedgerUnavailableException) {
+                // ponytail: the claim stays until its TTL, so the buyer waits (409 in_progress) but cannot pay twice; the answer is not changed by a failed release.
+                return;
+            }
             $this->claimed = false;
         }
     }

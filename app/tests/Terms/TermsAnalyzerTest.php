@@ -14,6 +14,7 @@ use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\RequestStack;
 use Symfony\Component\RateLimiter\RateLimiterFactory;
 use Symfony\Component\RateLimiter\Storage\InMemoryStorage;
+use Symfony\Contracts\Cache\CacheInterface;
 
 final class TermsAnalyzerTest extends TestCase
 {
@@ -216,7 +217,7 @@ in Delaware'],
      *
      * @return array{0: TermsAnalyzer, 1: \stdClass}
      */
-    private function counting(array $replies): array
+    private function counting(array $replies, ?CacheInterface $cache = null): array
     {
         $calls = new \stdClass();
         $calls->n = 0;
@@ -227,7 +228,62 @@ in Delaware'],
             return $reply;
         });
 
-        return [new TermsAnalyzer($platform, 'some/model', new ArrayAdapter()), $calls];
+        return [new TermsAnalyzer($platform, 'some/model', $cache ?? new ArrayAdapter()), $calls];
+    }
+
+    /** A memo that fails on read ('read': before the model) or on write ('write': after the model answered). */
+    private function flakyCache(string $mode): CacheInterface
+    {
+        return new class($mode) implements CacheInterface {
+            public function __construct(private readonly string $mode)
+            {
+            }
+
+            public function get(string $key, callable $callback, ?float $beta = null, ?array &$metadata = null): mixed
+            {
+                if ('read' === $this->mode) {
+                    throw new \RuntimeException('Redis went away on read');
+                }
+                $callback((new ArrayAdapter())->getItem($key));
+
+                throw new \RuntimeException('Redis went away on write');
+            }
+
+            public function delete(string $key): bool
+            {
+                return true;
+            }
+        };
+    }
+
+    public function testAMemoReadErrorIsAMissAndTheModelAnswers(): void
+    {
+        [$analyzer, $calls] = $this->counting(['{"arbitration": ["binding arbitration in Delaware"]}'], $this->flakyCache('read'));
+
+        self::assertSame(['arbitration' => ['binding arbitration in Delaware']], $analyzer->analyze(self::TEXT)['categories']);
+        self::assertSame(1, $calls->n);
+    }
+
+    public function testAMemoWriteErrorKeepsTheAnswer(): void
+    {
+        [$analyzer, $calls] = $this->counting(['{"arbitration": ["binding arbitration in Delaware"]}'], $this->flakyCache('write'));
+
+        self::assertSame(['arbitration' => ['binding arbitration in Delaware']], $analyzer->analyze(self::TEXT)['categories']);
+        self::assertSame(1, $calls->n, 'the answer was not asked again');
+    }
+
+    public function testAModelFailureIsNotSwallowedByAFailingMemo(): void
+    {
+        // The model fails inside the memo's callback: that failure must come out, not be read as a memo error.
+        [$analyzer, $calls] = $this->counting(['I could not read that.'], $this->flakyCache('write'));
+
+        try {
+            $analyzer->analyze(self::TEXT);
+            self::fail('A reply without JSON must still be an error.');
+        } catch (\RuntimeException $e) {
+            self::assertStringContainsString('JSON', $e->getMessage());
+        }
+        self::assertSame(1, $calls->n, 'the model was not asked a second time');
     }
 
     public function testTheSameTextIsAnsweredFromTheMemoAndTheModelIsCalledOnce(): void

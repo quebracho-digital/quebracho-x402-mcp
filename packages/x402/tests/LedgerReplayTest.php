@@ -13,6 +13,7 @@ use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Server\RequestHandlerInterface;
 use Quebracho\X402\EvmExact;
 use Quebracho\X402\FileLedger;
+use Quebracho\X402\LedgerUnavailableException;
 use Quebracho\X402\Networks;
 use Quebracho\X402\PaymentHeaders;
 use Quebracho\X402\PaymentLedger;
@@ -51,20 +52,64 @@ final class LedgerReplayTest extends TestCase
         return static fn (array $payment, array $req): array => ['success' => false, 'errorReason' => 'settlement_pending', 'transaction' => $transaction, 'network' => $req['network']];
     }
 
-    private function http(?\Closure $settle = null, ?\Closure $lookup = null): X402Middleware
+    private function http(?\Closure $settle = null, ?\Closure $lookup = null, ?PaymentLedger $ledger = null): X402Middleware
     {
         $req = Networks::requirements('eip155:84532', '0.01', self::PAY_TO);
         $f = new Psr17Factory();
 
-        return new X402Middleware([new EvmExact()], static fn (ServerRequestInterface $r) => [$req], $this->unusedClaim(), $f, $f, $settle ?? Settlement::mock(), ledger: $this->ledger, lookup: $lookup);
+        return new X402Middleware([new EvmExact()], static fn (ServerRequestInterface $r) => [$req], $this->unusedClaim(), $f, $f, $settle ?? Settlement::mock(), ledger: $ledger ?? $this->ledger, lookup: $lookup);
     }
 
-    private function mcp(?\Closure $settle = null, ?\Closure $lookup = null): X402McpMiddleware
+    private function mcp(?\Closure $settle = null, ?\Closure $lookup = null, ?PaymentLedger $ledger = null): X402McpMiddleware
     {
         $req = Networks::requirements('eip155:84532', '0.01', self::PAY_TO);
         $f = new Psr17Factory();
 
-        return new X402McpMiddleware([new EvmExact()], static fn (array $params) => 'wisdom' === $params['name'] ? [$req] : null, $this->unusedClaim(), $f, $f, $settle ?? Settlement::mock(), ledger: $this->ledger, lookup: $lookup);
+        return new X402McpMiddleware([new EvmExact()], static fn (array $params) => 'wisdom' === $params['name'] ? [$req] : null, $this->unusedClaim(), $f, $f, $settle ?? Settlement::mock(), ledger: $ledger ?? $this->ledger, lookup: $lookup);
+    }
+
+    /** The real ledger, except that each operation named in $down throws LedgerUnavailableException (a store that is down). */
+    private function downLedger(string ...$down): PaymentLedger
+    {
+        return new class($this->ledger, $down) implements PaymentLedger {
+            /** @param string[] $down */
+            public function __construct(private readonly PaymentLedger $real, private readonly array $down)
+            {
+            }
+
+            private function check(string $op): void
+            {
+                if (\in_array($op, $this->down, true)) {
+                    throw new LedgerUnavailableException("$op: the store is down");
+                }
+            }
+
+            public function claim(string $key, int $ttl): bool
+            {
+                $this->check('claim');
+
+                return $this->real->claim($key, $ttl);
+            }
+
+            public function get(string $key): ?array
+            {
+                $this->check('get');
+
+                return $this->real->get($key);
+            }
+
+            public function put(string $key, array $state, int $ttl): void
+            {
+                $this->check('put');
+                $this->real->put($key, $state, $ttl);
+            }
+
+            public function release(string $key): void
+            {
+                $this->check('release');
+                $this->real->release($key);
+            }
+        };
     }
 
     /** A handler that counts its runs and answers $status with $body. */
@@ -269,5 +314,51 @@ final class LedgerReplayTest extends TestCase
         self::assertTrue($answer['result']['isError']);
         self::assertSame('in_progress', $answer['result']['structuredContent']['error']);
         self::assertSame(0, $this->runs);
+    }
+
+    public function testHttpLedgerDownBeforeTheHandlerIsA503AndNothingRuns(): void
+    {
+        $payment = $this->httpPayment($this->http());
+
+        foreach (['claim', 'get'] as $down) {
+            $response = $this->http(ledger: $this->downLedger($down))->process($this->httpCall($payment), $this->handler());
+            self::assertSame(503, $response->getStatusCode(), "$down down");
+            self::assertSame('ledger_unavailable', json_decode((string) $response->getBody(), true)['error']);
+        }
+        self::assertSame(0, $this->runs);
+    }
+
+    public function testMcpLedgerDownBeforeTheToolIsAnInBandErrorAndNothingRuns(): void
+    {
+        $payment = $this->mcpPayment($this->mcp());
+
+        foreach (['claim', 'get'] as $down) {
+            $answer = self::answer($this->mcp(ledger: $this->downLedger($down))->process(self::mcpCall(2, $payment), $this->toolHandler()));
+            self::assertTrue($answer['result']['isError'], "$down down");
+            self::assertSame('ledger_unavailable', $answer['result']['structuredContent']['error']);
+        }
+        self::assertSame(0, $this->runs);
+    }
+
+    public function testHttpAnswerIsKeptWhenTheStoreFailsAfterASettle(): void
+    {
+        $payment = $this->httpPayment($this->http());
+
+        $response = $this->http(ledger: $this->downLedger('put'))->process($this->httpCall($payment), $this->handler());
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('paid content', (string) $response->getBody());
+        self::assertTrue(PaymentHeaders::decode($response->getHeaderLine(PaymentHeaders::RESPONSE))['success']);
+        self::assertSame(1, $this->runs);
+    }
+
+    public function testMcpAnswerIsKeptWhenTheStoreFailsAfterASettle(): void
+    {
+        $payment = $this->mcpPayment($this->mcp());
+
+        $answer = self::answer($this->mcp(ledger: $this->downLedger('put'))->process(self::mcpCall(2, $payment), $this->toolHandler()));
+        self::assertArrayNotHasKey('isError', $answer['result']);
+        self::assertSame('paid content', $answer['result']['content'][0]['text']);
+        self::assertTrue($answer['result']['_meta'][X402McpMiddleware::PAYMENT_RESPONSE]['success']);
+        self::assertSame(1, $this->runs);
     }
 }
