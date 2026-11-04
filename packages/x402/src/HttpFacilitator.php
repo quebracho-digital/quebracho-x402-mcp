@@ -104,6 +104,19 @@ final class HttpFacilitator implements Facilitator
     }
 
     /**
+     * A settle's status by its paymentId (Circle's GET /status): 'completed' with a transaction, 'failed', or still pending.
+     * Throws FacilitatorException when the facilitator cannot be asked.
+     */
+    public function status(string $paymentId, string $network): array
+    {
+        if (1 !== preg_match('/^[\w-]+$/', $paymentId)) {
+            throw new \InvalidArgumentException("Not a paymentId: $paymentId");
+        }
+
+        return $this->call('GET', "/status/$paymentId", 'status', $network, '');
+    }
+
+    /**
      * Solana: the facilitator's fee payer for this network (extra.feePayer).
      */
     public function feePayer(string $network): ?string

@@ -62,6 +62,14 @@ final class X402McpMiddleware implements MiddlewareInterface
      *                                            fn(array $params): int — worst-case seconds from the claim until the
      *                                            settle is sent; a signature that expires sooner (plus EvmExact::SLACK) is
      *                                            refused before the claim. 0 or NULL: no check (EVM validBefore only)
+     * @param ?PaymentLedger            $ledger
+     *                                            Keeps each payment's outcome: a retry gets the stored answer (replayed with
+     *                                            its receipt, the handler not run again), or an isError result with reason
+     *                                            in_progress, settlement_pending or already_settled (HTTP stays 200, as for
+     *                                            every MCP refusal). Replaces $claim and $release.
+     * @param ?\Closure                 $lookup
+     *                                            fn(array $state): ?array — asks the chain about a 'pending' payment, as
+     *                                            in X402Middleware
      */
     public function __construct(
         private readonly array $schemes,
@@ -77,6 +85,8 @@ final class X402McpMiddleware implements MiddlewareInterface
         private readonly ?\Closure $validate = null,
         private readonly ?\Closure $payer = null,
         private readonly ?\Closure $duration = null,
+        private readonly ?PaymentLedger $ledger = null,
+        private readonly ?\Closure $lookup = null,
     ) {
     }
 
@@ -130,7 +140,13 @@ final class X402McpMiddleware implements MiddlewareInterface
             return $this->required($id, $accepts, $resource, 'invalid_payment_requirements');
         }
         $payer = null !== $this->payer ? fn (string $from): ?string => ($this->payer)($params, $from) : null;
-        $sale = new Sale($this->schemes, $this->claim, $this->settle, $this->events, $this->verify, $this->release, $payment, $req, $payer, null !== $this->duration ? ($this->duration)($params) : 0);
+        $sale = $this->sale($payment, $req, $payer, null !== $this->duration ? ($this->duration)($params) : 0);
+        if (null !== $this->ledger) {
+            $stored = $sale->stored($this->ledger, $this->lookup);
+            if (null !== $stored) {
+                return isset($stored['refuse']) ? $this->required($id, $accepts, $resource, $stored['refuse']) : $this->replay($id, $accepts, $resource, $stored['state']);
+            }
+        }
         // ponytail: verify runs before the MCP session check and costs an
         // ecrecover; rate-limit the route where it is deployed.
         $reason = $sale->admit();
@@ -142,6 +158,7 @@ final class X402McpMiddleware implements MiddlewareInterface
         if ($sale->upfront()) {
             // Money first; once it moved, the receipt goes with whatever the tool answers.
             $receipt = $sale->settle();
+            $this->record($sale, $receipt, null, $id);
             if (true !== $receipt['success']) {
                 return $this->required($id, $accepts, $resource, $receipt['errorReason']);
             }
@@ -160,7 +177,7 @@ final class X402McpMiddleware implements MiddlewareInterface
             return $response;
         }
         $delivered = null;
-        $settled = $this->rewrite($response, $id, function (array $out) use ($sale, $receipt, &$delivered): array {
+        $settled = $this->rewrite($response, $id, function (array $out) use ($sale, &$receipt, &$delivered): array {
             // A JSON-RPC error or a failed tool delivered nothing: nothing charged.
             $delivered = isset($out['result']) && empty($out['result']['isError']);
             if (null === $receipt) {
@@ -178,24 +195,8 @@ final class X402McpMiddleware implements MiddlewareInterface
                 // Upfront, charged: the tool failed after the money moved.
                 $sale->ran(500);
             }
-            if (isset($out['result'])) {
-                $out['result']['_meta'][self::PAYMENT_RESPONSE] = $receipt;
-            } elseif (isset($out['error'])) {
-                // Upfront and the tool answered with a JSON-RPC error: the money moved,
-                // so the buyer still gets the receipt (its transaction) in error.data.
-                // An object is extended; anything else (a list, a string) is kept under "data".
-                $data = $out['error']['data'] ?? null;
-                $data = match (true) {
-                    null === $data, [] === $data => [],
-                    is_array($data) && !array_is_list($data) => $data,
-                    default => ['data' => $data],
-                };
-                // Ours always wins: a tool must not plant its own receipt.
-                $data[self::PAYMENT_RESPONSE] = $receipt;
-                $out['error']['data'] = $data;
-            }
 
-            return $out;
+            return $this->receipted($out, $receipt);
         });
         if (null === $delivered) {
             if (null !== $receipt) {
@@ -208,12 +209,77 @@ final class X402McpMiddleware implements MiddlewareInterface
 
             return $this->required($id, $accepts, $resource, 'unexpected_settle_error');
         }
+        // $receipt is the failed one when the settle refused, else the one this answer carries.
+        $this->record($sale, $receipt, $response, $id);
         if (isset($settled['receipt'])) {
             // Settled nothing: the spec says return only the payment error.
             return $this->required($id, $accepts, $resource, $settled['receipt']['errorReason']);
         }
 
         return $settled['response'];
+    }
+
+    /**
+     * Puts the receipt in a JSON-RPC answer: in result._meta, or in error.data (the money moved).
+     */
+    private function receipted(array $out, array $receipt): array
+    {
+        if (isset($out['result'])) {
+            $out['result']['_meta'][self::PAYMENT_RESPONSE] = $receipt;
+        } elseif (isset($out['error'])) {
+            // Upfront and the tool answered with a JSON-RPC error: the money moved,
+            // so the buyer still gets the receipt (its transaction) in error.data.
+            // An object is extended; anything else (a list, a string) is kept under "data".
+            $data = $out['error']['data'] ?? null;
+            $data = match (true) {
+                null === $data, [] === $data => [],
+                is_array($data) && !array_is_list($data) => $data,
+                default => ['data' => $data],
+            };
+            // Ours always wins: a tool must not plant its own receipt.
+            $data[self::PAYMENT_RESPONSE] = $receipt;
+            $out['error']['data'] = $data;
+        }
+
+        return $out;
+    }
+
+    /**
+     * The stored answer, with this call's id and the stored receipt.
+     */
+    private function replay(mixed $id, array $accepts, array $resource, array $state): ResponseInterface
+    {
+        $receipt = $state['receipt'];
+        $settled = $this->rewrite(Sale::restore($state['response'], $this->responses, $this->streams), $state['id'] ?? null, fn (array $out): array => $this->receipted(array_replace($out, ['id' => $id]), $receipt));
+
+        return $settled['response'] ?? $this->required($id, $accepts, $resource, 'already_settled');
+    }
+
+    private function sale(array $payment, array $req, ?\Closure $payer, int $duration): Sale
+    {
+        if (null === $this->ledger) {
+            return new Sale($this->schemes, $this->claim, $this->settle, $this->events, $this->verify, $this->release, $payment, $req, $payer, $duration);
+        }
+        $ledger = $this->ledger;
+        $ttl = Sale::ttl($payment);
+
+        return new Sale($this->schemes, fn (string $key): bool => $ledger->claim($key, $ttl), $this->settle, $this->events, $this->verify, fn (string $key) => $ledger->release($key), $payment, $req, $payer, $duration);
+    }
+
+    /**
+     * Stores what happened, when there is a ledger: a settled payment (with the answer, if any), or a
+     * pending one whose claim was kept. $id is the call's JSON-RPC id, for a replay.
+     */
+    private function record(Sale $sale, ?array $receipt, ?ResponseInterface $response, mixed $id): void
+    {
+        if (null === $this->ledger || null === $receipt) {
+            return;
+        }
+        if (true === $receipt['success']) {
+            $sale->remember($this->ledger, ['status' => 'settled', 'receipt' => $receipt, 'id' => $id], $response);
+        } elseif ($sale->held()) {
+            $sale->remember($this->ledger, ['status' => 'pending', 'receipt' => $receipt, 'id' => $id], $response);
+        }
     }
 
     private function accepts(array $message): ?array

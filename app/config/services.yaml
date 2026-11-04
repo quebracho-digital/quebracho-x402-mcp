@@ -47,9 +47,17 @@ services:
 
     Quebracho\X402\EvmExact: ~
 
-    # One claim per payment, durable across processes on this host.
+    # One claim per payment, durable across processes on this host. Kept for the constructor's $claim; the ledger below claims instead.
     Quebracho\X402\FileClaims:
         arguments: ['%kernel.project_dir%/var/x402-claims']
+
+    # The payment ledger (claimed, settled with its response, pending): Redis when X402_REDIS_URL is set, else this host's
+    # files. Set it on every host; with Redis down the request fails, it never falls back to files (LedgerFactory).
+    Quebracho\X402\PaymentLedger:
+        factory: ['App\X402\LedgerFactory', 'create']
+        arguments:
+            $redisUrl: '%env(default::X402_REDIS_URL)%'
+            $dir: '%kernel.project_dir%/var/x402-ledger'
 
     # Settlement goes through App\X402\Facilitator: X402_FACILITATOR is
     # "mock" or a facilitator URL, never left implicit.
@@ -59,6 +67,8 @@ services:
             $price: !closure '@App\X402\Pricing'
             $claim: !closure '@Quebracho\X402\FileClaims'
             $settle: !closure '@App\X402\Facilitator'
+            # Replaces $claim and $release for the payment state (see the ledger above).
+            $ledger: '@Quebracho\X402\PaymentLedger'
             $verify: !closure ['@App\X402\Facilitator', 'verify']
             # A claim whose payment charged nothing is freed: the buyer may retry.
             $release: !closure ['@Quebracho\X402\FileClaims', 'release']
@@ -70,6 +80,15 @@ services:
             $streams: '@mcp.psr17_factory'
             # AddressCheck on the payer, answered by App\X402\Screening.
             $events: '@event_dispatcher'
+            # A 'pending' payment is settled or freed by the chain (EVM receipt) or the facilitator (paymentId), not left to 409 until its TTL.
+            $lookup: !closure ['@App\X402\ReceiptLookup', '__invoke']
+
+    # The lookup's RPC and facilitator calls; any failure answers NULL (still pending).
+    App\X402\ReceiptLookup:
+        arguments:
+            $http: '@psr18.http_client'
+            $requests: '@mcp.psr17_factory'
+            $streams: '@mcp.psr17_factory'
 
     # Frozen in the USDC contract itself (not only OFAC): asked after Screening's
     # lists (lower priority). An RPC that cannot answer follows the same policy

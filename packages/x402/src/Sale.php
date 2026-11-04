@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace Quebracho\X402;
 
 use Psr\EventDispatcher\EventDispatcherInterface;
+use Psr\Http\Message\ResponseFactoryInterface;
+use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\StreamFactoryInterface;
 
 /**
  * One paid request, the steps both middlewares share: admit (offline verify,
@@ -16,6 +19,10 @@ final class Sale
 {
     public const UNAVAILABLE = 'facilitator_unavailable';
     public const UNEXPECTED_VERIFY = 'unexpected_verify_error';
+    /** How long a claim or a state lives, at most: seconds. */
+    public const TTL = 600;
+    /** The largest response body kept in the ledger, in bytes. */
+    public const MAX_BODY = 1048576;
 
     private ?AddressCheck $check = null;
     private bool $claimed = false;
@@ -48,8 +55,7 @@ final class Sale
      */
     public function admit(): ?string
     {
-        $scheme = current(array_filter($this->schemes, fn (Scheme $s) => $s->supports($this->req['network'])))
-          ?: throw new \LogicException("No scheme verifies {$this->req['network']}.");
+        $scheme = $this->scheme();
         // Offline first: a signature too short for this tool costs no facilitator round trip.
         $reason = $scheme->verify($this->payment, $this->req) ?? $this->expiresTooSoon($scheme);
         if (null === $reason && null !== $this->payer) {
@@ -87,6 +93,143 @@ final class Sale
         }
 
         return $reason;
+    }
+
+    /**
+     * What this payment already bought, read once its signature proves who paid (offline: a forged
+     * payment costs nothing). ['state' => ...] to replay, ['refuse' => reason] to answer with, or
+     * NULL to admit it as new.
+     *
+     * @return ?array{state?: array<string, mixed>, refuse?: string}
+     */
+    public function stored(PaymentLedger $ledger, ?\Closure $lookup): ?array
+    {
+        if (null !== $this->scheme()->verify($this->payment, $this->req)) {
+            return null;
+        }
+        $key = Settlement::key($this->payment);
+        $state = $ledger->get($key);
+        if (null === $state) {
+            return null;
+        }
+
+        return match ($state['status'] ?? null) {
+            'delivered', 'settled' => isset($state['response']) ? ['state' => $state] : ['refuse' => 'already_settled'],
+            'pending' => $this->confirm($ledger, $key, $state, $lookup),
+            'claimed' => ['refuse' => 'in_progress'],
+            // Unknown: never admit it again.
+            default => ['refuse' => 'already_settled'],
+        };
+    }
+
+    /**
+     * Records this payment's outcome. A settled state becomes 'delivered' when $response is kept.
+     *
+     * @param array<string, mixed> $state status ('settled' or 'pending'), receipt, and any extra field
+     */
+    public function remember(PaymentLedger $ledger, array $state, ?ResponseInterface $response = null): void
+    {
+        $kept = self::capture($response);
+        if (null !== $kept) {
+            $state['response'] = $kept;
+            $state['status'] = 'settled' === $state['status'] ? 'delivered' : $state['status'];
+        }
+        $ledger->put(Settlement::key($this->payment), $state, self::ttl($this->payment));
+    }
+
+    /**
+     * Whether this sale still holds its claim (not freed): the money may have moved.
+     */
+    public function held(): bool
+    {
+        return $this->claimed;
+    }
+
+    /**
+     * How long a claim or state lives: until the signature expires, at most TTL seconds.
+     */
+    public static function ttl(array $payment): int
+    {
+        $until = $payment['payload']['authorization']['validBefore'] ?? null;
+        $left = is_numeric($until) ? (int) $until - time() : self::TTL;
+
+        return min(self::TTL, max(1, $left));
+    }
+
+    /**
+     * The response a stored state answers with (its receipt is added by the caller).
+     */
+    public static function restore(array $stored, ResponseFactoryInterface $responses, StreamFactoryInterface $streams): ResponseInterface
+    {
+        $response = $responses->createResponse($stored['status']);
+        foreach ($stored['headers'] as $name => $value) {
+            $response = $response->withHeader((string) $name, (string) $value);
+        }
+
+        return $response->withBody($streams->createStream((string) base64_decode($stored['body'], true)));
+    }
+
+    private function scheme(): Scheme
+    {
+        return current(array_filter($this->schemes, fn (Scheme $s) => $s->supports($this->req['network'])))
+          ?: throw new \LogicException("No scheme verifies {$this->req['network']}.");
+    }
+
+    /**
+     * A pending payment: asks the lookup what the chain did. Confirmed, it becomes settled; refuted, it is
+     * freed; unknown (or the lookup failed) it stays pending.
+     *
+     * @return ?array{state?: array<string, mixed>, refuse?: string}
+     */
+    private function confirm(PaymentLedger $ledger, string $key, array $state, ?\Closure $lookup): ?array
+    {
+        try {
+            $receipt = null === $lookup ? null : $lookup($state);
+        } catch (\Throwable) {
+            // The lookup goes to the facilitator: unreachable means still pending, not refused.
+            $receipt = null;
+        }
+        if (false === ($receipt['success'] ?? null)) {
+            $ledger->release($key);
+
+            return null;
+        }
+        if (true !== ($receipt['success'] ?? null)) {
+            return ['refuse' => 'settlement_pending'];
+        }
+        $state['receipt'] = $receipt;
+        $state['status'] = isset($state['response']) ? 'delivered' : 'settled';
+        $ledger->put($key, $state, self::ttl($this->payment));
+
+        return isset($state['response']) ? ['state' => $state] : ['refuse' => 'already_settled'];
+    }
+
+    /**
+     * The body is kept as base64 (JSON-safe) and only when it is a 2xx of at most MAX_BODY bytes.
+     *
+     * @return ?array{status: int, headers: array<string, string>, body: string}
+     */
+    private static function capture(?ResponseInterface $response): ?array
+    {
+        if (null === $response || $response->getStatusCode() < 200 || $response->getStatusCode() >= 300) {
+            return null;
+        }
+        $body = $response->getBody();
+        if (!$body->isSeekable() || (null !== $body->getSize() && $body->getSize() > self::MAX_BODY)) {
+            return null;
+        }
+        $body->rewind();
+        $text = (string) $body;
+        $body->rewind();
+        if (strlen($text) > self::MAX_BODY) {
+            return null;
+        }
+
+        return [
+            'status' => $response->getStatusCode(),
+            'headers' => array_map(static fn (array $values) => implode(', ', $values), $response->getHeaders()),
+            'body' => base64_encode($text),
+        ];
     }
 
     /**

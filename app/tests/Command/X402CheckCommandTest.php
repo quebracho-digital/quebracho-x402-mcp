@@ -73,6 +73,13 @@ final class X402CheckCommandTest extends KernelTestCase
         self::assertSame(0, $this->check(['X402_BUYER_MAX_TIMEOUT' => '120'])->getStatusCode());
     }
 
+    public function testAnUnreachableRedisFailsTheLedgerCheck(): void
+    {
+        $tester = $this->check(['X402_REDIS_URL' => 'redis://127.0.0.1:1']);
+        self::assertSame(1, $tester->getStatusCode());
+        self::assertStringContainsString('payment ledger', preg_replace('/\s+/', ' ', $tester->getDisplay()) ?? '');
+    }
+
     /** @return iterable<string, array{array<string, string>, string}> */
     public static function bad(): iterable
     {

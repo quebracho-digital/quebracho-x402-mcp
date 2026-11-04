@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Command;
 
+use App\X402\LedgerFactory;
 use App\X402\NetworkCheck;
 use App\X402\Pricing;
 use Quebracho\X402\PayingMcpClient;
@@ -44,6 +45,9 @@ final class X402CheckCommand
         // The seller's registered schemes (the ones X402McpMiddleware verifies with); see services.yaml.
         private readonly array $schemes,
         #[Autowire('%env(default::X402_PAID_TOOLS)%')] private readonly ?string $paidTools = null,
+        // The payment ledger the middleware uses (LedgerFactory); a null directory skips the check.
+        #[Autowire('%env(default::X402_REDIS_URL)%')] private readonly ?string $redisUrl = null,
+        #[Autowire('%kernel.project_dir%/var/x402-ledger')] private readonly ?string $ledgerDir = null,
     ) {
     }
 
@@ -75,6 +79,9 @@ final class X402CheckCommand
         $check('X402_NETWORK', fn () => NetworkCheck::assertSupported((string) $this->network, $this->schemes));
         $check('Pricing (X402_PAID_TOOLS, X402_PRICE(S), X402_PAY_TO, X402_NETWORK, X402_TIMEOUTS, X402_DURATIONS, #[PaidJob])', fn () => ($this->pricing)());
         $check('buyer (X402_BUDGETS, X402_MAX_PER_PAYMENT, X402_BUYER_KEY, X402_BUYER_MAX_TIMEOUT)', fn () => ($this->buyer)());
+        if (null !== $this->ledgerDir) {
+            $check('payment ledger (X402_REDIS_URL answers PING, else var/x402-ledger takes a claim)', fn () => LedgerFactory::check($this->redisUrl, $this->ledgerDir));
+        }
         $check('X402_TIMEOUTS within X402_BUYER_MAX_TIMEOUT', function (): void {
             foreach ((array) json_decode((string) $this->timeouts, true) as $tool => $seconds) {
                 if ((int) $seconds > (int) $this->buyerMax) {

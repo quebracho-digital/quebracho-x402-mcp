@@ -54,6 +54,14 @@ final class Facilitator
         return true === $out['isValid'] ? null : (\is_string($out['invalidReason'] ?? null) ? $out['invalidReason'] : 'invalid_payment');
     }
 
+    /**
+     * A settle's status by its paymentId, for ReceiptLookup. Mock: NULL (nothing was sent to a facilitator).
+     */
+    public function status(string $paymentId, string $network): ?array
+    {
+        return null === $this->remote ? null : $this->remote->status($paymentId, $network);
+    }
+
     public function __invoke(array $payment, array $req): array
     {
         if (null === $this->remote) {

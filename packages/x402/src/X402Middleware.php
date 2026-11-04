@@ -53,6 +53,14 @@ final class X402Middleware implements MiddlewareInterface
      * @param ?\Closure                 $resource
      *                                            fn(ServerRequestInterface): array — the 402's resource (url,
      *                                            description, mimeType); default: the request URL
+     * @param ?PaymentLedger            $ledger
+     *                                            Keeps each payment's outcome, so a retry gets the stored response
+     *                                            (replayed, not run again), 409 while it is in progress, or 409 when
+     *                                            it settled without a response to keep. Replaces $claim and $release.
+     * @param ?\Closure                 $lookup
+     *                                            fn(array $state): ?array — asks the chain about a 'pending' payment:
+     *                                            a receipt with success true settles it, success false frees it, NULL
+     *                                            (or no lookup) answers 409 settlement_pending.
      */
     public function __construct(
         private readonly array $schemes,
@@ -65,6 +73,8 @@ final class X402Middleware implements MiddlewareInterface
         private readonly ?\Closure $verify = null,
         private readonly ?\Closure $release = null,
         private readonly ?\Closure $resource = null,
+        private readonly ?PaymentLedger $ledger = null,
+        private readonly ?\Closure $lookup = null,
     ) {
     }
 
@@ -92,7 +102,13 @@ final class X402Middleware implements MiddlewareInterface
         if (false === $req) {
             return $this->required($accepts, $resource, 'The payment matches none of the accepted offers');
         }
-        $sale = new Sale($this->schemes, $this->claim, $this->settle, $this->events, $this->verify, $this->release, $payment, $req);
+        $sale = $this->sale($payment, $req);
+        if (null !== $this->ledger) {
+            $stored = $sale->stored($this->ledger, $this->lookup);
+            if (null !== $stored) {
+                return isset($stored['refuse']) ? $this->json(409, ['error' => $stored['refuse']]) : $this->replay($stored['state']);
+            }
+        }
         $reason = $sale->admit();
         if (Sale::UNAVAILABLE === $reason) {
             return $this->json(502, ['error' => $reason]);
@@ -104,6 +120,7 @@ final class X402Middleware implements MiddlewareInterface
         if ($sale->upfront()) {
             // Money first; once it moved, the receipt goes with whatever the handler answers.
             $receipt = $sale->settle();
+            $this->record($sale, $receipt);
             if (true !== $receipt['success']) {
                 return $this->failed($accepts, $resource, $receipt);
             }
@@ -116,6 +133,7 @@ final class X402Middleware implements MiddlewareInterface
                 throw $e;
             }
             $sale->ran($response->getStatusCode());
+            $this->record($sale, $receipt, $response);
 
             return $response->withHeader(PaymentHeaders::RESPONSE, PaymentHeaders::encode($receipt));
         }
@@ -134,11 +152,48 @@ final class X402Middleware implements MiddlewareInterface
             return $response;
         }
         $receipt = $sale->settle($status);
+        $this->record($sale, $receipt, $response);
         if (true !== $receipt['success']) {
             return $this->failed($accepts, $resource, $receipt);
         }
 
         return $response->withHeader(PaymentHeaders::RESPONSE, PaymentHeaders::encode($receipt));
+    }
+
+    /**
+     * The claim and release come from the ledger when there is one, else from the closures.
+     */
+    private function sale(array $payment, array $req): Sale
+    {
+        if (null === $this->ledger) {
+            return new Sale($this->schemes, $this->claim, $this->settle, $this->events, $this->verify, $this->release, $payment, $req);
+        }
+        $ledger = $this->ledger;
+        $ttl = Sale::ttl($payment);
+
+        return new Sale($this->schemes, fn (string $key): bool => $ledger->claim($key, $ttl), $this->settle, $this->events, $this->verify, fn (string $key) => $ledger->release($key), $payment, $req);
+    }
+
+    /**
+     * Stores what happened, when there is a ledger: a settled payment (with the response, if any), or a
+     * pending one whose claim was kept.
+     */
+    private function record(Sale $sale, array $receipt, ?ResponseInterface $response = null): void
+    {
+        if (null === $this->ledger) {
+            return;
+        }
+        if (true === $receipt['success']) {
+            $sale->remember($this->ledger, ['status' => 'settled', 'receipt' => $receipt], $response);
+        } elseif ($sale->held()) {
+            $sale->remember($this->ledger, ['status' => 'pending', 'receipt' => $receipt], $response);
+        }
+    }
+
+    private function replay(array $state): ResponseInterface
+    {
+        return Sale::restore($state['response'], $this->responses, $this->streams)
+          ->withHeader(PaymentHeaders::RESPONSE, PaymentHeaders::encode($state['receipt']));
     }
 
     /**
