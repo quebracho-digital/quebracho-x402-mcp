@@ -52,7 +52,7 @@ final class LedgerReplayTest extends TestCase
         return static fn (array $payment, array $req): array => ['success' => false, 'errorReason' => 'settlement_pending', 'transaction' => $transaction, 'network' => $req['network']];
     }
 
-    private function http(?\Closure $settle = null, ?\Closure $lookup = null, ?PaymentLedger $ledger = null, bool $upfront = false): X402Middleware
+    private function http(?\Closure $settle = null, ?\Closure $lookup = null, ?PaymentLedger $ledger = null, bool $upfront = false, ?\Closure $sensitive = null): X402Middleware
     {
         $req = Networks::requirements('eip155:84532', '0.01', self::PAY_TO);
         if ($upfront) {
@@ -60,10 +60,10 @@ final class LedgerReplayTest extends TestCase
         }
         $f = new Psr17Factory();
 
-        return new X402Middleware([new EvmExact()], static fn (ServerRequestInterface $r) => [$req], $this->unusedClaim(), $f, $f, $settle ?? Settlement::mock(), ledger: $ledger ?? $this->ledger, lookup: $lookup);
+        return new X402Middleware([new EvmExact()], static fn (ServerRequestInterface $r) => [$req], $this->unusedClaim(), $f, $f, $settle ?? Settlement::mock(), ledger: $ledger ?? $this->ledger, lookup: $lookup, sensitive: $sensitive);
     }
 
-    private function mcp(?\Closure $settle = null, ?\Closure $lookup = null, ?PaymentLedger $ledger = null, bool $upfront = false): X402McpMiddleware
+    private function mcp(?\Closure $settle = null, ?\Closure $lookup = null, ?PaymentLedger $ledger = null, bool $upfront = false, ?\Closure $sensitive = null): X402McpMiddleware
     {
         $req = Networks::requirements('eip155:84532', '0.01', self::PAY_TO);
         if ($upfront) {
@@ -71,7 +71,41 @@ final class LedgerReplayTest extends TestCase
         }
         $f = new Psr17Factory();
 
-        return new X402McpMiddleware([new EvmExact()], static fn (array $params) => 'wisdom' === $params['name'] ? [$req] : null, $this->unusedClaim(), $f, $f, $settle ?? Settlement::mock(), ledger: $ledger ?? $this->ledger, lookup: $lookup);
+        return new X402McpMiddleware([new EvmExact()], static fn (array $params) => 'wisdom' === $params['name'] ? [$req] : null, $this->unusedClaim(), $f, $f, $settle ?? Settlement::mock(), ledger: $ledger ?? $this->ledger, lookup: $lookup, sensitive: $sensitive);
+    }
+
+    /** The real ledger, recording every state it is asked to put. */
+    private function spyLedger(): PaymentLedger
+    {
+        return new class($this->ledger) implements PaymentLedger {
+            /** @var list<array<string, mixed>> */
+            public array $puts = [];
+
+            public function __construct(private readonly PaymentLedger $real)
+            {
+            }
+
+            public function claim(string $key, int $ttl): bool
+            {
+                return $this->real->claim($key, $ttl);
+            }
+
+            public function get(string $key): ?array
+            {
+                return $this->real->get($key);
+            }
+
+            public function put(string $key, array $state, int $ttl): void
+            {
+                $this->puts[] = $state;
+                $this->real->put($key, $state, $ttl);
+            }
+
+            public function release(string $key): void
+            {
+                $this->real->release($key);
+            }
+        };
     }
 
     /** The real ledger, except that each operation named in $down throws LedgerUnavailableException (a store that is down). */
@@ -631,5 +665,75 @@ final class LedgerReplayTest extends TestCase
         self::assertTrue($retry['result']['isError']);
         self::assertSame('needs_review', $retry['result']['structuredContent']['error']);
         self::assertSame(1, $this->runs);
+    }
+
+    /** @return iterable<string, array{\Closure, bool}> */
+    public static function sensitiveFlows(): iterable
+    {
+        foreach ([false, true] as $upfront) {
+            $flow = $upfront ? 'upfront' : 'default';
+            yield "$flow, marked" => [static fn (ServerRequestInterface|array $r): bool => true, $upfront];
+            // Fail-closed: a check that throws keeps nothing either.
+            yield "$flow, check throws" => [static fn (ServerRequestInterface|array $r): bool => throw new \RuntimeException('down'), $upfront];
+        }
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('sensitiveFlows')]
+    public function testASensitivePaymentIsDeliveredButItsBodyIsNeverStored(\Closure $sensitive, bool $upfront): void
+    {
+        $ledger = $this->spyLedger();
+        $middleware = $this->http(ledger: $ledger, upfront: $upfront, sensitive: $sensitive);
+        $payment = $this->httpPayment($middleware);
+
+        $response = $middleware->process($this->httpCall($payment), $this->handler());
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('paid content', (string) $response->getBody());
+        self::assertNotEmpty($ledger->puts);
+        foreach ($ledger->puts as $state) {
+            self::assertArrayNotHasKey('response', $state);
+        }
+
+        // The retry neither replays the body nor runs the handler again.
+        $again = $middleware->process($this->httpCall($payment), $this->handler());
+        self::assertSame(409, $again->getStatusCode());
+        self::assertSame('already_settled', json_decode((string) $again->getBody(), true)['error']);
+        self::assertStringNotContainsString('paid content', (string) $again->getBody());
+        self::assertSame(1, $this->runs);
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('sensitiveFlows')]
+    public function testMcpSensitiveCallIsDeliveredButItsAnswerIsNeverStored(\Closure $sensitive, bool $upfront): void
+    {
+        $ledger = $this->spyLedger();
+        $seen = [];
+        $spy = static function (array $params) use ($sensitive, &$seen): bool {
+            $seen[] = $params['name'];
+
+            return $sensitive($params);
+        };
+        $middleware = $this->mcp(ledger: $ledger, upfront: $upfront, sensitive: $spy);
+        $payment = $this->mcpPayment($middleware);
+        $seen = [];
+
+        $answer = self::answer($middleware->process(self::mcpCall(2, $payment), $this->toolHandler()));
+        self::assertSame('paid content', $answer['result']['content'][0]['text']);
+        self::assertSame(['wisdom'], $seen, 'called once per paid call');
+        foreach ($ledger->puts as $state) {
+            self::assertArrayNotHasKey('response', $state);
+        }
+
+        $retry = self::answer($middleware->process(self::mcpCall(3, $payment), $this->toolHandler()));
+        self::assertTrue($retry['result']['isError']);
+        self::assertSame('already_settled', $retry['result']['structuredContent']['error']);
+        self::assertSame(1, $this->runs);
+    }
+
+    public function testNotSensitiveStillStoresTheBody(): void
+    {
+        $ledger = $this->spyLedger();
+        $middleware = $this->http(ledger: $ledger, sensitive: static fn (ServerRequestInterface $r): bool => false);
+        $middleware->process($this->httpCall($this->httpPayment($middleware)), $this->handler());
+
+        self::assertArrayHasKey('response', end($ledger->puts));
     }
 }

@@ -65,6 +65,13 @@ final class X402Middleware implements MiddlewareInterface
      *                                            (or no lookup) answers 409 settlement_pending.
      *                                            A 'settling' state (outcome lost) is looked up only with a transaction
      *                                            or paymentId; otherwise, or when unknown, 409 settlement_unknown.
+     * @param ?\Closure                 $sensitive
+     *                                            fn(ServerRequestInterface): bool — TRUE when this request's answer must
+     *                                            not be kept: the ledger stores the payment's state (claim, settling,
+     *                                            handling, receipt) but never the response body. Called once per paid
+     *                                            request, before anything is stored; one that throws, or returns anything
+     *                                            but FALSE, counts as sensitive. A retry of a sensitive payment already
+     *                                            settled gets 409 already_settled, not the body. NULL: every answer is kept.
      */
     public function __construct(
         private readonly array $schemes,
@@ -79,6 +86,7 @@ final class X402Middleware implements MiddlewareInterface
         private readonly ?\Closure $resource = null,
         private readonly ?PaymentLedger $ledger = null,
         private readonly ?\Closure $lookup = null,
+        private readonly ?\Closure $sensitive = null,
     ) {
     }
 
@@ -107,6 +115,7 @@ final class X402Middleware implements MiddlewareInterface
             return $this->required($accepts, $resource, 'The payment matches none of the accepted offers');
         }
         $sale = $this->sale($payment, $req);
+        $keep = !self::sensitive($this->sensitive, $request);
         $run = null;
         try {
             if (null !== $this->ledger) {
@@ -135,7 +144,7 @@ final class X402Middleware implements MiddlewareInterface
         }
 
         if (null !== $run) {
-            return $this->deliverUpfront($request, $handler, $sale, $run['receipt']);
+            return $this->deliverUpfront($request, $handler, $sale, $run['receipt'], $keep);
         }
         if ($sale->upfront()) {
             // The intention is stored before the money can move: if the store refuses it, nothing is sent.
@@ -151,7 +160,7 @@ final class X402Middleware implements MiddlewareInterface
                 return $this->failed($accepts, $resource, $receipt);
             }
 
-            return $this->deliverUpfront($request, $handler, $sale, $receipt);
+            return $this->deliverUpfront($request, $handler, $sale, $receipt, $keep);
         }
 
         try {
@@ -174,7 +183,7 @@ final class X402Middleware implements MiddlewareInterface
             return $this->json(503, ['error' => 'ledger_unavailable']);
         }
         $receipt = $sale->settle($status);
-        $this->record($sale, $receipt, $response);
+        $this->record($sale, $receipt, $keep ? $response : null);
         if (true !== $receipt['success']) {
             return $this->failed($accepts, $resource, $receipt);
         }
@@ -201,7 +210,7 @@ final class X402Middleware implements MiddlewareInterface
      * does not deliver (a non-2xx, or an exception) leaves the state 'settled' with handler_ran false, so a
      * retry runs the handler again, with no second settle.
      */
-    private function deliverUpfront(ServerRequestInterface $request, RequestHandlerInterface $handler, Sale $sale, array $receipt): ResponseInterface
+    private function deliverUpfront(ServerRequestInterface $request, RequestHandlerInterface $handler, Sale $sale, array $receipt, bool $keep): ResponseInterface
     {
         // Written before the handler: if the process dies inside it, a retry finds 'handling' and does not run it again.
         if (!$sale->intend($this->ledger, ['status' => 'handling', 'receipt' => $receipt, 'handler_ran' => true])) {
@@ -221,7 +230,7 @@ final class X402Middleware implements MiddlewareInterface
         $status = $response->getStatusCode();
         $sale->ran($status);
         $delivered = $status >= 200 && $status < 300;
-        $this->record($sale, $receipt, $delivered ? $response : null, $delivered);
+        $this->record($sale, $receipt, $delivered && $keep ? $response : null, $delivered);
 
         return $response->withHeader(PaymentHeaders::RESPONSE, PaymentHeaders::encode($receipt));
     }
@@ -251,6 +260,23 @@ final class X402Middleware implements MiddlewareInterface
             }
         } catch (\Throwable) {
             // ponytail: no outcome event for a lost store; the settle's PaymentOutcome already went out.
+        }
+    }
+
+    /**
+     * Whether $sensitive marks this request (or MCP params) as one whose answer is not kept. Fail-closed: an
+     * exception, or any answer but FALSE, is sensitive. It only stops this seller keeping a copy; it says
+     * nothing about what other layers (an app cache) do with the same input.
+     */
+    public static function sensitive(?\Closure $sensitive, ServerRequestInterface|array $subject): bool
+    {
+        if (null === $sensitive) {
+            return false;
+        }
+        try {
+            return false !== $sensitive($subject);
+        } catch (\Throwable) {
+            return true;
         }
     }
 

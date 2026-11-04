@@ -73,8 +73,13 @@ use Quebracho\X402\{EvmExact, FileLedger, X402Middleware};
 $middleware = new X402Middleware([new EvmExact()], $price, $claim, $psr17, $psr17, $settle,
     ledger: new FileLedger('/var/x402-ledger'),   // one host; several hosts need a shared store
     lookup: $lookup,                              // optional, see "pending" below
+    sensitive: $sensitive,                        // optional: fn(request|params): bool, keep the state, never the body
 );
 ```
+
+A request `sensitive` marks (or one whose check throws) is delivered, but its
+body is never stored: a retry after it settled gets `already_settled`, not a
+replay.
 
 `claim($key, $ttl)` must be atomic (of N concurrent calls exactly one returns
 TRUE), `get`, `put` and `release` complete the interface. `FileLedger` is one

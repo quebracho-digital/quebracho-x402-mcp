@@ -71,6 +71,11 @@ final class X402McpMiddleware implements MiddlewareInterface
      * @param ?\Closure                 $lookup
      *                                            fn(array $state): ?array — asks the chain about a 'pending' payment, as
      *                                            in X402Middleware
+     * @param ?\Closure                 $sensitive
+     *                                            fn(array $params): bool — TRUE when this call's answer must not be kept,
+     *                                            as in X402Middleware: the state is stored, never the tool's answer.
+     *                                            Called once per paid call; throwing or any answer but FALSE counts as
+     *                                            sensitive. A retry of a settled sensitive call gets already_settled.
      */
     public function __construct(
         private readonly array $schemes,
@@ -88,6 +93,7 @@ final class X402McpMiddleware implements MiddlewareInterface
         private readonly ?\Closure $duration = null,
         private readonly ?PaymentLedger $ledger = null,
         private readonly ?\Closure $lookup = null,
+        private readonly ?\Closure $sensitive = null,
     ) {
     }
 
@@ -142,6 +148,7 @@ final class X402McpMiddleware implements MiddlewareInterface
         }
         $payer = null !== $this->payer ? fn (string $from): ?string => ($this->payer)($params, $from) : null;
         $sale = $this->sale($payment, $req, $payer, null !== $this->duration ? ($this->duration)($params) : 0);
+        $keep = !X402Middleware::sensitive($this->sensitive, $params);
         $run = null;
         $reason = null;
         try {
@@ -256,7 +263,7 @@ final class X402McpMiddleware implements MiddlewareInterface
             return $this->required($id, $accepts, $resource, 'unexpected_settle_error');
         }
         // $receipt is the failed one when the settle refused, else the one this answer carries.
-        $this->record($sale, $receipt, $response, $id);
+        $this->record($sale, $receipt, $keep ? $response : null, $id);
         if (isset($settled['receipt'])) {
             // Settled nothing: the spec says return only the payment error.
             return $this->required($id, $accepts, $resource, $settled['receipt']['errorReason']);
