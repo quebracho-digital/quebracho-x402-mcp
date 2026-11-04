@@ -299,4 +299,147 @@ final class FacilitatorsTest extends TestCase
         $this->assertInstanceOf(PaymentStatus::class, $this->circle([]));
         $this->assertNotInstanceOf(PaymentStatus::class, $this->http([]));
     }
+
+    /**
+     * Runs $build with the deprecations silenced, and returns its result.
+     */
+    private function quietly(\Closure $build): mixed
+    {
+        set_error_handler(static fn (): bool => true, \E_USER_DEPRECATED);
+        try {
+            return $build();
+        } finally {
+            restore_error_handler();
+        }
+    }
+
+    /**
+     * The [level, message] of each E_USER_DEPRECATED raised by $build.
+     *
+     * @return list<array{int, string}>
+     */
+    private function raised(\Closure $build): array
+    {
+        $seen = [];
+        set_error_handler(static function (int $level, string $message) use (&$seen): bool {
+            $seen[] = [$level, $message];
+
+            return true;
+        }, \E_USER_DEPRECATED);
+        try {
+            $build();
+        } finally {
+            restore_error_handler();
+        }
+
+        return $seen;
+    }
+
+    private const SELLER_KEY = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
+
+    public function testTheV021SellerCallStillSignsAndPolls(): void
+    {
+        $responses = [
+            $this->json(200, ['success' => false, 'extensions' => ['settlement-status' => ['paymentId' => 'pay-1']]]),
+            $this->json(200, ['status' => 'completed', 'transaction' => self::TX, 'network' => self::NETWORK, 'payer' => self::BUYER]),
+        ];
+        $f = new Psr17Factory();
+        $client = $this->client(function () use (&$responses) {
+            return array_shift($responses);
+        });
+        $facilitator = $this->quietly(fn () => new HttpFacilitator($client, $f, $f, 'https://x402.example/facilitator', null, new Signer(self::SELLER_KEY), 0, 3));
+
+        $result = $facilitator->settle($this->payment(), $this->req());
+
+        $this->assertTrue($result['success']);
+        $this->assertSame(self::TX, $result['transaction']);
+        $this->assertSame('https://x402.example/facilitator/settle', (string) $this->sent[0]->getUri());
+        $this->assertTrue($this->sent[0]->hasHeader('Facilitator-Seller-Proof'));
+        $this->assertSame('https://x402.example/facilitator/status/pay-1', (string) $this->sent[1]->getUri());
+        $this->assertTrue($this->sent[1]->hasHeader('Facilitator-Seller-Proof'));
+        $this->assertFalse($this->sent[1]->hasHeader('Authorization'));
+    }
+
+    public function testBearerOnlyPendingSettleIsPolledAsV021(): void
+    {
+        $responses = [
+            $this->json(200, ['success' => false, 'extensions' => ['settlement-status' => ['paymentId' => 'pay-2']]]),
+            $this->json(200, ['status' => 'completed', 'transaction' => self::TX, 'network' => self::NETWORK, 'payer' => self::BUYER]),
+        ];
+        $f = new Psr17Factory();
+        $client = $this->client(function () use (&$responses) {
+            return array_shift($responses);
+        });
+        // v0.2.1 polled whenever a settle came back pending with a paymentId, bearer or not: parity, DECISIONS.md D15.
+        $facilitator = new HttpFacilitator($client, $f, $f, 'https://x402.example/facilitator', 'KEY', null, 0, 3);
+
+        $result = $facilitator->settle($this->payment(), $this->req());
+
+        $this->assertTrue($result['success']);
+        $this->assertSame(self::TX, $result['transaction']);
+        $this->assertSame('https://x402.example/facilitator/status/pay-2', (string) $this->sent[1]->getUri());
+        $this->assertSame('Bearer KEY', $this->sent[1]->getHeaderLine('Authorization'));
+    }
+
+    public function testAHeaderRefusalOnSettleFreesTheClaimInsteadOfThrowing(): void
+    {
+        $f = new Psr17Factory();
+        $client = $this->client(fn () => $this->json(200, ['success' => true]));
+        $refuse = function (): array {
+            throw new \InvalidArgumentException('no proof for this body');
+        };
+        $facilitator = new HttpFacilitator($client, $f, $f, 'https://x402.example/facilitator', null, null, 0, 3, $refuse);
+
+        $result = $facilitator->settle($this->payment(), $this->req());
+
+        $this->assertFalse($result['success']);
+        $this->assertSame('seller_proof_failed', $result['errorReason']);
+        $this->assertSame('', $result['transaction']);
+        $this->assertCount(0, $this->sent, 'the refusal happens before anything is sent');
+    }
+
+    public function testTheSellerTriggersADeprecation(): void
+    {
+        $f = new Psr17Factory();
+        $client = $this->client(fn () => $this->json(200, ['isValid' => true]));
+        $raised = $this->raised(fn () => new HttpFacilitator($client, $f, $f, 'https://x402.example/facilitator', null, new Signer(self::SELLER_KEY)));
+
+        $this->assertCount(1, $raised);
+        $this->assertSame(\E_USER_DEPRECATED, $raised[0][0]);
+        $this->assertStringContainsString('CircleFacilitator', $raised[0][1]);
+    }
+
+    public function testWithoutTheSellerThereIsNoDeprecation(): void
+    {
+        $f = new Psr17Factory();
+        $client = $this->client(fn () => $this->json(200, ['isValid' => true]));
+        $this->assertSame([], $this->raised(fn () => new HttpFacilitator($client, $f, $f, 'https://x402.example/facilitator', 'KEY')));
+    }
+
+    public function testTheSellerAsANamedArgument(): void
+    {
+        $responses = [$this->json(200, ['isValid' => true])];
+        $f = new Psr17Factory();
+        $client = $this->client(function () use (&$responses) {
+            return array_shift($responses);
+        });
+        $facilitator = $this->quietly(fn () => new HttpFacilitator($client, $f, $f, 'https://x402.example/facilitator', seller: new Signer(self::SELLER_KEY), pollDelaySeconds: 0));
+
+        $this->assertTrue($facilitator->verify($this->payment(), $this->req())['isValid']);
+        $this->assertTrue($this->sent[0]->hasHeader('Facilitator-Seller-Proof'));
+    }
+
+    public function testTheHeadersHookAsANamedArgument(): void
+    {
+        $responses = [$this->json(200, ['isValid' => true])];
+        $f = new Psr17Factory();
+        $client = $this->client(function () use (&$responses) {
+            return array_shift($responses);
+        });
+        $facilitator = new HttpFacilitator($client, $f, $f, 'https://x402.example/facilitator', headers: static fn (string $purpose): array => ['X-Purpose' => $purpose]);
+
+        $facilitator->verify($this->payment(), $this->req());
+        $this->assertSame('verify', $this->sent[0]->getHeaderLine('X-Purpose'));
+        $this->assertFalse($this->sent[0]->hasHeader('Facilitator-Seller-Proof'));
+    }
 }

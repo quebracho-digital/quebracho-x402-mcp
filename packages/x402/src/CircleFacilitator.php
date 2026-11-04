@@ -40,7 +40,7 @@ final class CircleFacilitator implements Facilitator, PaymentStatus
                 'Facilitator-Seller-Proof' => SellerProof::header($seller, $purpose, $method, $body, $network),
             ];
         }
-        $this->http = new HttpFacilitator($http, $requests, $streams, self::URL, $bearer, $proof);
+        $this->http = new HttpFacilitator($http, $requests, $streams, self::URL, $bearer, headers: $proof);
     }
 
     public function verify(array $payment, array $req): array

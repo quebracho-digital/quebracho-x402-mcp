@@ -145,3 +145,14 @@ An accepted decision is never rewritten: if it changes, a new one replaces it.
   - `Concordium` and `ConcordiumExact` are removed (`git show b83b145` recovers them). `eip155:1` was the "unknown network" in four tests; they use `eip155:7`.
 - Consequences: a payment on `eip155:1` is no longer `invalid_network`; a seller chooses its networks, so none is charged unless offered. The library has 152 tests.
 
+
+## D15 — HttpFacilitator keeps v0.2.1's settle polling for every caller; the 0.2.x signature stays as a shim until 1.0 (2026-11-04)
+
+- Status: accepted (Leo: "vamos x la 1 con paridad exacta y dejalo documentado en decisions.")
+- Context: separating Circle into `CircleFacilitator` (commit d711bc8) left `HttpFacilitator` without the v0.2.1 behaviour for callers that pass a bearer and no seller: a pending settle with a `paymentId` came back as `settlement_pending` instead of being polled at `/status`. The v0.2.1 constructor also had a different sixth parameter (`?Signer $seller`, `pollDelaySeconds`, `pollAttempts`), which 0.2.x callers could not compile against.
+- Decision:
+  - `HttpFacilitator::settle` polls `/status` whenever `/settle` answers pending with a `paymentId`, with or without `$seller` or `$bearer`, as v0.2.1 did. The generic facilitator therefore also waits, up to `pollAttempts × pollDelaySeconds` (5 s by default), in that case only.
+  - The constructor keeps v0.2.1's positional parameters (`$seller`, `$pollDelaySeconds`, `$pollAttempts`). `$seller` raises `E_USER_DEPRECATED`; the new `$headers` closure is the last parameter.
+  - A header hook that refuses (for example a seller proof that cannot be built) answers `seller_proof_failed` and frees the claim; it no longer throws out of `settle`, which had been lost in the split.
+  - The shim and the copied poll loop are removed in 1.0, together with the rest of the 0.2.x compatibility.
+- Consequences: a caller that passes a bearer to Circle through `HttpFacilitator` gets the same answer as with 0.2.1. Callers that move to `CircleFacilitator` see no difference. Tests: `FacilitatorsTest` (bearer polling, refusal freeing the claim, the 0.2.1 call with a seller). The published 0.3.0 is checked separately by `CompatibilityTest`.

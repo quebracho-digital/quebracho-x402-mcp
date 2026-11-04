@@ -30,9 +30,16 @@ final class HttpFacilitator implements Facilitator
     private readonly string $url;
 
     /**
+     * @param ?Signer $seller
+     *                        @deprecated removed in 1.0: keyless Circle is CircleFacilitator, which sends the seller proof.
+     *                        Setting it triggers E_USER_DEPRECATED.
+     * @param int     $pollDelaySeconds
+     *                        @deprecated removed in 1.0, with $seller: CircleFacilitator polls /status.
+     * @param int     $pollAttempts
+     *                        @deprecated removed in 1.0, with $seller: CircleFacilitator polls /status.
      * @param ?\Closure $headers
      *                           fn (string $purpose, string $method, string $body, string $network): array<string, string>,
-     *                           the extra headers of each call (a wrapper's, e.g. Circle's seller proof). It may throw
+     *                           the extra headers of each call (a wrapper's). It may throw
      *                           \InvalidArgumentException before anything is sent.
      */
     public function __construct(
@@ -41,8 +48,14 @@ final class HttpFacilitator implements Facilitator
         private readonly StreamFactoryInterface $streams,
         string $url,
         #[\SensitiveParameter] private readonly ?string $bearer = null,
+        #[\SensitiveParameter] private readonly ?Signer $seller = null,
+        private readonly int $pollDelaySeconds = 1,
+        private readonly int $pollAttempts = 5,
         private readonly ?\Closure $headers = null,
     ) {
+        if (null !== $seller) {
+            trigger_error('HttpFacilitator with a $seller is deprecated and will be removed in the next major version: use CircleFacilitator instead.', \E_USER_DEPRECATED);
+        }
         if ('https' !== parse_url($url, \PHP_URL_SCHEME) || !parse_url($url, \PHP_URL_HOST)) {
             throw new \InvalidArgumentException("Not an https facilitator URL: $url");
         }
@@ -61,7 +74,43 @@ final class HttpFacilitator implements Facilitator
 
     public function settle(array $payment, array $req): array
     {
-        return $this->checkSettle($this->settleRaw($payment, $req), $payment, $req);
+        try {
+            return $this->settleWithPoll($payment, $req);
+        } catch (\InvalidArgumentException) {
+            // A header hook refused before anything was sent (a seller proof that cannot be built): a refusal, so the claim is freed.
+            return ['success' => false, 'errorReason' => 'seller_proof_failed', 'transaction' => '', 'network' => $req['network']];
+        }
+    }
+
+    /**
+     * As v0.2.1 settled, for every caller: a pending settle with a paymentId is polled at /status, with or without
+     * $seller or $bearer (paridad exacta con 0.2.1, decidida por Leo, DECISIONS.md D15).
+     * ponytail: a copy of CircleFacilitator::settle's poll, kept here because HttpFacilitator cannot build CircleFacilitator
+     * (it composes this class). Delete with the 0.2.x shim in 1.0.
+     */
+    private function settleWithPoll(array $payment, array $req): array
+    {
+        $out = $this->settleRaw($payment, $req);
+        $id = $out['extensions']['settlement-status']['paymentId'] ?? null;
+        for ($i = 0; true !== ($out['success'] ?? null) && is_string($id) && preg_match('/^[\w-]+$/', $id) && $i < $this->pollAttempts; ++$i) {
+            sleep($this->pollDelaySeconds);
+            try {
+                $status = $this->get("/status/$id", 'status', $req['network']);
+            } catch (FacilitatorException) {
+                // Settled or not, Circle knows it by this id.
+                break;
+            }
+            if ('completed' === ($status['status'] ?? null)) {
+                $out = ['success' => true, 'transaction' => $status['transaction'] ?? null, 'network' => $status['network'] ?? $req['network'], 'payer' => $status['payer'] ?? $out['payer'] ?? null];
+            } elseif ('failed' === ($status['status'] ?? null)) {
+                return ['success' => false, 'errorReason' => is_string($status['reason'] ?? null) ? $status['reason'] : 'settlement_failed', 'transaction' => '', 'network' => $req['network']];
+            }
+        }
+        if (true !== ($out['success'] ?? null) && is_string($id)) {
+            return ['success' => false, 'errorReason' => 'settlement_pending', 'transaction' => is_string($out['transaction'] ?? null) ? $out['transaction'] : '', 'network' => $req['network'], 'paymentId' => $id];
+        }
+
+        return $this->checkSettle($out, $payment, $req);
     }
 
     /**
@@ -139,6 +188,9 @@ final class HttpFacilitator implements Facilitator
         $request = $this->requests->createRequest($method, $this->url.$path);
         if (null !== $this->bearer) {
             $request = $request->withHeader('Authorization', "Bearer $this->bearer");
+        } elseif (null !== $this->seller && 'supported' !== $purpose) {
+            // ponytail: deprecated $seller path; delete with it in 1.0.
+            $request = $request->withHeader('Facilitator-Seller-Proof', SellerProof::header($this->seller, $purpose, $method, $body, $network));
         }
         if (null !== $this->headers) {
             foreach (($this->headers)($purpose, $method, $body, $network) as $name => $value) {
