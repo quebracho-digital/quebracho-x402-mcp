@@ -7,7 +7,7 @@ namespace App\Command;
 use App\X402\LedgerFactory;
 use App\X402\NetworkCheck;
 use App\X402\Pricing;
-use App\X402\SensitiveTools;
+use App\X402\SensitiveRules;
 use Quebracho\X402\PayingMcpClient;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -49,9 +49,10 @@ final class X402CheckCommand
         // The payment ledger the middleware uses (LedgerFactory); a null directory skips the check.
         #[Autowire('%env(default::X402_REDIS_URL)%')] private readonly ?string $redisUrl = null,
         #[Autowire('%kernel.project_dir%/var/x402-ledger')] private readonly ?string $ledgerDir = null,
-        // X402_SENSITIVE_TOOLS names must be served tools (SensitiveToolsWarmer, same check at cache:warmup).
+        // config/x402_sensitive.yaml well formed, X402_SENSITIVE_TOOLS names served tools (SensitiveToolsWarmer, same check at cache:warmup).
         #[Autowire(env: 'csv:X402_SENSITIVE_TOOLS')] private readonly array $sensitive = [],
         #[Autowire('%app.mcp_tools%')] private readonly array $served = [],
+        #[Autowire('%app.x402_sensitive_rules%')] private readonly array $sensitiveRules = [],
     ) {
     }
 
@@ -86,12 +87,7 @@ final class X402CheckCommand
         if (null !== $this->ledgerDir) {
             $check('payment ledger (X402_REDIS_URL takes a claim, else var/x402-ledger does)', fn () => LedgerFactory::check($this->redisUrl, $this->ledgerDir));
         }
-        $check('X402_SENSITIVE_TOOLS (each name a served tool)', function (): void {
-            $unknown = SensitiveTools::unknown($this->sensitive, $this->served);
-            if ([] !== $unknown) {
-                throw new \InvalidArgumentException(\sprintf('no served tool named %s: those answers would be kept in the ledger.', implode(', ', $unknown)));
-            }
-        });
+        $check('sensitive rules (config/x402_sensitive.yaml valid, no duplicates; X402_SENSITIVE_TOOLS and tool rules served)', fn () => SensitiveRules::check($this->sensitive, $this->sensitiveRules, $this->served));
         $check('X402_TIMEOUTS within X402_BUYER_MAX_TIMEOUT', function (): void {
             foreach ((array) json_decode((string) $this->timeouts, true) as $tool => $seconds) {
                 if ((int) $seconds > (int) $this->buyerMax) {

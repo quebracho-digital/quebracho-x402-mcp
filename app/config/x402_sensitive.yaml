@@ -1,0 +1,15 @@
+# Ways a caller asks "do not keep my answer" (App\X402\SensitiveRules, DECISIONS.md D18). A request any rule marks is
+# sensitive: the payment ledger keeps its state, never its answer. No rule matching means not sensitive.
+# Checked at cache:warmup (SensitiveToolsWarmer) and by app:x402:check: an unknown kind, a missing value, a duplicate or a
+# tool rule naming no served tool fails the deploy. X402_SENSITIVE_TOOLS adds one `tool` rule per name.
+#
+#   kind: header    name: an HTTP header; value: a directive (comma separated, case-insensitive, `name=arg` matches `name`).
+#                   unless_header: skip this rule when the request has that header (a fallback).
+#   kind: argument  name: an MCP tools/call argument; value: what it must be, compared strictly (true, not "true").
+#   kind: tool      name: an MCP tool; no value.
+parameters:
+    app.x402_sensitive_rules:
+        - { kind: header, name: Cache-Control, value: no-store }
+        # RFC 9111 §5.4: Pragma counts only when there is no Cache-Control.
+        - { kind: header, name: Pragma, value: no-cache, unless_header: Cache-Control }
+        - { kind: argument, name: sensitive, value: true }

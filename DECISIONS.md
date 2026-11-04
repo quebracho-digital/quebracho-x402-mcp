@@ -184,3 +184,21 @@ An accepted decision is never rewritten: if it changes, a new one replaces it.
   - A retry of a sensitive payment that already settled gets `already_settled` (409 over HTTP, an isError result over MCP) instead of the answer, and the handler does not run again: the buyer must keep the first answer.
   - Every sensitive `analyze_terms` call costs a model call, with no saving from the memo, while the price is the same.
   - Tests: `LedgerReplayTest` (no `response` in any ledger put, retry without body, a throwing check, default and upfront flows, HTTP and MCP), `TermsAnalyzerTest` (memo untouched, model asked), `SensitiveToolsTest` (the env reaches the middleware).
+
+## D18 — The ways to ask for no cache are a dictionary of rules in YAML, checked at deploy (2026-11-04)
+
+- Date: 2026-11-04
+- Status: accepted (Leo: "te confirmo", in reply to the proposal: Pragma only as a fallback for Cache-Control, and the rules in YAML validated at deploy.)
+- Context: D17 marked a request sensitive in two hard-coded ways, a tool named in `X402_SENSITIVE_TOOLS` or `arguments.sensitive` true (`App\X402\SensitiveTools`). HTTP already has its own ways to say "do not store this" (`Cache-Control: no-store`, the older `Pragma: no-cache`), and more may come; each one should be a line of config, not a code change.
+- Decision:
+  - `app/config/x402_sensitive.yaml` lists the rules (`app.x402_sensitive_rules`), each with `kind` (`header`, `argument`, `tool`), `name`, and `value` where the kind needs one. `App\X402\SensitiveRules` evaluates them; any rule that matches makes the request sensitive.
+  - `Cache-Control` containing the `no-store` directive is sensitive. The header is parsed into directives (comma separated, spaces trimmed, any case, `name=arg` matches `name`), never searched as a substring.
+  - `Pragma: no-cache` is sensitive only as a fallback: its rule has `unless_header: Cache-Control`, so a request that carries `Cache-Control` is judged by it alone (RFC 9111, §5.4).
+  - `arguments.sensitive === true` (strict) and `X402_SENSITIVE_TOOLS` keep working: the first is a shipped `argument` rule, the second becomes one `tool` rule per name.
+  - No rule matching means not sensitive: marking only removes the ledger's copy, so the default is not to mark.
+  - The rules are validated at deploy (`SensitiveToolsWarmer` at `cache:warmup`, and `app:x402:check`): an unknown kind, an empty name, a value missing or wrong for its kind, an unexpected key, a duplicate (header names and directives compared case-insensitively, the env and the YAML together) or a `tool` rule naming no served tool fails it.
+  - The library does not change: it still only receives the decision through `$sensitive`.
+- Consequences:
+  - `header` rules read an HTTP request (`X402Middleware`); `argument` and `tool` rules read MCP params (`X402McpMiddleware`, which passes only the params, so headers on an MCP call are not seen). The app has no paid HTTP route today, so the header rules are covered by direct tests of `SensitiveRules` only.
+  - A quoted directive argument containing commas (`no-cache="a, no-store"`) can produce a stray `no-store` token and mark the request; that errs toward not storing.
+  - Tests: `SensitiveRulesTest` (headers, precedence, arguments, tools, no rule, invalid YAML, the warmer), `SensitiveToolsTest` and `SensitiveToolsWarmerTest` (the env still works).
