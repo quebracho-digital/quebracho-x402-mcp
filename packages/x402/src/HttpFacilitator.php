@@ -22,6 +22,11 @@ use Psr\Http\Message\StreamFactoryInterface;
  */
 final class HttpFacilitator implements Facilitator
 {
+    /**
+     * @deprecated since 0.2: use CircleFacilitator::URL with CircleFacilitator. Kept so 0.1.x callers still compile.
+     */
+    public const CIRCLE = CircleFacilitator::URL;
+
     private readonly string $url;
 
     /**
