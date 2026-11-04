@@ -148,6 +148,7 @@ final class Sale
      */
     public function intend(?PaymentLedger $ledger, array $state): bool
     {
+        $this->intent($state);
         if (null === $ledger) {
             return true;
         }
@@ -157,6 +158,30 @@ final class Sale
             return true;
         } catch (\Throwable) {
             return false;
+        }
+    }
+
+    /**
+     * PaymentIntent, before the write it announces (and so before the settle or the handler): a crash after
+     * the send then still leaves a log line. A broken listener must not block the payment, as in outcome().
+     *
+     * @param array<string, mixed> $state
+     */
+    private function intent(array $state): void
+    {
+        try {
+            $receipt = is_array($state['receipt'] ?? null) ? $state['receipt'] : [];
+            $ref = static fn (mixed $v): ?string => is_string($v) && '' !== $v ? $v : null;
+            $this->events?->dispatch(new PaymentIntent(
+                $state['status'],
+                Settlement::key($this->payment),
+                ['network' => $this->req['network'], 'from' => $this->scheme()->payer($this->payment)],
+                ['network' => $this->req['network'], 'payTo' => $this->req['payTo'], 'amount' => $this->req['amount'], 'asset' => $this->req['asset']],
+                $ref($receipt['paymentId'] ?? null),
+                $ref($receipt['transaction'] ?? null),
+            ));
+        } catch (\Throwable) {
+            // ponytail: a broken log listener must not block a sale; the intent is then only in the ledger.
         }
     }
 
