@@ -303,15 +303,22 @@ published in the tool's `_meta` in `tools/list`
 on a tool named `*_start` or `*_result` without the flag, on a flag missing
 from `_meta`, on a deposit price that is no positive decimal, on two tools
 with one name, and on a pair that does not point back with the other role.
-Only tools inside the served registry (`App\Mcp\` in `mcp.yaml`) count.
+The catalog is read from the tools the MCP bundle actually registered on each
+server, so a tool served through a service id the registry (`App\Mcp\` in
+`mcp.yaml`) matches counts even when its class lives elsewhere, and the build
+fails if a served tool is missing from it.
 
-Before any payment is read, a paid call missing an argument its tool needs
-(a parameter without a default) is a JSON-RPC `-32602` error, so a `_start`
-deposit is never charged for a call that cannot run. Known limit: only the
-presence of each argument is checked, not its type; a wrong type reaches the
-tool, and on an upfront tool that is after the money moved. The middleware
-then dispatches a `failed_after_settle` `PaymentOutcome` (it carries the
-payment, so payer and nonce) for a manual refund, and the receipt goes back in `error.data["x402/payment-response"]`.
+Before any payment is read, a paid call's arguments are checked against its
+tool's input schema, the one the SDK generates and serves in `tools/list`,
+with the SDK's own validator (`SchemaValidator`, as `CallToolHandler` uses
+it): missing or `null` where not allowed, wrong types, values outside an
+enum. A call the tool would refuse is a JSON-RPC `-32602` error, so a `_start`
+deposit is never charged for it. What the schema cannot say (a value the tool
+itself rejects, for example a text over 1,200 words) still reaches the tool;
+on an upfront tool that is after the money moved, so the middleware
+dispatches a `failed_after_settle` `PaymentOutcome` (it carries the payment,
+so payer and nonce) for a manual refund, and the receipt goes back in
+`error.data["x402/payment-response"]`.
 
 A call costs roughly a quarter of a cent at DeepSeek V4.1
 Flash's listed prices (our estimate; the Hugging Face bill is not checked yet).
@@ -389,8 +396,9 @@ ddev exec --dir /var/www/html/app bin/console app:screening check 0x…
 ## Configuration
 
 `app/.env` holds working defaults. Override them in `app/.env.local` (git-ignored).
-On every deploy, after `composer install`, run `bin/console app:x402:check`:
-Pricing, the limiters and the buyer's budget are otherwise only built on the
+On every deploy, after `composer install`, run `bin/console cache:clear` (not
+`cache:warmup`, which can keep the old container) and then
+`bin/console app:x402:check`: Pricing, the limiters and the buyer's budget are otherwise only built on the
 first request, and the command exits 1 naming each bad value: a name in
 `X402_PAID_TOOLS`, `X402_PRICES`, `X402_TIMEOUTS` or `X402_DURATIONS` that is
 no tool (a typo there would leave the tool you meant to charge free), a price
@@ -398,7 +406,11 @@ that is not a positive amount for any paid tool (`X402_PRICE`, `X402_PRICES`
 or a `#[PaidJob]` price), a limit that is not a positive integer, a bad
 timeout or duration, a buyer budget that does not build, and an
 `X402_TIMEOUTS` above `X402_BUYER_MAX_TIMEOUT` (our own agent would refuse
-it). The same Pricing errors also answer every `/mcp` request with a 500.
+it), and an `X402_PRICES` entry for a tool that is not paid. A typo in a
+tool name is reported before the timeout or duration error it causes. An
+empty `X402_PAID_TOOLS` is only a warning (every tool free but the
+`#[PaidJob]` ones). The same Pricing errors also answer every `/mcp` request
+with a 500.
 
 | Variable | Default | Meaning |
 |---|---|---|
