@@ -337,4 +337,63 @@ in Delaware'],
         self::assertSame(['arbitration' => ['binding arbitration in Delaware']], $analyzer->analyze(self::TEXT)['categories']);
         self::assertSame(2, $calls->n, 'the second call went to the model: the failure was not kept');
     }
+
+    /** A memo that counts every touch ($touches->n) and otherwise behaves as an ArrayAdapter. */
+    private function touchCountingCache(\stdClass $touches): CacheInterface
+    {
+        return new class($touches) implements CacheInterface {
+            private ArrayAdapter $real;
+
+            public function __construct(private readonly \stdClass $touches)
+            {
+                $this->real = new ArrayAdapter();
+            }
+
+            public function get(string $key, callable $callback, ?float $beta = null, ?array &$metadata = null): mixed
+            {
+                ++$this->touches->n;
+
+                return $this->real->get($key, $callback, $beta, $metadata);
+            }
+
+            public function delete(string $key): bool
+            {
+                ++$this->touches->n;
+
+                return $this->real->delete($key);
+            }
+        };
+    }
+
+    public function testASensitiveCallNeverReadsNorWritesTheMemoAndAsksTheModel(): void
+    {
+        $touches = new \stdClass();
+        $touches->n = 0;
+        [$analyzer, $calls] = $this->counting(['{"arbitration": ["binding arbitration in Delaware"]}'], $this->touchCountingCache($touches));
+
+        $analyzer->analyze(self::TEXT, sensitive: true);
+        $r = $analyzer->analyze(self::TEXT, sensitive: true);
+
+        self::assertSame(['arbitration' => ['binding arbitration in Delaware']], $r['categories']);
+        self::assertSame(0, $touches->n, 'the memo was not touched');
+        self::assertSame(2, $calls->n, 'each sensitive call asks the model');
+
+        // Not written: the next unmarked call is a miss, then a hit as before.
+        $analyzer->analyze(self::TEXT);
+        $analyzer->analyze(self::TEXT);
+        self::assertSame(3, $calls->n);
+        self::assertSame(2, $touches->n);
+    }
+
+    public function testTheToolPassesSensitiveToTheAnalyzer(): void
+    {
+        [$analyzer, $calls] = $this->counting(['{}']);
+        $tool = $this->tool($analyzer);
+
+        $tool(self::TEXT);
+        $tool(self::TEXT);
+        self::assertSame(1, $calls->n, 'unmarked: the memo answers the second call');
+        $tool(self::TEXT, true);
+        self::assertSame(2, $calls->n, 'sensitive: the model is asked although the memo has the text');
+    }
 }

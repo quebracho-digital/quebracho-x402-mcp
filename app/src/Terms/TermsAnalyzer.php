@@ -88,11 +88,19 @@ final class TermsAnalyzer
      * @return array{model: string, categories: array<string, list<string>>, quotes_dropped: int}
      *
      * @throws \InvalidArgumentException The text is empty or longer than MAX_WORDS
+     * $sensitive skips the memo both ways: it is not read (a hit's speed would tell the caller someone sent this
+     * text in the last 7 days) and not written (no trace of this text's answer). It protects only the caller who
+     * sets it: a text someone else sent unmarked is still in the memo, and still shows as a fast answer to anyone
+     * who asks without the flag (DECISIONS.md, D17).
+     *
      * @throws \RuntimeException         The model did not answer with a JSON object
      */
-    public function analyze(string $text): array
+    public function analyze(string $text, bool $sensitive = false): array
     {
         $text = $this->check($text);
+        if ($sensitive) {
+            return $this->ask($text);
+        }
 
         // The memo skips the model call only: the caller is still charged and rate limited. A throw in the
         // callback (no JSON, a refused text) saves nothing, so only valid answers are kept.

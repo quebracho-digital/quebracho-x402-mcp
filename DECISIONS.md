@@ -170,3 +170,17 @@ An accepted decision is never rewritten: if it changes, a new one replaces it.
 - Consequences:
   - D15 is partially modified in timing: a settle waits at most `(pollAttempts − 1) × pollDelaySeconds` (4 s by default, not 5 s), and not at all before the first query. The v0.2.1 wait before the first query is not kept.
   - Tests: `testTheFirstStatusQueryGoesOutBeforeAnyDelay` uses a 60 s delay; a leading sleep would fail its elapsed-time check after a real minute. The other polling tests run with a 0 s delay, so they do not measure timing.
+
+## D17 — Sensitive requests are not cached; the memo's membership oracle is an accepted, documented risk (2026-11-04)
+
+- Date: 2026-11-04
+- Status: accepted (Leo: "podemos definir un nuevo campo que marque la sensibilidad? agentes que manejen informacion sensible, no se cachea nada? mientras aceptamos y documentamos como riesgo conocido.")
+- Context: `analyze_terms` memoises each answer for 7 days under a hash of the text (`TermsAnalyzer`, `terms.cache`), so the same text is not sent to the model twice. A memo hit answers in milliseconds, a miss takes the model's seconds: any payer can time a call and learn whether someone sent exactly that text in the last 7 days (a membership oracle). The payment ledger also keeps each delivered answer, so a retry replays it; for a sensitive call that copy is one more trace of its content.
+- Decision:
+  - Library: `X402Middleware` and `X402McpMiddleware` take an optional last parameter `?\Closure $sensitive` (`fn(ServerRequestInterface|array $params): bool`). When it marks a paid request, the ledger keeps the payment's state (claim, settling, handling, receipt) but never the response body. It is called once per paid request, before anything is stored; one that throws, or returns anything but `false`, counts as sensitive (fail-closed toward not storing). Without it nothing changes.
+  - App: `X402_SENSITIVE_TOOLS` (comma separated, empty by default) names tools whose answers the ledger never keeps (`App\X402\SensitiveTools`). A caller can also pass `sensitive: true` to `analyze_terms`: the memo is neither read nor written, the model is called directly, and the ledger keeps no copy of the answer.
+  - Not closed: the oracle stays open for texts other callers sent unmarked. A marked call protects only the one who marks it: its timing reveals nothing about other callers and it leaves no answer behind, but an unmarked text is still in the memo and still answers fast to anyone who asks without the flag. Accepted as a known risk.
+- Consequences:
+  - A retry of a sensitive payment that already settled gets `already_settled` (409 over HTTP, an isError result over MCP) instead of the answer, and the handler does not run again: the buyer must keep the first answer.
+  - Every sensitive `analyze_terms` call costs a model call, with no saving from the memo, while the price is the same.
+  - Tests: `LedgerReplayTest` (no `response` in any ledger put, retry without body, a throwing check, default and upfront flows, HTTP and MCP), `TermsAnalyzerTest` (memo untouched, model asked), `SensitiveToolsTest` (the env reaches the middleware).

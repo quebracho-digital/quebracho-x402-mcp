@@ -185,6 +185,12 @@ too long, is a tool error, so nothing is charged. The categories and the
 prompt come from our own curated dataset (below). The text is fenced as data, so a clause that says
 "ignore your instructions" is not obeyed.
 
+Answers are memoised for 7 days by a hash of the text, so a repeated text
+answers faster, and that speed tells a caller that someone sent the same text
+recently. Pass `sensitive: true` to skip the memo (not read, not written) and
+the ledger's copy of the answer; it protects your call, not texts others sent
+unmarked (a known, accepted risk: DECISIONS.md, D17).
+
 **The dataset behind it.** The 19 categories are not invented for the demo: they
 come from [`quebracho-digital/terminos-es`](https://huggingface.co/datasets/quebracho-digital/terminos-es),
 a dataset we curated on Hugging Face (project Lapacho, CC-BY-4.0; gated with
@@ -418,6 +424,7 @@ with a 500.
 | `X402_PRICE` | `0.01` | Price per paid call, in USD. |
 | `X402_PAY_TO` | `0x7e51…6510` | Who gets paid. **This is the author's wallet.** Change it to yours. |
 | `X402_PAID_TOOLS` | `wisdom,analyze_terms` | Comma-separated tool names that cost money. A `#[PaidJob]` tool is always paid, listed or not. A name here (or in `X402_PRICES`, `X402_TIMEOUTS`, `X402_DURATIONS`) that is no tool is a config error (`app:x402:check` exits 1; `/mcp` answers 500). |
+| `X402_SENSITIVE_TOOLS` | empty | Comma-separated tool names whose answers the payment ledger never keeps (only the payment's state): a retry of a settled payment gets `already_settled`, not the answer. A caller can also pass `sensitive: true` to `analyze_terms`, which also skips its memo. See DECISIONS.md, D17. |
 | `X402_FACILITATOR` | `mock` | Must be set explicitly: `mock` (verified signatures, nothing settled) or a facilitator URL such as `https://x402.org/facilitator` (real settle: on Base Sepolia by default, on a mainnet when `X402_NETWORK` is one you registered). Anything else fails closed: every `/mcp` request errors, nothing is served for free. |
 | `X402_REDIS_URL` | empty | Shared payment ledger, e.g. `redis://redis:6379` (DDEV). Each payment's state (claimed, delivered with its response, pending) lives there, so a retry replays the stored answer on any host. Unset: one host's files in `app/var/x402-ledger`. Set, and Redis down: every paid call fails (500), never a fallback to files, which would deliver one payment once per host. `app:x402:check` pings it. |
 | `X402_BUYER_KEY` | web3.js docs key | The agent's buyer key: the public web3.js key, holds testnet USDC; anyone can spend it. For a mainnet use your own key in `.env.local`, never in a committed file. |

@@ -95,6 +95,8 @@ services:
             $events: '@event_dispatcher'
             # A 'pending' payment is settled or freed by the chain (EVM receipt) or the facilitator (paymentId), not left to 409 until its TTL.
             $lookup: !closure ['@App\X402\ReceiptLookup', '__invoke']
+            # X402_SENSITIVE_TOOLS (or arguments.sensitive): the ledger keeps the state, never the answer (DECISIONS.md, D17).
+            $sensitive: !closure '@App\X402\SensitiveTools'
 
     # The 'x402' Monolog channel exists only with symfony/monolog-bundle (optional; config/packages/x402_log.php).
     # '@?' leaves the key out of the locator without it; PaymentLog asks at runtime with has().
