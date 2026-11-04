@@ -15,6 +15,7 @@ use Psr\EventDispatcher\EventDispatcherInterface;
 final class Sale
 {
     public const UNAVAILABLE = 'facilitator_unavailable';
+    public const UNEXPECTED_VERIFY = 'unexpected_verify_error';
 
     private ?AddressCheck $check = null;
     private bool $claimed = false;
@@ -60,12 +61,19 @@ final class Sale
         // a slow lookup started here is read before settling.
         $this->check = null === $reason ? AddressCheck::start($this->events, AddressCheck::PAYER, $scheme->payer($this->payment), $this->req) : null;
         $reason ??= $this->check?->reason();
+        $error = null;
         if (null === $reason && null !== $this->verify) {
             // Online (balance, nonce unused): a bad payment runs nothing and takes no claim.
             try {
-                $reason = ($this->verify)($this->payment, $this->req);
-            } catch (FacilitatorException) {
+                $verdict = ($this->verify)($this->payment, $this->req);
+                // NULL is good; a non-empty string is the reason. Anything else refuses, so an adapter that forgets NULL cannot approve by accident.
+                $reason = null === $verdict || (\is_string($verdict) && '' !== $verdict) ? $verdict : self::UNEXPECTED_VERIFY;
+            } catch (FacilitatorException $e) {
                 $reason = self::UNAVAILABLE;
+                $error = $e;
+            } catch (\Throwable $e) {
+                $reason = self::UNEXPECTED_VERIFY;
+                $error = $e;
             }
         }
         // Again after the online verify, which may have taken seconds of that validity.
@@ -75,7 +83,7 @@ final class Sale
             $reason = 'duplicate_settlement';
         }
         if (null !== $reason) {
-            $this->outcome('rejected', reason: $reason);
+            $this->outcome('rejected', reason: $reason, error: $error);
         }
 
         return $reason;
@@ -155,10 +163,10 @@ final class Sale
         }
     }
 
-    private function outcome(string $status, ?int $handlerStatus = null, ?array $receipt = null, ?string $reason = null): void
+    private function outcome(string $status, ?int $handlerStatus = null, ?array $receipt = null, ?string $reason = null, ?\Throwable $error = null): void
     {
         try {
-            $this->events?->dispatch(new PaymentOutcome($status, $this->payment, $this->req, $handlerStatus, $receipt, $reason));
+            $this->events?->dispatch(new PaymentOutcome($status, $this->payment, $this->req, $handlerStatus, $receipt, $reason, $error));
         } catch (\Throwable) {
             // ponytail: a broken log listener must not undo a sale (money may have moved); errors here are dropped.
         }

@@ -39,8 +39,12 @@ final class X402Middleware implements MiddlewareInterface
      *                                            Dispatches an AddressCheck on the payer and a PaymentOutcome; NULL: neither
      * @param ?\Closure                 $verify
      *                                            fn(array $payment, array $req): ?string — an online check (facilitator
-     *                                            /verify, eth_call) after the offline one, before the claim: a reason,
-     *                                            or NULL when good. NULL skips it: the handler may run for a payment
+     *                                            /verify, eth_call) after the offline one, before the claim. Returns NULL
+     *                                            when good, or a non-empty reason string. Any other return (an empty
+     *                                            string, FALSE, an array) or any exception refuses as
+     *                                            `unexpected_verify_error` (402), except a FacilitatorException, which
+     *                                            answers 502. Nothing is claimed and the handler does not run on a refusal.
+     *                                            NULL skips the check: the handler may run for a payment
      *                                            settle then refuses (its output withheld).
      * @param ?\Closure                 $release
      *                                            fn(string $key): void — frees a claim when nothing was charged (the

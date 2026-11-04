@@ -22,6 +22,17 @@ services:
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
 
+    # app:x402:check verifies X402_NETWORK has a scheme here. The list is written once (anchor x402_schemes),
+    # aliased by X402McpMiddleware below, so the check and the middleware cannot drift apart.
+    App\Command\X402CheckCommand:
+        arguments:
+            $schemes: &x402_schemes ['@Quebracho\X402\EvmExact']
+
+    # The same network check as app:x402:check, at cache:warmup (cache:clear, deploy): a bad X402_NETWORK fails the deploy.
+    App\X402\NetworkWarmer:
+        arguments:
+            $schemes: *x402_schemes
+
     # Faceted on purpose: only Quebracho's Ombú listings.
     App\Mcp\OmbuSearchTool:
         arguments:
@@ -44,7 +55,7 @@ services:
     # "mock" or a facilitator URL, never left implicit.
     Quebracho\X402\X402McpMiddleware:
         arguments:
-            $schemes: ['@Quebracho\X402\EvmExact']
+            $schemes: *x402_schemes
             $price: !closure '@App\X402\Pricing'
             $claim: !closure '@Quebracho\X402\FileClaims'
             $settle: !closure '@App\X402\Facilitator'

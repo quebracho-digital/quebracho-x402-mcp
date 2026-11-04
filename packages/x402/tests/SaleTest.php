@@ -7,6 +7,7 @@ namespace Quebracho\X402\Tests;
 use Nyholm\Psr7\Factory\Psr17Factory;
 use Nyholm\Psr7\Response;
 use Nyholm\Psr7\ServerRequest;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Psr\Http\Message\ResponseInterface;
@@ -104,6 +105,49 @@ final class SaleTest extends TestCase
         $this->assertSame('rejected', $this->outcomes[0]->status);
         // The claim was never taken: the same payment, once funded, still buys.
         $this->assertSame(200, $this->middleware(fn () => self::tx())->process($request, $this->handler())->getStatusCode());
+    }
+
+    public function testAVerifyThatPassesWithNullTakesTheClaim(): void
+    {
+        $this->assertSame(200, $this->middleware(fn () => self::tx(), verify: fn () => null)->process($this->paid(), $this->handler())->getStatusCode());
+    }
+
+    /** @return iterable<string, array{mixed}> */
+    public static function badVerdicts(): iterable
+    {
+        yield 'an empty string' => [''];
+        yield 'false' => [false];
+        yield 'an array' => [['reason' => 'x']];
+        yield 'an int' => [0];
+    }
+
+    #[DataProvider('badVerdicts')]
+    public function testAVerdictThatIsNotNullOrAReasonRefusesAsUnexpected(mixed $verdict): void
+    {
+        $request = $this->paid();
+        $refused = $this->middleware(fn () => self::tx(), verify: fn () => $verdict)->process($request, $this->handler());
+        $this->assertSame([402, 0], [$refused->getStatusCode(), $this->runs]);
+        $this->assertSame('unexpected_verify_error', json_decode((string) $refused->getBody(), true)['error']);
+        $this->assertSame('rejected', end($this->outcomes)->status);
+        $this->assertSame(200, $this->middleware(fn () => self::tx())->process($request, $this->handler())->getStatusCode());
+    }
+
+    public function testAVerifyThatThrowsRefusesWithUnexpectedVerifyErrorNotA500(): void
+    {
+        $request = $this->paid();
+        $refused = $this->middleware(verify: fn () => throw new \RuntimeException('boom'))->process($request, $this->handler());
+        $this->assertSame([402, 0], [$refused->getStatusCode(), $this->runs]);
+        $this->assertSame('unexpected_verify_error', json_decode((string) $refused->getBody(), true)['error']);
+        $this->assertSame('rejected', end($this->outcomes)->status);
+        // The claim was never taken: the same payment, once the check passes, still buys.
+        $this->assertSame(200, $this->middleware(fn () => self::tx())->process($request, $this->handler())->getStatusCode());
+    }
+
+    public function testTheVerifyExceptionReachesTheOutcome(): void
+    {
+        $this->middleware(verify: fn () => throw new \RuntimeException('boom'))->process($this->paid(), $this->handler());
+        $outcome = end($this->outcomes);
+        $this->assertSame(['rejected', 'unexpected_verify_error', 'boom', \RuntimeException::class], [$outcome->status, $outcome->reason, $outcome->error?->getMessage(), $outcome->error::class]);
     }
 
     public function testNothingChargedFreesTheClaim(): void

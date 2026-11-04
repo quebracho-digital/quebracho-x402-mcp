@@ -56,8 +56,13 @@ final class HttpFacilitator implements Facilitator
 
     public function settle(array $payment, array $req): array
     {
-        $out = $this->call('POST', '/settle', 'settle', $req['network'], $this->body($payment, $req));
-        $id = $out['extensions']['settlement-status']['paymentId'] ?? null;
+        try {
+            $out = $this->call('POST', '/settle', 'settle', $req['network'], $this->body($payment, $req));
+        } catch (\InvalidArgumentException) {
+            // The proof is built before anything is sent: a refusal, so the claim is freed.
+            return ['success' => false, 'errorReason' => 'seller_proof_failed', 'transaction' => '', 'network' => $req['network']];
+        }
+        $id =$out['extensions']['settlement-status']['paymentId'] ?? null;
         for ($i = 0; true !== ($out['success'] ?? null) && is_string($id) && preg_match('/^[\w-]+$/', $id) && $i < $this->pollAttempts; ++$i) {
             sleep($this->pollDelaySeconds);
             try {

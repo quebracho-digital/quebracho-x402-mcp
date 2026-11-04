@@ -72,19 +72,35 @@ final class PayingMcpClient implements ClientInterface
         foreach ($required['accepts'] ?? [] as $req) {
             [$scheme, $reason] = $this->budget->choose($this->schemes, $req, $this->events);
             if (null !== $reason) {
-                $this->onRefused?->__invoke(is_array($req) ? $req : [], $reason);
+                try {
+                    $this->onRefused?->__invoke(is_array($req) ? $req : [], $reason);
+                } catch (\Throwable) {
+                    // ponytail: a failing refusal callback is dropped; the PaymentRequired still goes to the caller.
+                }
                 continue;
             }
-            // Spent when signed: a signed authorization is money the seller can
-            // settle on its own, whatever it answers. Never refunded here.
-            $this->budget->spend($req);
+            // Signed first: a failed signature spends nothing.
             $payment = $scheme->pay($required, $req);
+            // Spent when signed, just before it is sent: a signed authorization is money
+            // the seller can settle on its own, whatever it answers. Never refunded here.
+            $this->budget->spend($req);
             $call['params']['_meta'][X402McpMiddleware::PAYMENT] = $payment;
             $paid = $request->withBody($this->streams->createStream(json_encode($call, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)));
-            [$response, $result] = $this->answer($this->client->sendRequest($paid), $call['id']);
+            try {
+                [$response, $result] = $this->answer($this->client->sendRequest($paid), $call['id']);
+            } catch (\Throwable $e) {
+                // It may have reached the seller: kept as unsettled, to be reclaimed once expired.
+                $this->budget->unsettled($req, $payment);
+
+                throw $e;
+            }
             $receipt = $result['_meta'][X402McpMiddleware::PAYMENT_RESPONSE] ?? null;
             if (is_array($receipt)) {
-                $this->onPaid?->__invoke((string) $call['params']['name'], $req, $receipt);
+                try {
+                    $this->onPaid?->__invoke((string) $call['params']['name'], $req, $receipt);
+                } catch (\Throwable) {
+                    // ponytail: errors of a logging callback are dropped, as Sale::outcome drops them.
+                }
             }
             if (($receipt['success'] ?? null) !== true) {
                 $this->budget->unsettled($req, $payment);

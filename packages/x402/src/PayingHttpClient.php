@@ -65,18 +65,30 @@ final class PayingHttpClient implements ClientInterface
         foreach ($required['accepts'] ?? [] as $req) {
             [$scheme, $reason] = $this->budget->choose($this->schemes, $req, $this->events);
             if (null !== $reason) {
-                $this->onRefused?->__invoke(is_array($req) ? $req : [], $reason);
+                try {
+                    $this->onRefused?->__invoke(is_array($req) ? $req : [], $reason);
+                } catch (\Throwable) {
+                    // ponytail: a failing refusal callback is dropped; the 402 still goes to the caller.
+                }
                 continue;
             }
-            // Spent when signed: a signed authorization is money the seller can
-            // settle on its own, whatever it answers. Never refunded here.
-            $this->budget->spend($req);
+            // Signed first: a failed signature spends nothing.
             $payment = $scheme->pay($required, $req);
+            // Spent when signed, just before it is sent: a signed authorization is money
+            // the seller can settle on its own, whatever it answers. Never refunded here.
+            $this->budget->spend($req);
             // The same request, paid: the body is read again from the start.
             if ($request->getBody()->isSeekable()) {
                 $request->getBody()->rewind();
             }
-            $paid = $this->client->sendRequest($request->withHeader(PaymentHeaders::SIGNATURE, PaymentHeaders::encode($payment)));
+            try {
+                $paid = $this->client->sendRequest($request->withHeader(PaymentHeaders::SIGNATURE, PaymentHeaders::encode($payment)));
+            } catch (\Throwable $e) {
+                // It may have reached the seller: kept as unsettled, to be reclaimed once expired.
+                $this->budget->unsettled($req, $payment);
+
+                throw $e;
+            }
             $receipt = $paid->getHeaderLine(PaymentHeaders::RESPONSE);
             try {
                 $receipt = '' === $receipt ? null : PaymentHeaders::decode($receipt);
@@ -84,7 +96,12 @@ final class PayingHttpClient implements ClientInterface
                 $receipt = null;
             }
             if (($receipt['success'] ?? null) === true) {
-                $this->onPaid?->__invoke($req, $receipt);
+                // The payment happened: a callback that fails must not cost the paid answer.
+                try {
+                    $this->onPaid?->__invoke($req, $receipt);
+                } catch (\Throwable) {
+                    // ponytail: errors of a logging callback are dropped, as Sale::outcome drops them.
+                }
             } else {
                 $this->budget->unsettled($req, $payment);
             }

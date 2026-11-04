@@ -61,7 +61,7 @@ final class FacilitatorsTest extends TestCase
     /**
      * A node answering JSON-RPC by method; a \RuntimeException answers with an error.
      */
-    private function chain(array $answers): ChainFacilitator
+    private function chain(array $answers, ?\Closure $serialize = null): ChainFacilitator
     {
         $f = new Psr17Factory();
         $client = $this->client(function (RequestInterface $r) use ($answers) {
@@ -71,7 +71,13 @@ final class FacilitatorsTest extends TestCase
             return new Response(200, [], json_encode($a instanceof \RuntimeException ? ['error' => ['message' => $a->getMessage()]] : ['result' => $a]));
         });
 
-        return new ChainFacilitator(new Rpc($client, $f, $f, 'https://rpc.example'), new Signer('0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a'), self::NETWORK, fn (string $name, callable $run) => $run(), null, 0, 3);
+        return new ChainFacilitator(new Rpc($client, $f, $f, 'https://rpc.example'), new Signer('0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a'), self::NETWORK, $serialize ?? fn (string $name, callable $run) => $run(), null, 0, 3);
+    }
+
+    /** Every node answer a settle needs, so the transaction is sent. */
+    private function sendable(): array
+    {
+        return ['eth_gasPrice' => '0x1', 'eth_maxPriorityFeePerGas' => '0x1', 'eth_estimateGas' => '0x1', 'eth_getTransactionCount' => '0x0', 'eth_sendRawTransaction' => self::TX];
     }
 
     private function payment(array $auth = []): array
@@ -144,6 +150,36 @@ final class FacilitatorsTest extends TestCase
         $this->assertSame(['transaction_reverted', false], [$reverted['errorReason'], $reverted['success']]);
     }
 
+    public function testALockFailureAfterTheSendKeepsTheHash(): void
+    {
+        // The lock throws after the transaction left (LockReleasingException): money moved, the claim stays.
+        $serialize = function (string $name, callable $run): mixed {
+            $run();
+            throw new \RuntimeException('lock release failed');
+        };
+        $result = $this->chain($this->sendable(), $serialize)->settle($this->payment(), $this->req());
+
+        $this->assertSame('settlement_pending', $result['errorReason']);
+        $this->assertMatchesRegularExpression('/^0x[0-9a-f]{64}$/', $result['transaction']);
+        $this->assertFalse($result['success']);
+    }
+
+    public function testALockFailureBeforeTheSendSendsNothing(): void
+    {
+        $result = $this->chain($this->sendable(), fn () => throw new \RuntimeException('lock busy'))->settle($this->payment(), $this->req());
+
+        $this->assertSame(['lock busy', ''], [$result['errorReason'], $result['transaction']]);
+        $this->assertSame([], $this->sent);
+    }
+
+    public function testALockErrorThatIsNotARuntimeExceptionIsARefusal(): void
+    {
+        $result = $this->chain($this->sendable(), fn () => throw new \TypeError('bad lock'))->settle($this->payment(), $this->req());
+
+        $this->assertSame(['settle_refused', ''], [$result['errorReason'], $result['transaction']]);
+        $this->assertSame([], $this->sent);
+    }
+
     public function testChainGasCapSendsNothing(): void
     {
         $f = new Psr17Factory();
@@ -175,6 +211,17 @@ final class FacilitatorsTest extends TestCase
             ['name' => 'payTo', 'type' => 'address'], ['name' => 'nonce', 'type' => 'bytes32'], ['name' => 'issuedAt', 'type' => 'uint64'], ['name' => 'expiresAt', 'type' => 'uint64'],
         ]], 'SellerRequest', ['purpose' => 'verify', 'method' => 'POST', 'bodyHash' => Eip712::keccak((string) $request->getBody()), 'network' => self::NETWORK, 'payTo' => $seller->address(), 'nonce' => $proof['nonce'], 'issuedAt' => $proof['issuedAt'], 'expiresAt' => $proof['expiresAt']]);
         $this->assertSame($seller->address(), Signer::recover($digest, $proof['signature']));
+    }
+
+    public function testASellerProofThatCannotBeBuiltRefusesBeforeSending(): void
+    {
+        // Solana is no EVM network for the proof: nothing leaves, and the refusal frees the claim.
+        $seller = new Signer('0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80');
+        $result = $this->http([], seller: $seller)->settle($this->payment(), ['network' => 'solana:devnet'] + $this->req());
+
+        $this->assertSame(['seller_proof_failed', '', 'solana:devnet'], [$result['errorReason'], $result['transaction'], $result['network']]);
+        $this->assertFalse($result['success']);
+        $this->assertSame([], $this->sent);
     }
 
     public function testBearerReplacesTheProof(): void

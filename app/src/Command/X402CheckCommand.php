@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Command;
 
+use App\X402\NetworkCheck;
 use App\X402\Pricing;
 use Quebracho\X402\PayingMcpClient;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -39,6 +40,9 @@ final class X402CheckCommand
         ])] private readonly array $limits,
         #[Autowire('%env(default::X402_TIMEOUTS)%')] private readonly ?string $timeouts,
         #[Autowire('%env(default::X402_BUYER_MAX_TIMEOUT)%')] private readonly ?string $buyerMax,
+        #[Autowire('%env(default::X402_NETWORK)%')] private readonly ?string $network,
+        // The seller's registered schemes (the ones X402McpMiddleware verifies with); see services.yaml.
+        private readonly array $schemes,
         #[Autowire('%env(default::X402_PAID_TOOLS)%')] private readonly ?string $paidTools = null,
     ) {
     }
@@ -67,6 +71,8 @@ final class X402CheckCommand
             $check("limiter $id", fn () => $factory()->create('app:x402:check'));
         }
         // Pricing's constructor prices every paid tool and refuses a name that is no tool.
+        // Sale refuses a payment on a network no Scheme supports with a 500, on every paid call: catch it at deploy.
+        $check('X402_NETWORK', fn () => NetworkCheck::assertSupported((string) $this->network, $this->schemes));
         $check('Pricing (X402_PAID_TOOLS, X402_PRICE(S), X402_PAY_TO, X402_NETWORK, X402_TIMEOUTS, X402_DURATIONS, #[PaidJob])', fn () => ($this->pricing)());
         $check('buyer (X402_BUDGETS, X402_MAX_PER_PAYMENT, X402_BUYER_KEY, X402_BUYER_MAX_TIMEOUT)', fn () => ($this->buyer)());
         $check('X402_TIMEOUTS within X402_BUYER_MAX_TIMEOUT', function (): void {

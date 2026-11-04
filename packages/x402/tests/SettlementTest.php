@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Quebracho\X402\Tests;
 
 use PHPUnit\Framework\TestCase;
+use Quebracho\X402\PaymentHeaders;
 use Quebracho\X402\Settlement;
 
 final class SettlementTest extends TestCase
@@ -44,6 +45,35 @@ final class SettlementTest extends TestCase
         }
         self::assertSame('insufficient_funds', Settlement::run(fn () => ['success' => false, 'errorReason' => 'insufficient_funds'], self::payment(), $req)['errorReason']);
         self::assertFalse(Settlement::run(fn () => throw new \RuntimeException(), self::payment(), $req)['success']);
+    }
+
+    public function testAReceiptThatCannotBeEncodedStillSettles(): void
+    {
+        // "1e999" decodes to INF: the money already moved, so the receipt must still encode.
+        $receipt = Settlement::run(fn () => ['success' => true, 'transaction' => '0xtx', 'network' => 'eip155:84532', 'payer' => '0xabc', 'extensions' => ['fee' => INF]], self::payment(), ['network' => 'eip155:84532']);
+        self::assertTrue($receipt['success']);
+        self::assertArrayNotHasKey('extensions', $receipt);
+        self::assertSame('0xtx', $receipt['transaction']);
+        PaymentHeaders::encode($receipt);
+    }
+
+    public function testADeeplyNestedExtensionIsDropped(): void
+    {
+        $deep = ['x' => 1];
+        for ($i = 0; $i < 600; ++$i) {
+            $deep = [$deep];
+        }
+        $receipt = Settlement::run(fn () => ['success' => true, 'transaction' => '0xtx', 'network' => 'eip155:84532', 'extensions' => $deep], self::payment(), ['network' => 'eip155:84532']);
+        self::assertTrue($receipt['success']);
+        self::assertArrayNotHasKey('extensions', $receipt);
+        PaymentHeaders::encode($receipt);
+    }
+
+    public function testNonStringFieldsAreDiscardedOnASuccess(): void
+    {
+        $receipt = Settlement::run(fn () => ['success' => true, 'transaction' => 123, 'network' => ['x'], 'payer' => 7], self::payment(), ['network' => 'eip155:84532']);
+        self::assertSame(['success' => true], $receipt);
+        PaymentHeaders::encode($receipt);
     }
 
     public function testAPendingSettlementKeepsItsTransaction(): void

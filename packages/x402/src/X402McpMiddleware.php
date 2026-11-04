@@ -41,8 +41,10 @@ final class X402McpMiddleware implements MiddlewareInterface
      * @param ?EventDispatcherInterface $events
      *                                            Dispatches an AddressCheck on the payer and a PaymentOutcome; NULL: neither
      * @param ?\Closure                 $verify
-     *                                            fn(array $payment, array $req): ?string — online check before the claim,
-     *                                            as in X402Middleware
+     *                                            fn(array $payment, array $req): ?string — online check before the claim.
+     *                                            NULL when good, or a non-empty reason; any other return or exception
+     *                                            refuses as `unexpected_verify_error`, except a FacilitatorException
+     *                                            (`facilitator_unavailable`). Nothing is claimed on a refusal, as in X402Middleware
      * @param ?\Closure                 $release
      *                                            fn(string $key): void — frees a claim when nothing was charged
      * @param ?\Closure                 $resource

@@ -68,7 +68,7 @@ final class Settlement
             $receipt = null;
         }
         if (is_array($receipt) && ($receipt['success'] ?? null) === true) {
-            return $receipt;
+            return self::settled($receipt);
         }
         $reason = is_array($receipt) && is_string($receipt['errorReason'] ?? null) ? $receipt['errorReason'] : 'unexpected_settle_error';
         // Kept so a broadcast that has not confirmed yet (settlement_pending) can be reconciled.
@@ -77,5 +77,38 @@ final class Settlement
         $failed = ['success' => false, 'errorReason' => $reason, 'transaction' => $tx, 'network' => $req['network']];
 
         return is_array($receipt) && is_string($receipt['paymentId'] ?? null) ? $failed + ['paymentId' => $receipt['paymentId']] : $failed;
+    }
+
+    /**
+     * A settled receipt with the spec's fields, each of its type, in this order. A field of another
+     * type is dropped; so are extensions that JSON cannot encode (INF, too deep): the money moved,
+     * so success stays and the header encode must not throw later.
+     */
+    private static function settled(array $receipt): array
+    {
+        $out = ['success' => true];
+        foreach (['transaction', 'network'] as $field) {
+            if (is_string($receipt[$field] ?? null)) {
+                $out[$field] = $receipt[$field];
+            }
+        }
+        if (array_key_exists('payer', $receipt) && (is_string($receipt['payer']) || null === $receipt['payer'])) {
+            $out['payer'] = $receipt['payer'];
+        }
+        foreach (['errorReason', 'paymentId'] as $field) {
+            if (is_string($receipt[$field] ?? null)) {
+                $out[$field] = $receipt[$field];
+            }
+        }
+        if (array_key_exists('extensions', $receipt)) {
+            try {
+                json_encode($receipt['extensions'], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+                $out['extensions'] = $receipt['extensions'];
+            } catch (\JsonException) {
+                // Dropped: the receipt still settles.
+            }
+        }
+
+        return $out;
     }
 }

@@ -34,7 +34,10 @@ verification, nothing moves on chain, the receipt says `extensions.mock`.
 Optional, by name, on both middlewares:
 
 - `verify:` `fn($payment, $req): ?string`, an online check (`$facilitator->verify`)
-  before the claim: an empty wallet runs nothing and takes no claim.
+  before the claim: an empty wallet runs nothing and takes no claim. Return
+  `NULL` when the payment is good, or a non-empty reason string. Any other
+  return (`''`, `false`, an array) or any exception refuses as
+  `unexpected_verify_error`; a `FacilitatorException` stays `facilitator_unavailable` (502).
 - `release:` `$claims->release(...)`: a payment that charged nothing (handler
   failed, settle failed with no transaction) is good again. A pending settle
   keeps its claim. `FileClaims::prune($seconds)` clears old claims.

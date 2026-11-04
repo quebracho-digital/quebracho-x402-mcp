@@ -20,6 +20,7 @@ use Quebracho\X402\EvmExact;
 use Quebracho\X402\FileClaims;
 use Quebracho\X402\Networks;
 use Quebracho\X402\PayingMcpClient;
+use Quebracho\X402\Scheme;
 use Quebracho\X402\Settlement;
 use Quebracho\X402\Signer;
 use Quebracho\X402\X402McpMiddleware;
@@ -102,6 +103,53 @@ final class PayingMcpClientTest extends TestCase
             self::assertSame('10000', $budget->spent('eip155:84532'));
         }
         self::assertSame([['wisdom', '10000', true], ['wisdom', '10000', true]], $this->paid);
+    }
+
+    public function testAnOnPaidThatThrowsKeepsThePaidResult(): void
+    {
+        $key = new Signer('0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318');
+        $client = new PayingMcpClient($this->seller(), [new EvmExact($key)], Budget::usd('eip155:84532', '0.05'), new Psr17Factory(), fn () => throw new \RuntimeException('log down'));
+        $result = self::toolResult($client->sendRequest(self::call()));
+
+        self::assertSame('paid content', $result['content'][0]['text']);
+        self::assertTrue($result['_meta'][X402McpMiddleware::PAYMENT_RESPONSE]['success']);
+    }
+
+    public function testAPayThatThrowsSpendsNothing(): void
+    {
+        $failing = new class implements Scheme {
+            public function supports(string $network): bool
+            {
+                return true;
+            }
+
+            public function pay(array $required, array $req): array
+            {
+                throw new \RuntimeException('no key');
+            }
+
+            public function verify(array $payment, array $req): ?string
+            {
+                return null;
+            }
+
+            public function payer(array $payment): ?string
+            {
+                return null;
+            }
+        };
+        $budget = Budget::usd('eip155:84532', '0.05');
+        $client = new PayingMcpClient($this->seller(), [$failing], $budget, new Psr17Factory());
+
+        try {
+            $client->sendRequest(self::call());
+            self::fail('the pay error must reach the caller');
+        } catch (\RuntimeException $e) {
+            self::assertSame('no key', $e->getMessage());
+        }
+        self::assertSame('0', $budget->spent('eip155:84532'));
+        // The paid retry was never sent, so the seller's tool never ran.
+        self::assertSame(0, $this->served);
     }
 
     public function testStopsAtTheCap(): void
