@@ -33,6 +33,9 @@ services:
         arguments:
             $schemes: *x402_schemes
 
+    # X402_SENSITIVE_TOOLS names a tool that is not served (a typo) at cache:warmup: the deploy fails, not the ledger.
+    App\X402\SensitiveToolsWarmer: ~
+
     # Faceted on purpose: only Quebracho's Ombú listings.
     App\Mcp\OmbuSearchTool:
         arguments:
