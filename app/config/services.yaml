@@ -39,6 +39,14 @@ services:
             # Quebracho's own listings: /market?seller[ours]=ours. Not an env var: nothing at runtime changes it.
             $facet: {seller: {ours: ours}}
 
+    # analyze_terms memo (TermsAnalyzer, 7 days): the same text is not sent to the model twice. Redis when X402_REDIS_URL is set.
+    terms.cache:
+        class: Symfony\Component\Cache\Adapter\AdapterInterface
+        factory: ['App\Terms\TermsCacheFactory', 'create']
+        arguments:
+            $redisUrl: '%env(default::X402_REDIS_URL)%'
+            $dir: '%kernel.project_dir%/var/terms-cache'
+
     # Hugging Face calls (analyze_terms, app:ask --hf): at most 40 s in total, inside X402_DURATIONS for analyze_terms.
     app.hf_http_client:
         class: Symfony\Contracts\HttpClient\HttpClientInterface

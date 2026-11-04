@@ -9,6 +9,7 @@ use App\Terms\TermsAnalyzer;
 use Mcp\Exception\ToolCallException;
 use PHPUnit\Framework\TestCase;
 use Symfony\AI\Platform\Test\MockPlatformFactory;
+use Symfony\Component\Cache\Adapter\ArrayAdapter;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\RequestStack;
 use Symfony\Component\RateLimiter\RateLimiterFactory;
@@ -26,7 +27,7 @@ final class TermsAnalyzerTest extends TestCase
             return $reply;
         });
 
-        return new TermsAnalyzer($platform, 'some/model');
+        return new TermsAnalyzer($platform, 'some/model', new ArrayAdapter());
     }
 
     private function tool(TermsAnalyzer $analyzer, int $perIp = 10, int $perDay = 500, ?RequestStack $requests = null): AnalyzeTermsTool
@@ -122,7 +123,7 @@ in Delaware'],
 
             return '{"arbitration": ["binding arbitration in Delaware"]}';
         });
-        $tool = $this->tool(new TermsAnalyzer($platform, 'some/model'), perIp: 1);
+        $tool = $this->tool(new TermsAnalyzer($platform, 'some/model', new ArrayAdapter()), perIp: 1);
 
         $tool(self::TEXT);
         try {
@@ -163,7 +164,7 @@ in Delaware'],
 
             return '{"arbitration": ["binding arbitration in Delaware"]}';
         });
-        $tool = $this->tool(new TermsAnalyzer($platform, 'some/model'), perDay: 1);
+        $tool = $this->tool(new TermsAnalyzer($platform, 'some/model', new ArrayAdapter()), perDay: 1);
 
         $tool(self::TEXT);
         try {
@@ -208,5 +209,76 @@ in Delaware'],
 
         self::assertSame(['arbitration' => ['binding arbitration in Delaware']], $out['categories']);
         self::assertSame(1, $out['quotes_dropped']);
+    }
+
+    /**
+     * An analyzer whose model replies in turn (the last reply repeats) and counts its calls in $calls->n.
+     *
+     * @return array{0: TermsAnalyzer, 1: \stdClass}
+     */
+    private function counting(array $replies): array
+    {
+        $calls = new \stdClass();
+        $calls->n = 0;
+        $platform = MockPlatformFactory::createPlatform(function () use ($replies, $calls) {
+            $reply = $replies[min($calls->n, \count($replies) - 1)];
+            ++$calls->n;
+
+            return $reply;
+        });
+
+        return [new TermsAnalyzer($platform, 'some/model', new ArrayAdapter()), $calls];
+    }
+
+    public function testTheSameTextIsAnsweredFromTheMemoAndTheModelIsCalledOnce(): void
+    {
+        [$analyzer, $calls] = $this->counting(['{"arbitration": ["binding arbitration in Delaware"]}']);
+
+        $first = $analyzer->analyze(self::TEXT);
+        $second = $analyzer->analyze(self::TEXT);
+
+        self::assertSame(1, $calls->n);
+        self::assertSame($first, $second);
+        self::assertSame(['arbitration' => ['binding arbitration in Delaware']], $second['categories']);
+    }
+
+    public function testADifferentTextIsAnotherCallToTheModel(): void
+    {
+        [$analyzer, $calls] = $this->counting(['{"arbitration": ["binding arbitration in Delaware"]}']);
+
+        $analyzer->analyze(self::TEXT);
+        $analyzer->analyze(self::TEXT.' '); // trim is part of the check: the same text, a memo hit
+        $analyzer->analyze(self::TEXT.'.'); // one character more: another text, another call
+
+        self::assertSame(2, $calls->n);
+    }
+
+    public function testTheMemoKeyDependsOnThePromptVersionTheModelAndTheText(): void
+    {
+        $analyzer = new TermsAnalyzer(MockPlatformFactory::createPlatform(fn () => '{}'), 'some/model', new ArrayAdapter());
+        $key = new \ReflectionMethod(TermsAnalyzer::class, 'cacheKey');
+        $key->setAccessible(true);
+
+        $expected = hash('sha256', json_encode([TermsAnalyzer::PROMPT_VERSION, 'some/model', self::TEXT], \JSON_THROW_ON_ERROR));
+        self::assertSame($expected, $key->invoke($analyzer, self::TEXT));
+        // The same key with the next prompt version is another entry: a prompt change makes the old answers miss.
+        self::assertNotSame(hash('sha256', json_encode([TermsAnalyzer::PROMPT_VERSION + 1, 'some/model', self::TEXT], \JSON_THROW_ON_ERROR)), $key->invoke($analyzer, self::TEXT));
+        self::assertNotSame($key->invoke($analyzer, self::TEXT), $key->invoke($analyzer, self::TEXT.'x'));
+    }
+
+    public function testAnInvalidAnswerIsNotMemoised(): void
+    {
+        [$analyzer, $calls] = $this->counting([
+            'I could not read that.',
+            '{"arbitration": ["binding arbitration in Delaware"]}',
+        ]);
+
+        try {
+            $analyzer->analyze(self::TEXT);
+            self::fail('The first answer has no JSON.');
+        } catch (\RuntimeException) {
+        }
+        self::assertSame(['arbitration' => ['binding arbitration in Delaware']], $analyzer->analyze(self::TEXT)['categories']);
+        self::assertSame(2, $calls->n, 'the second call went to the model: the failure was not kept');
     }
 }

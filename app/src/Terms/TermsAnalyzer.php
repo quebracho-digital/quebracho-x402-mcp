@@ -9,6 +9,8 @@ use Symfony\AI\Platform\Message\MessageBag;
 use Symfony\AI\Platform\PlatformInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\DependencyInjection\Attribute\Target;
+use Symfony\Contracts\Cache\CacheInterface;
+use Symfony\Contracts\Cache\ItemInterface;
 
 /**
  * SUPER BETA, an example for the hackathon demo, not legal advice.
@@ -25,6 +27,12 @@ use Symfony\Component\DependencyInjection\Attribute\Target;
  */
 final class TermsAnalyzer
 {
+    /**
+     * Bump it when the prompt or CATEGORIES change: the memo key includes it, so old answers stop matching.
+     */
+    public const PROMPT_VERSION = 1;
+    /** How long a memoised answer is kept: 7 days. It holds the quotes of the document, so not longer. */
+    public const CACHE_TTL = 604800;
     public const MAX_WORDS = 1200;
     /** A single "word" of megabytes passes a word count: cap the characters too (about 10 per word). */
     public const MAX_CHARS = 12000;
@@ -56,6 +64,7 @@ final class TermsAnalyzer
     public function __construct(
         #[Target('huggingface')] private readonly PlatformInterface $platform,
         #[Autowire(env: 'TERMS_MODEL')] private readonly string $model,
+        #[Autowire(service: 'terms.cache')] private readonly CacheInterface $cache,
     ) {
     }
 
@@ -85,6 +94,31 @@ final class TermsAnalyzer
     {
         $text = $this->check($text);
 
+        // The memo skips the model call only: the caller is still charged and rate limited. A throw in the
+        // callback (no JSON, a refused text) saves nothing, so only valid answers are kept.
+        return $this->cache->get($this->cacheKey($text), function (ItemInterface $item) use ($text): array {
+            $item->expiresAfter(self::CACHE_TTL);
+
+            return $this->ask($text);
+        });
+    }
+
+    /**
+     * Prompt version, model and the checked text: a different text (even one character) is another key.
+     * The text itself is never stored, only this hash.
+     */
+    private function cacheKey(string $text): string
+    {
+        return hash('sha256', json_encode([self::PROMPT_VERSION, $this->model, $text], \JSON_THROW_ON_ERROR));
+    }
+
+    /**
+     * @return array{model: string, categories: array<string, list<string>>, quotes_dropped: int}
+     *
+     * @throws \RuntimeException The model did not answer with a JSON object
+     */
+    private function ask(string $text): array
+    {
         // The text is data, never instructions: fenced with a nonce the text cannot know.
         $nonce = bin2hex(random_bytes(8));
         $categories = implode("\n", array_map(static fn (string $id, string $about) => "- $id: $about", array_keys(self::CATEGORIES), self::CATEGORIES));
