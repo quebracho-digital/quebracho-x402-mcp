@@ -118,11 +118,16 @@ final class LedgerReplayTest extends TestCase
         };
     }
 
-    /** A ledger whose put() fails with $error (not a LedgerUnavailableException), every other operation working. */
-    private function brokenPutLedger(\Throwable $error): PaymentLedger
+    /**
+     * A ledger whose puts after the first $okPuts fail with $error, every other operation working. The
+     * middlewares write an intention before a settle, so the store fails on the write that records the outcome.
+     */
+    private function brokenPutLedger(\Throwable $error, int $okPuts = 0): PaymentLedger
     {
-        return new class($this->ledger, $error) implements PaymentLedger {
-            public function __construct(private readonly PaymentLedger $real, private readonly \Throwable $error)
+        return new class($this->ledger, $error, $okPuts) implements PaymentLedger {
+            private int $puts = 0;
+
+            public function __construct(private readonly PaymentLedger $real, private readonly \Throwable $error, private readonly int $okPuts)
             {
             }
 
@@ -138,7 +143,10 @@ final class LedgerReplayTest extends TestCase
 
             public function put(string $key, array $state, int $ttl): void
             {
-                throw $this->error;
+                if (++$this->puts > $this->okPuts) {
+                    throw $this->error;
+                }
+                $this->real->put($key, $state, $ttl);
             }
 
             public function release(string $key): void
@@ -380,7 +388,7 @@ final class LedgerReplayTest extends TestCase
     {
         $payment = $this->httpPayment($this->http());
 
-        $response = $this->http(ledger: $this->downLedger('put'))->process($this->httpCall($payment), $this->handler());
+        $response = $this->http(ledger: $this->brokenPutLedger(new LedgerUnavailableException('put: the store is down'), 1))->process($this->httpCall($payment), $this->handler());
         self::assertSame(200, $response->getStatusCode());
         self::assertSame('paid content', (string) $response->getBody());
         self::assertTrue(PaymentHeaders::decode($response->getHeaderLine(PaymentHeaders::RESPONSE))['success']);
@@ -391,7 +399,7 @@ final class LedgerReplayTest extends TestCase
     {
         $payment = $this->mcpPayment($this->mcp());
 
-        $answer = self::answer($this->mcp(ledger: $this->downLedger('put'))->process(self::mcpCall(2, $payment), $this->toolHandler()));
+        $answer = self::answer($this->mcp(ledger: $this->brokenPutLedger(new LedgerUnavailableException('put: the store is down'), 1))->process(self::mcpCall(2, $payment), $this->toolHandler()));
         self::assertArrayNotHasKey('isError', $answer['result']);
         self::assertSame('paid content', $answer['result']['content'][0]['text']);
         self::assertTrue($answer['result']['_meta'][X402McpMiddleware::PAYMENT_RESPONSE]['success']);
@@ -487,7 +495,7 @@ final class LedgerReplayTest extends TestCase
     {
         $payment = $this->httpPayment($this->http());
 
-        $response = $this->http(ledger: $this->brokenPutLedger(new \RuntimeException('disk gone')))->process($this->httpCall($payment), $this->handler());
+        $response = $this->http(ledger: $this->brokenPutLedger(new \RuntimeException('disk gone'), 1))->process($this->httpCall($payment), $this->handler());
         self::assertSame(200, $response->getStatusCode());
         self::assertSame('paid content', (string) $response->getBody());
         self::assertSame(1, $this->runs);
@@ -497,9 +505,131 @@ final class LedgerReplayTest extends TestCase
     {
         $payment = $this->mcpPayment($this->mcp());
 
-        $answer = self::answer($this->mcp(ledger: $this->brokenPutLedger(new \RuntimeException('disk gone')))->process(self::mcpCall(2, $payment), $this->toolHandler()));
+        $answer = self::answer($this->mcp(ledger: $this->brokenPutLedger(new \RuntimeException('disk gone'), 1))->process(self::mcpCall(2, $payment), $this->toolHandler()));
         self::assertArrayNotHasKey('isError', $answer['result']);
         self::assertSame('paid content', $answer['result']['content'][0]['text']);
+        self::assertSame(1, $this->runs);
+    }
+
+    /** A settle that counts its calls and moves nothing (mock mode). */
+    private function countedSettle(int &$calls): \Closure
+    {
+        return static function (array $payment, array $req) use (&$calls): array {
+            ++$calls;
+
+            return Settlement::mock()($payment, $req);
+        };
+    }
+
+    /** Writes a state as a crash would leave it, for a payment whose settle outcome was lost. */
+    private function seedSettling(array $payment, array $state): void
+    {
+        $this->ledger->put(Settlement::key($payment), ['status' => 'settling'] + $state, 600);
+    }
+
+    /** A settle outcome with a reference the facilitator gave, not yet confirmed. */
+    private const REFERENCE = ['receipt' => ['success' => false, 'errorReason' => 'settlement_pending', 'transaction' => '0xabc', 'network' => 'eip155:84532']];
+
+    public function testHttpCrashAfterASettleSentWithoutAReferenceIsUnknownAndNeverRunsAgain(): void
+    {
+        $payment = $this->httpPayment($this->http());
+        $calls = 0;
+        // The settle went out, then the store failed on the write that records its outcome: the state stays 'settling'.
+        $response = $this->http($this->countedSettle($calls), ledger: $this->brokenPutLedger(new \RuntimeException('crash'), 1))->process($this->httpCall($payment), $this->handler());
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame(1, $calls);
+
+        $retry = $this->http($this->noSecondSettle())->process($this->httpCall($payment), $this->handler());
+        self::assertSame(409, $retry->getStatusCode());
+        self::assertSame('settlement_unknown', json_decode((string) $retry->getBody(), true)['error']);
+        self::assertSame(1, $this->runs);
+        self::assertSame(1, $calls);
+    }
+
+    public function testMcpCrashAfterASettleSentWithoutAReferenceIsUnknownAndNeverRunsAgain(): void
+    {
+        $payment = $this->mcpPayment($this->mcp());
+        $calls = 0;
+        $answer = self::answer($this->mcp($this->countedSettle($calls), ledger: $this->brokenPutLedger(new \RuntimeException('crash'), 1))->process(self::mcpCall(2, $payment), $this->toolHandler()));
+        self::assertSame('paid content', $answer['result']['content'][0]['text']);
+        self::assertSame(1, $calls);
+
+        $retry = self::answer($this->mcp($this->noSecondSettle())->process(self::mcpCall(3, $payment), $this->toolHandler()));
+        self::assertTrue($retry['result']['isError']);
+        self::assertSame('settlement_unknown', $retry['result']['structuredContent']['error']);
+        self::assertSame(1, $this->runs);
+        self::assertSame(1, $calls);
+    }
+
+    public function testHttpSettlingWithAReferenceUnconfirmedIsUnknownAndNeverRuns(): void
+    {
+        $payment = $this->httpPayment($this->http());
+        $this->seedSettling($payment, self::REFERENCE);
+
+        $response = $this->http($this->noSecondSettle())->process($this->httpCall($payment), $this->handler());
+        self::assertSame(409, $response->getStatusCode());
+        self::assertSame('settlement_unknown', json_decode((string) $response->getBody(), true)['error']);
+        self::assertSame(0, $this->runs);
+    }
+
+    public function testHttpSettlingWithAReferenceConfirmedByTheLookupIsSettledAndAnUpfrontHandlerRunsOnce(): void
+    {
+        $payment = $this->httpPayment($this->http(upfront: true));
+        $this->seedSettling($payment, self::REFERENCE);
+
+        $response = $this->http($this->noSecondSettle(), $this->confirmed(), upfront: true)->process($this->httpCall($payment), $this->handler());
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('paid content', (string) $response->getBody());
+        self::assertSame(1, $this->runs);
+    }
+
+    public function testHttpSettlingWithAReferenceConfirmedByTheLookupAnswersAlreadySettledWhenTheDefaultFlowRan(): void
+    {
+        $payment = $this->httpPayment($this->http());
+        $this->seedSettling($payment, self::REFERENCE);
+
+        // Default flow: the handler ran before the settle, so a confirmed settle without a kept response is not run again.
+        $response = $this->http($this->noSecondSettle(), $this->confirmed())->process($this->httpCall($payment), $this->handler());
+        self::assertSame(409, $response->getStatusCode());
+        self::assertSame('already_settled', json_decode((string) $response->getBody(), true)['error']);
+        self::assertSame(0, $this->runs);
+    }
+
+    public function testMcpSettlingWithAReferenceConfirmedByTheLookupRunsTheToolOnceUpfront(): void
+    {
+        $payment = $this->mcpPayment($this->mcp(upfront: true));
+        $this->seedSettling($payment, self::REFERENCE);
+
+        $answer = self::answer($this->mcp($this->noSecondSettle(), $this->confirmed(), upfront: true)->process(self::mcpCall(2, $payment), $this->toolHandler()));
+        self::assertSame('paid content', $answer['result']['content'][0]['text']);
+        self::assertTrue($answer['result']['_meta'][X402McpMiddleware::PAYMENT_RESPONSE]['success']);
+        self::assertSame(1, $this->runs);
+    }
+
+    public function testUpfrontCrashInsideTheHandlerIsNeedsReviewAndTheHandlerNeverRunsAgain(): void
+    {
+        $payment = $this->httpPayment($this->http(upfront: true));
+        // Settle, then the handler's intention, then the handler ran; the store failed on the write that records its answer.
+        $response = $this->http(ledger: $this->brokenPutLedger(new \RuntimeException('crash'), 3), upfront: true)->process($this->httpCall($payment), $this->handler());
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame(1, $this->runs);
+
+        $retry = $this->http($this->noSecondSettle(), upfront: true)->process($this->httpCall($payment), $this->handler());
+        self::assertSame(409, $retry->getStatusCode());
+        self::assertSame('needs_review', json_decode((string) $retry->getBody(), true)['error']);
+        self::assertSame(1, $this->runs);
+    }
+
+    public function testMcpUpfrontCrashInsideTheToolIsNeedsReviewAndTheToolNeverRunsAgain(): void
+    {
+        $payment = $this->mcpPayment($this->mcp(upfront: true));
+        $answer = self::answer($this->mcp(ledger: $this->brokenPutLedger(new \RuntimeException('crash'), 3), upfront: true)->process(self::mcpCall(2, $payment), $this->toolHandler()));
+        self::assertSame('paid content', $answer['result']['content'][0]['text']);
+        self::assertSame(1, $this->runs);
+
+        $retry = self::answer($this->mcp($this->noSecondSettle(), upfront: true)->process(self::mcpCall(3, $payment), $this->toolHandler()));
+        self::assertTrue($retry['result']['isError']);
+        self::assertSame('needs_review', $retry['result']['structuredContent']['error']);
         self::assertSame(1, $this->runs);
     }
 }

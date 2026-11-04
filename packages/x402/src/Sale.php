@@ -116,6 +116,9 @@ final class Sale
         return match ($state['status'] ?? null) {
             'delivered', 'settled' => $this->answer($state),
             'pending' => $this->confirm($ledger, $key, $state, $lookup),
+            'settling' => $this->settling($ledger, $key, $state, $lookup),
+            // Upfront, the handler started and never closed: it may have had effects, so it never runs again.
+            'handling' => isset($state['response']) ? ['state' => $state] : ['refuse' => 'needs_review'],
             'claimed' => ['refuse' => 'in_progress'],
             // Unknown: never admit it again.
             default => ['refuse' => 'already_settled'],
@@ -135,6 +138,26 @@ final class Sale
         }
 
         return false === ($state['handler_ran'] ?? true) ? ['run' => $state] : ['refuse' => 'already_settled'];
+    }
+
+    /**
+     * Write-ahead: records an intention before the money (or the handler) can move. FALSE when the store
+     * refused it, and then the caller must not go on.
+     *
+     * @param array<string, mixed> $state
+     */
+    public function intend(?PaymentLedger $ledger, array $state): bool
+    {
+        if (null === $ledger) {
+            return true;
+        }
+        try {
+            $this->remember($ledger, $state);
+
+            return true;
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
     /**
@@ -191,12 +214,27 @@ final class Sale
     }
 
     /**
-     * A pending payment: asks the lookup what the chain did. Confirmed, it becomes settled; refuted, it is
-     * freed; unknown (or the lookup failed) it stays pending.
+     * A settle that was sent but whose outcome was not stored (a crash between the two). Only a reference the
+     * facilitator gave (transaction or paymentId) can be asked about; without one it is unknown until the TTL
+     * frees the claim, and then the online verify refuses a spent nonce.
      *
      * @return ?array{state?: array<string, mixed>, run?: array<string, mixed>, refuse?: string}
      */
-    private function confirm(PaymentLedger $ledger, string $key, array $state, ?\Closure $lookup): ?array
+    private function settling(PaymentLedger $ledger, string $key, array $state, ?\Closure $lookup): ?array
+    {
+        $receipt = is_array($state['receipt'] ?? null) ? $state['receipt'] : [];
+        $refs = array_filter([$receipt['transaction'] ?? null, $receipt['paymentId'] ?? null], static fn (mixed $v) => is_string($v) && '' !== $v);
+
+        return [] === $refs ? ['refuse' => 'settlement_unknown'] : $this->confirm($ledger, $key, $state, $lookup, 'settlement_unknown');
+    }
+
+    /**
+     * A pending payment: asks the lookup what the chain did. Confirmed, it becomes settled; refuted, it is
+     * freed; unknown (or the lookup failed) it stays pending, or stays unknown ($unknown) for a settling state.
+     *
+     * @return ?array{state?: array<string, mixed>, run?: array<string, mixed>, refuse?: string}
+     */
+    private function confirm(PaymentLedger $ledger, string $key, array $state, ?\Closure $lookup, string $unknown = 'settlement_pending'): ?array
     {
         try {
             $receipt = null === $lookup ? null : $lookup($state);
@@ -210,9 +248,13 @@ final class Sale
             return null;
         }
         if (true !== ($receipt['success'] ?? null)) {
-            return ['refuse' => 'settlement_pending'];
+            return ['refuse' => $unknown];
         }
         $state['receipt'] = $receipt;
+        if ('settling' === ($state['status'] ?? null) && $this->upfront()) {
+            // Upfront, a settling state is written before the handler: confirmed, the handler has not run yet.
+            $state['handler_ran'] = false;
+        }
         $state['status'] = isset($state['response']) ? 'delivered' : 'settled';
         $ledger->put($key, $state, self::ttl($this->payment));
 

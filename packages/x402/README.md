@@ -87,6 +87,28 @@ HTTP answers `503 ledger_unavailable` and MCP answers the PaymentRequired with
   `settled` (charged, no response kept: `409 already_settled`); `delivered`
   (charged, the 2xx response kept: a retry gets it again, not run again, with
   the receipt); `pending` (may have charged, not confirmed: see below).
+- **Written before the money or the handler moves (write-ahead).**
+  `settling` is stored before a settle is sent. `handling` is stored before an
+  upfront handler runs, and it is closed by `delivered`, or by `settled` with
+  `handler_ran: false` when the handler answered non-2xx or threw (a retry runs
+  it again, as before). If the store refuses the `settling` write, nothing is
+  sent: `503 ledger_unavailable`. Refused on the `handling` write, the handler
+  does not run.
+- **A retry that finds an open intention.** `settling` without a transaction or
+  `paymentId` in its receipt: `409 settlement_unknown` (no settle, no handler).
+  With one, the lookup decides: confirmed settles it (an upfront handler then
+  runs once), refuted frees it, unknown answers `409 settlement_unknown`.
+  `handling` without a kept response: `409 needs_review` (MCP: `isError` with
+  `needs_review`). The handler is never run again by the middleware: a person
+  decides. A `handling` with a kept response is replayed.
+- **Residual window.** A crash while a settle request is in flight, or a store
+  failure when the outcome is written, leaves `settling` with no reference (the
+  transaction or `paymentId` exists only once the facilitator answers). It
+  answers `409 settlement_unknown` until its TTL frees the claim. After that the
+  retry goes through verify again: if the settle did happen, the token rejects
+  the spent nonce, so nothing is charged twice, but the buyer paid and got no
+  response, and nothing tells the seller on its own. This applies to every
+  facilitator, not only those without a hash.
 - **What is kept.** Only a 2xx response of at most 1 MiB, base64 in the state.
   Its TTL is `min(600, validBefore − now)`; each state expires with it.
 - **The store is read only after the signature verifies offline**: the nonce
@@ -122,6 +144,14 @@ any `Facilitator` (all PSR-18 + PSR-17):
   `HttpFacilitator` that URL is verify and settle only: keyless Circle needs the
   seller proof and the `/status` poll, which only `CircleFacilitator` sends.
   Move those callers to `new CircleFacilitator(...)`.
+
+  Migrating from 0.2.x: `HttpFacilitator` keeps the v0.2.1 argument order
+  (`$bearer`, `$seller`, `$pollDelaySeconds`, `$pollAttempts`) as a shim, and the
+  seller proof headers and the `/status` poll keep working through it. The new
+  optional `$headers` hook comes last. Passing `$seller` raises
+  `E_USER_DEPRECATED`; `$seller`, `$pollDelaySeconds` and `$pollAttempts` are
+  removed in the next major version (1.0). Use `new CircleFacilitator(...)`
+  instead, which sends the same proof and polls the same way.
 - `new ChainFacilitator(new Rpc(...), $gasWallet, 'eip155:5042002', $lock)`:
   no third party; simulates with `eth_call`, sends `transferWithAuthorization`
   from a gas wallet, waits for the receipt (`settlement_pending` keeps the hash).

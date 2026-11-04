@@ -65,8 +65,9 @@ final class X402McpMiddleware implements MiddlewareInterface
      * @param ?PaymentLedger            $ledger
      *                                            Keeps each payment's outcome: a retry gets the stored answer (replayed with
      *                                            its receipt, the handler not run again), or an isError result with reason
-     *                                            in_progress, settlement_pending or already_settled (HTTP stays 200, as for
-     *                                            every MCP refusal). Replaces $claim and $release.
+     *                                            in_progress, settlement_pending, settlement_unknown, needs_review or
+     *                                            already_settled (HTTP stays 200, as for every MCP refusal). Replaces $claim
+     *                                            and $release.
      * @param ?\Closure                 $lookup
      *                                            fn(array $state): ?array — asks the chain about a 'pending' payment, as
      *                                            in X402Middleware
@@ -153,9 +154,8 @@ final class X402McpMiddleware implements MiddlewareInterface
                     if (!isset($stored['run'])) {
                         return $this->replay($id, $accepts, $resource, $stored['state']);
                     }
-                    // Paid upfront, tool never ran: run it now, no second settle. 'claimed' keeps a concurrent retry out.
+                    // Paid upfront, tool never ran: run it now, no second settle (the 'handling' record comes before the tool).
                     $run = $stored['run'];
-                    $sale->remember($this->ledger, ['status' => 'claimed', 'receipt' => $run['receipt'], 'handler_ran' => false]);
                 }
             }
             // ponytail: verify runs before the MCP session check and costs an
@@ -171,12 +171,24 @@ final class X402McpMiddleware implements MiddlewareInterface
 
         $receipt = $run['receipt'] ?? null;
         if (null === $run && $sale->upfront()) {
+            // The intention is stored before the money can move: if the store refuses it, nothing is sent.
+            if (!$sale->intend($this->ledger, ['status' => 'settling', 'id' => $id])) {
+                $sale->abandon(null);
+
+                return $this->required($id, $accepts, $resource, 'ledger_unavailable');
+            }
             // Money first; once it moved, the receipt goes with whatever the tool answers.
             $receipt = $sale->settle();
             $this->record($sale, $receipt, null, $id, false);
             if (true !== $receipt['success']) {
                 return $this->required($id, $accepts, $resource, $receipt['errorReason']);
             }
+        }
+        if (null !== $receipt && !$sale->intend($this->ledger, ['status' => 'handling', 'receipt' => $receipt, 'handler_ran' => true, 'id' => $id])) {
+            // Charged, the tool did not run: a retry runs it (the stored state still says so).
+            $sale->ran(503);
+
+            return $this->required($id, $accepts, $resource, 'ledger_unavailable');
         }
 
         try {
@@ -203,7 +215,7 @@ final class X402McpMiddleware implements MiddlewareInterface
             return $response;
         }
         $delivered = null;
-        $settled = $this->rewrite($response, $id, function (array $out) use ($sale, &$receipt, &$delivered): array {
+        $settled = $this->rewrite($response, $id, function (array $out) use ($sale, $id, &$receipt, &$delivered): array {
             // A JSON-RPC error or a failed tool delivered nothing: nothing charged.
             $delivered = isset($out['result']) && empty($out['result']['isError']);
             if (null === $receipt) {
@@ -211,6 +223,12 @@ final class X402McpMiddleware implements MiddlewareInterface
                     $sale->abandon(200);
 
                     return $out;
+                }
+                if (!$sale->intend($this->ledger, ['status' => 'settling', 'id' => $id])) {
+                    // Refused before the settle: nothing charged, the tool's answer is withheld.
+                    $sale->abandon(200);
+
+                    return ['receipt' => ['success' => false, 'errorReason' => 'ledger_unavailable']];
                 }
                 $receipt = $sale->settle(200);
                 if (true !== $receipt['success']) {
@@ -300,6 +318,7 @@ final class X402McpMiddleware implements MiddlewareInterface
      */
     private function record(Sale $sale, ?array $receipt, ?ResponseInterface $response, mixed $id, bool $handlerRan = true): void
     {
+        // A null receipt (nothing settled) is never stored: the state written before the settle stands.
         if (null === $this->ledger || null === $receipt) {
             return;
         }

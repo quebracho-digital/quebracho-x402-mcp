@@ -56,11 +56,15 @@ final class X402Middleware implements MiddlewareInterface
      * @param ?PaymentLedger            $ledger
      *                                            Keeps each payment's outcome, so a retry gets the stored response
      *                                            (replayed, not run again), 409 while it is in progress, or 409 when
-     *                                            it settled without a response to keep. Replaces $claim and $release.
+     *                                            it settled without a response to keep. Also 409 settlement_unknown
+     *                                            (a settle sent, outcome lost, no reference) and needs_review (upfront
+     *                                            handler started, never closed). Replaces $claim and $release.
      * @param ?\Closure                 $lookup
      *                                            fn(array $state): ?array — asks the chain about a 'pending' payment:
      *                                            a receipt with success true settles it, success false frees it, NULL
      *                                            (or no lookup) answers 409 settlement_pending.
+     *                                            A 'settling' state (outcome lost) is looked up only with a transaction
+     *                                            or paymentId; otherwise, or when unknown, 409 settlement_unknown.
      */
     public function __construct(
         private readonly array $schemes,
@@ -114,9 +118,8 @@ final class X402Middleware implements MiddlewareInterface
                     if (!isset($stored['run'])) {
                         return $this->replay($stored['state']);
                     }
-                    // Paid upfront, handler never ran: run it now, no second settle. 'claimed' keeps a concurrent retry out.
+                    // Paid upfront, handler never ran: run it now, no second settle (deliverUpfront records it first).
                     $run = $stored['run'];
-                    $sale->remember($this->ledger, ['status' => 'claimed', 'receipt' => $run['receipt'], 'handler_ran' => false]);
                 }
             }
             $reason = null === $run ? $sale->admit() : null;
@@ -135,6 +138,12 @@ final class X402Middleware implements MiddlewareInterface
             return $this->deliverUpfront($request, $handler, $sale, $run['receipt']);
         }
         if ($sale->upfront()) {
+            // The intention is stored before the money can move: if the store refuses it, nothing is sent.
+            if (!$sale->intend($this->ledger, ['status' => 'settling'])) {
+                $sale->abandon(null);
+
+                return $this->json(503, ['error' => 'ledger_unavailable']);
+            }
             // Money first; once it moved, the receipt goes with whatever the handler answers.
             $receipt = $sale->settle();
             $this->record($sale, $receipt, null, false);
@@ -157,6 +166,12 @@ final class X402Middleware implements MiddlewareInterface
             $sale->abandon($status);
 
             return $response;
+        }
+        if (!$sale->intend($this->ledger, ['status' => 'settling'])) {
+            // Refused before the settle: nothing charged, the handler's answer is withheld.
+            $sale->abandon($status);
+
+            return $this->json(503, ['error' => 'ledger_unavailable']);
         }
         $receipt = $sale->settle($status);
         $this->record($sale, $receipt, $response);
@@ -188,6 +203,13 @@ final class X402Middleware implements MiddlewareInterface
      */
     private function deliverUpfront(ServerRequestInterface $request, RequestHandlerInterface $handler, Sale $sale, array $receipt): ResponseInterface
     {
+        // Written before the handler: if the process dies inside it, a retry finds 'handling' and does not run it again.
+        if (!$sale->intend($this->ledger, ['status' => 'handling', 'receipt' => $receipt, 'handler_ran' => true])) {
+            // The handler did not run, so the stored state still lets a retry run it. Charged: failed_after_settle.
+            $sale->ran(503);
+
+            return $this->json(503, ['error' => 'ledger_unavailable'])->withHeader(PaymentHeaders::RESPONSE, PaymentHeaders::encode($receipt));
+        }
         try {
             $response = $handler->handle($request);
         } catch (\Throwable $e) {
@@ -211,7 +233,7 @@ final class X402Middleware implements MiddlewareInterface
      *
      * A store that fails here comes after the money may have moved (or was refused): the answer is given anyway,
      * never a 503 that would tell the buyer nothing was charged. The claim stays until its TTL, so no second
-     * payment is taken; the buyer's retry gets 409 in_progress or already_settled instead of a replay.
+     * payment is taken; the buyer's retry gets 409 in_progress, already_settled or settlement_unknown instead of a replay.
      * Any exception counts, not only LedgerUnavailableException: a store that fails in another way (a DB
      * error, a bad state) after a settle must not turn a paid sale into a 500 the buyer cannot act on.
      */
