@@ -8,6 +8,7 @@ use App\X402\LedgerFactory;
 use App\X402\RedisLedger;
 use PHPUnit\Framework\TestCase;
 use Quebracho\X402\FileLedger;
+use Quebracho\X402\LedgerUnavailableException;
 
 final class LedgerFactoryTest extends TestCase
 {
@@ -44,6 +45,26 @@ final class LedgerFactoryTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('does not answer');
         $ledger->claim('k', 60);
+    }
+
+    public function testCheckOnAHealthyRedisPasses(): void
+    {
+        $url = $_ENV['X402_REDIS_URL'] ?? $_SERVER['X402_REDIS_URL'] ?? 'redis://redis:6379';
+        try {
+            LedgerFactory::create($url, $this->dir)->ping();
+        } catch (\Throwable $e) {
+            self::markTestSkipped("Redis does not answer at $url: {$e->getMessage()}");
+        }
+
+        LedgerFactory::check($url, $this->dir);
+        $this->addToAssertionCount(1);
+    }
+
+    public function testCheckFailsOnARedisThatRejectsWrites(): void
+    {
+        // A missing database: PING still answers, but every claim is refused. The check must claim, not only ping.
+        $this->expectException(LedgerUnavailableException::class);
+        LedgerFactory::check('redis://redis:6379/99', $this->dir);
     }
 
     public function testCheckProvesTheFileDirectoryTakesAClaim(): void

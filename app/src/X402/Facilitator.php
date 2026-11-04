@@ -39,12 +39,37 @@ final class Facilitator
             ]));
             $this->remote = match (true) {
                 'mock' === $mode => null,
-                CircleFacilitator::URL === rtrim($mode, '/') => new CircleFacilitator($client, $client, $client),
+                self::normalize($mode) === self::normalize(CircleFacilitator::URL) => new CircleFacilitator($client, $client, $client),
                 default => new HttpFacilitator($client, $client, $client, $mode),
             };
         } catch (\InvalidArgumentException) {
-            throw new \LogicException(\sprintf('X402_FACILITATOR="%s": "mock" or an https:// facilitator URL.', $mode));
+            // Only scheme and host are shown: the URL may carry a password or a token in its userinfo or query.
+            throw new \LogicException(\sprintf('X402_FACILITATOR="%s": "mock" or an https:// facilitator URL.', self::origin($mode)));
         }
+    }
+
+    /**
+     * The URL as compared with Circle's: scheme and host in lower case, no query, fragment or trailing slash.
+     */
+    private static function normalize(string $url): string
+    {
+        $parts = parse_url(trim($url));
+        if (!\is_array($parts) || !isset($parts['host'])) {
+            return rtrim($url, '/');
+        }
+
+        return strtolower($parts['scheme'] ?? '').'://'.strtolower($parts['host']).(isset($parts['port']) ? ':'.$parts['port'] : '').rtrim($parts['path'] ?? '', '/');
+    }
+
+    /** scheme://host[:port] of a URL, without userinfo, path or query; "(unparseable)" when there is no such thing. */
+    private static function origin(string $url): string
+    {
+        $parts = parse_url(trim($url));
+        if (!\is_array($parts) || !isset($parts['scheme'], $parts['host'])) {
+            return '(unparseable)';
+        }
+
+        return $parts['scheme'].'://'.$parts['host'].(isset($parts['port']) ? ':'.$parts['port'] : '');
     }
 
     /**

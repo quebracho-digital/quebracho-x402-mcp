@@ -80,7 +80,7 @@ final class X402CheckCommand
         $check('Pricing (X402_PAID_TOOLS, X402_PRICE(S), X402_PAY_TO, X402_NETWORK, X402_TIMEOUTS, X402_DURATIONS, #[PaidJob])', fn () => ($this->pricing)());
         $check('buyer (X402_BUDGETS, X402_MAX_PER_PAYMENT, X402_BUYER_KEY, X402_BUYER_MAX_TIMEOUT)', fn () => ($this->buyer)());
         if (null !== $this->ledgerDir) {
-            $check('payment ledger (X402_REDIS_URL answers PING, else var/x402-ledger takes a claim)', fn () => LedgerFactory::check($this->redisUrl, $this->ledgerDir));
+            $check('payment ledger (X402_REDIS_URL takes a claim, else var/x402-ledger does)', fn () => LedgerFactory::check($this->redisUrl, $this->ledgerDir));
         }
         $check('X402_TIMEOUTS within X402_BUYER_MAX_TIMEOUT', function (): void {
             foreach ((array) json_decode((string) $this->timeouts, true) as $tool => $seconds) {

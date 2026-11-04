@@ -80,6 +80,14 @@ final class X402CheckCommandTest extends KernelTestCase
         self::assertStringContainsString('payment ledger', preg_replace('/\s+/', ' ', $tester->getDisplay()) ?? '');
     }
 
+    public function testARedisThatAnswersPingButRefusesClaimsFailsTheLedgerCheck(): void
+    {
+        // db 99 is out of range: PING answers, SELECT and every claim are refused.
+        $tester = $this->check(['X402_REDIS_URL' => 'redis://redis:6379/99']);
+        self::assertSame(1, $tester->getStatusCode());
+        self::assertStringContainsString('payment ledger', preg_replace('/\s+/', ' ', $tester->getDisplay()) ?? '');
+    }
+
     /** @return iterable<string, array{array<string, string>, string}> */
     public static function bad(): iterable
     {

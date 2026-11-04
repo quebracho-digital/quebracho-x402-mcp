@@ -40,14 +40,19 @@ services:
             $facet: {seller: {ours: ours}}
 
     # analyze_terms memo (TermsAnalyzer, 7 days): the same text is not sent to the model twice. Redis when X402_REDIS_URL is set,
-    # else (or when Redis does not answer) this host's files, with a warning.
+    # else (or when Redis does not answer) this host's files, with a warning. A cache.pool, so cache:pool:list and
+    # cache:pool:prune see it: the tag fills the factory's first two arguments (namespace, default lifetime) by position.
     terms.cache:
         class: Symfony\Component\Cache\Adapter\AdapterInterface
         factory: ['App\Terms\TermsCacheFactory', 'create']
         arguments:
-            $redisUrl: '%env(default::X402_REDIS_URL)%'
-            $dir: '%kernel.project_dir%/var/terms-cache'
-            $logger: '@logger'
+            - ~ # namespace, from the tag
+            - ~ # default lifetime, from the tag
+            - '%env(default::X402_REDIS_URL)%'
+            - '%kernel.project_dir%/var/terms-cache'
+            - '@logger'
+        tags:
+            - { name: cache.pool, namespace: terms, default_lifetime: 604800, pruneable: true }
 
     # Hugging Face calls (analyze_terms, app:ask --hf): at most 40 s in total, inside X402_DURATIONS for analyze_terms.
     app.hf_http_client:
@@ -57,7 +62,7 @@ services:
 
     Quebracho\X402\EvmExact: ~
 
-    # One claim per payment, durable across processes on this host. Kept for the constructor's $claim; the ledger below claims instead.
+    # Required by X402McpMiddleware's constructor ($claim), never called while the ledger below is set: the ledger claims instead.
     Quebracho\X402\FileClaims:
         arguments: ['%kernel.project_dir%/var/x402-claims']
 
@@ -77,11 +82,9 @@ services:
             $price: !closure '@App\X402\Pricing'
             $claim: !closure '@Quebracho\X402\FileClaims'
             $settle: !closure '@App\X402\Facilitator'
-            # Replaces $claim and $release for the payment state (see the ledger above).
+            # Replaces $claim and $release for the payment state (see the ledger above). A claim whose payment charged nothing is freed by the ledger too.
             $ledger: '@Quebracho\X402\PaymentLedger'
             $verify: !closure ['@App\X402\Facilitator', 'verify']
-            # A claim whose payment charged nothing is freed: the buyer may retry.
-            $release: !closure ['@Quebracho\X402\FileClaims', 'release']
             # A slow tool (X402_DURATIONS) refuses a signature that would expire before its settle.
             $duration: !closure ['@App\X402\Pricing', 'duration']
             # A paid name that is no registered tool: JSON-RPC -32602 before any payment is read.
@@ -100,10 +103,18 @@ services:
             $channels: !service_locator
                 x402: '@?monolog.logger.x402'
 
+    # The lookup's RPC calls: 10 s, then NULL (still pending). The framework's default client has no timeout.
+    app.receipt_http_client:
+        class: Symfony\Contracts\HttpClient\HttpClientInterface
+        factory: ['Symfony\Component\HttpClient\HttpClient', 'create']
+        arguments: [{timeout: 10, max_duration: 10}]
+
     # The lookup's RPC and facilitator calls; any failure answers NULL (still pending).
     App\X402\ReceiptLookup:
         arguments:
-            $http: '@psr18.http_client'
+            $http: !service
+                class: Symfony\Component\HttpClient\Psr18Client
+                arguments: ['@app.receipt_http_client']
             $requests: '@mcp.psr17_factory'
             $streams: '@mcp.psr17_factory'
 

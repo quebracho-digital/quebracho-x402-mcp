@@ -18,7 +18,7 @@ final class TermsCacheRedisTest extends TestCase
     {
         $url = $_ENV['X402_REDIS_URL'] ?? $_SERVER['X402_REDIS_URL'] ?? 'redis://redis:6379';
         try {
-            $cache = TermsCacheFactory::create($url, sys_get_temp_dir());
+            $cache = TermsCacheFactory::create('terms', 604800, $url, sys_get_temp_dir());
             $cache->get('ping-'.bin2hex(random_bytes(4)), static fn () => 1);
         } catch (\Throwable $e) {
             self::markTestSkipped("Redis does not answer at $url (DDEV: `ddev get ddev/ddev-redis` then `ddev restart`): {$e->getMessage()}");

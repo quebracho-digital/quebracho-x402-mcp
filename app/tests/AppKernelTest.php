@@ -7,12 +7,17 @@ namespace App\Tests;
 use App\EventListener\McpRateLimit;
 use App\Kernel;
 use App\X402\Pricing;
+use App\X402\ReceiptLookup;
 use Psr\Cache\CacheItemPoolInterface;
 use Quebracho\X402\Budget;
 use Quebracho\X402\Networks;
 use Quebracho\X402\PayingMcpClient;
 use Quebracho\X402\X402McpMiddleware;
+use Symfony\Bundle\FrameworkBundle\Console\Application;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
+use Symfony\Component\Cache\Adapter\AbstractAdapter;
+use Symfony\Component\Console\Tester\CommandTester;
+use Symfony\Component\HttpClient\Psr18Client;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Routing\Exception\ResourceNotFoundException;
 use Symfony\Component\Routing\RouterInterface;
@@ -32,6 +37,27 @@ final class AppKernelTest extends KernelTestCase
         self::assertSame(60, $pricing->duration(['name' => 'analyze_terms']));
         self::assertSame(60, $pricing(['name' => 'wisdom'])[0]['maxTimeoutSeconds']);
         self::assertSame(0, $pricing->duration(['name' => 'wisdom']));
+    }
+
+    public function testTheReceiptLookupHasItsOwnTimeoutAndTheMemoIsAPrunablePool(): void
+    {
+        // ReceiptLookup's RPC client: 10 s, not the framework default (no timeout).
+        $http = self::getContainer()->get('app.receipt_http_client');
+        $options = (new \ReflectionProperty($http, 'defaultOptions'))->getValue($http);
+        self::assertSame(10.0, (float) $options['timeout']);
+        self::assertSame(10.0, (float) $options['max_duration']);
+        $lookup = (new \ReflectionProperty(ReceiptLookup::class, 'http'))->getValue(self::getContainer()->get(ReceiptLookup::class));
+        self::assertSame($http, (new \ReflectionProperty(Psr18Client::class, 'client'))->getValue($lookup));
+
+        // The memo is a cache.pool: cache:pool:list shows it and it keeps the 7-day default lifetime.
+        $pool = self::getContainer()->get('terms.cache');
+        self::assertSame(604800, (new \ReflectionProperty(AbstractAdapter::class, 'defaultLifetime'))->getValue($pool));
+        $list = new CommandTester((new Application(self::bootKernel()))->find('cache:pool:list'));
+        $list->execute([]);
+        self::assertStringContainsString('terms.cache', $list->getDisplay());
+        $prune = new CommandTester((new Application(self::bootKernel()))->find('cache:pool:prune'));
+        self::assertSame(0, $prune->execute([]));
+        self::assertStringContainsString('Pruning cache pool: terms.cache', $prune->getDisplay());
     }
 
     public function testTheRateLimitSeesTheMcpRouteAndOnlyIt(): void

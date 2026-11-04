@@ -6,6 +6,7 @@ namespace App\Tests\X402;
 
 use App\X402\RedisLedger;
 use PHPUnit\Framework\TestCase;
+use Quebracho\X402\LedgerUnavailableException;
 
 /**
  * Against the Redis of DDEV (the ddev-redis add-on). Skipped, with the reason, when it does not answer.
@@ -58,5 +59,52 @@ final class RedisLedgerTest extends TestCase
         $this->ledger->put($this->key, ['status' => 'settled'], 1);
         sleep(2);
         self::assertNull($this->ledger->get($this->key));
+    }
+
+    public function testAMissingDatabaseIsLedgerUnavailableNotADuplicate(): void
+    {
+        // Redis answers "ERR DB index is out of range" to SELECT: the claim must not run on db 0 instead.
+        $ledger = new RedisLedger(preg_replace('#/?$#', '/99', $this->url()));
+
+        $this->expectException(LedgerUnavailableException::class);
+        $ledger->claim($this->key, 60);
+    }
+
+    public function testAnErrorReplyIsUnavailableButAnExistingKeyIsStillADuplicate(): void
+    {
+        $raw = new \Redis();
+        $raw->connect(...$this->hostAndPort());
+        $raw->rPush('x402:'.$this->key, 'not a state'); // a list: GET on it is WRONGTYPE, SET NX on it is "exists"
+        try {
+            self::assertFalse($this->ledger->claim($this->key, 60), 'an existing key is a duplicate, not a failure');
+            try {
+                $this->ledger->get($this->key);
+                self::fail('a WRONGTYPE reply must throw LedgerUnavailableException');
+            } catch (LedgerUnavailableException) {
+                $this->addToAssertionCount(1);
+            }
+        } finally {
+            $raw->del('x402:'.$this->key);
+        }
+    }
+
+    public function testTheConnectionHasATwoSecondReadTimeout(): void
+    {
+        $connection = new \ReflectionMethod($this->ledger, 'connection');
+
+        self::assertSame(2.0, $connection->invoke($this->ledger)->getOption(\Redis::OPT_READ_TIMEOUT));
+    }
+
+    private function url(): string
+    {
+        return $_ENV['X402_REDIS_URL'] ?? $_SERVER['X402_REDIS_URL'] ?? 'redis://redis:6379';
+    }
+
+    /** @return array{0: string, 1: int} */
+    private function hostAndPort(): array
+    {
+        $parts = parse_url($this->url());
+
+        return [$parts['host'], $parts['port'] ?? 6379];
     }
 }

@@ -18,7 +18,7 @@ final class TermsCacheFactoryTest extends TestCase
 
     public function testNoRedisUrlIsTheFilesOfThisHost(): void
     {
-        self::assertInstanceOf(FilesystemAdapter::class, TermsCacheFactory::create('', $this->dir()));
+        self::assertInstanceOf(FilesystemAdapter::class, TermsCacheFactory::create('terms', 604800, '', $this->dir()));
     }
 
     public function testARedisThatDoesNotAnswerFallsBackToFilesWithAWarning(): void
@@ -33,7 +33,7 @@ final class TermsCacheFactoryTest extends TestCase
             }
         };
 
-        $cache = TermsCacheFactory::create('redis://127.0.0.1:1', $this->dir(), $logger);
+        $cache = TermsCacheFactory::create('terms', 604800, 'redis://127.0.0.1:1', $this->dir(), $logger);
 
         self::assertInstanceOf(FilesystemAdapter::class, $cache);
         self::assertCount(1, $logger->warnings);
@@ -42,6 +42,6 @@ final class TermsCacheFactoryTest extends TestCase
 
     public function testAnInvalidRedisUrlFallsBackToFiles(): void
     {
-        self::assertInstanceOf(FilesystemAdapter::class, TermsCacheFactory::create('not a redis url', $this->dir()));
+        self::assertInstanceOf(FilesystemAdapter::class, TermsCacheFactory::create('terms', 604800, 'not a redis url', $this->dir()));
     }
 }

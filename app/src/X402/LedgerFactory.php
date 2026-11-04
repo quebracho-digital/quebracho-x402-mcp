@@ -21,19 +21,15 @@ final class LedgerFactory
     }
 
     /**
-     * app:x402:check: pings Redis when X402_REDIS_URL is set, else proves the directory takes a claim.
+     * app:x402:check: proves the ledger takes a claim and frees it again, on Redis (X402_REDIS_URL) or this host's
+     * directory. A PING is not enough: a Redis that answers but refuses writes (a missing db) would pass it.
      */
     public static function check(?string $redisUrl, string $dir): void
     {
         $ledger = self::create($redisUrl, $dir);
-        if ($ledger instanceof RedisLedger) {
-            $ledger->ping();
-
-            return;
-        }
         $key = 'x402-check-'.bin2hex(random_bytes(4));
         if (!$ledger->claim($key, 1)) {
-            throw new \RuntimeException("The x402 ledger directory $dir does not take a claim.");
+            throw new \RuntimeException($ledger instanceof RedisLedger ? 'The x402 Redis ledger does not take a claim.' : "The x402 ledger directory $dir does not take a claim.");
         }
         $ledger->release($key);
     }

@@ -62,12 +62,21 @@ final class RedisLedger implements PaymentLedger
     }
 
     /**
-     * Runs one Redis operation. A failed one drops the connection, so the next call connects again.
+     * Runs one Redis operation. phpredis returns false for an error reply as well as for a miss (GET) or a
+     * refused NX (SET), so an error is told apart by getLastError(), cleared before each call. A failed
+     * operation drops the connection, so the next call connects again.
      */
     private function call(\Closure $operation): mixed
     {
         try {
-            return $operation($this->connection());
+            $redis = $this->connection();
+            $redis->clearLastError();
+            $answer = $operation($redis);
+            if (false === $answer && null !== $error = $redis->getLastError()) {
+                throw new \RedisException($error);
+            }
+
+            return $answer;
         } catch (\RedisException $e) {
             $this->redis = null;
 
@@ -87,13 +96,18 @@ final class RedisLedger implements PaymentLedger
         }
         $redis = new \Redis();
         try {
-            $redis->connect($parts['host'], $parts['port'] ?? 6379, 2.0);
+            // Connect and read both time out at 2 s: a Redis that stops answering fails the request, it does not hang it.
+            $redis->connect($parts['host'], $parts['port'] ?? 6379, 2.0, null, 0, 2.0);
             if (isset($parts['pass'])) {
-                $redis->auth(isset($parts['user']) ? [rawurldecode($parts['user']), rawurldecode($parts['pass'])] : rawurldecode($parts['pass']));
+                $auth = isset($parts['user']) ? [rawurldecode($parts['user']), rawurldecode($parts['pass'])] : rawurldecode($parts['pass']);
+                if (true !== $redis->auth($auth)) {
+                    throw new \RedisException('AUTH was refused: '.($redis->getLastError() ?? 'no reason given'));
+                }
             }
             $db = (int) trim($parts['path'] ?? '', '/');
-            if ($db > 0) {
-                $redis->select($db);
+            if ($db > 0 && true !== $redis->select($db)) {
+                // An out-of-range db would otherwise silently use db 0.
+                throw new \RedisException('SELECT '.$db.' was refused: '.($redis->getLastError() ?? 'no reason given'));
             }
         } catch (\RedisException $e) {
             throw new LedgerUnavailableException('X402_REDIS_URL is set but Redis does not answer: '.$e->getMessage(), 0, $e);
