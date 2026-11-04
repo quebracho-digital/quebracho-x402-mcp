@@ -7,6 +7,7 @@ namespace App\Tests\X402;
 use App\X402\PaymentLog;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
+use Symfony\Component\DependencyInjection\ServiceLocator;
 use Psr\Log\AbstractLogger;
 use Quebracho\X402\PaymentIntent;
 use Quebracho\X402\PaymentOutcome;
@@ -32,6 +33,12 @@ final class PaymentLogTest extends KernelTestCase
         };
     }
 
+    /** The $channels locator as services.yaml builds it: 'x402' only when the channel exists. */
+    private function channels(?object $channel): ServiceLocator
+    {
+        return new ServiceLocator(null === $channel ? [] : ['x402' => static fn () => $channel]);
+    }
+
     private function outcome(string $status, ?array $receipt = null, ?string $reason = null): PaymentOutcome
     {
         $payment = ['accepted' => ['network' => 'eip155:84532'], 'payload' => ['signature' => self::SIGNATURE, 'authorization' => ['from' => '0x1']]];
@@ -44,7 +51,7 @@ final class PaymentLogTest extends KernelTestCase
         $logger = $this->recorder();
         $intent = new PaymentIntent('settling', str_repeat('a', 64), ['network' => 'eip155:84532', 'from' => '0x1'], ['network' => 'eip155:84532', 'payTo' => self::REQ['payTo'], 'amount' => '10000', 'asset' => '0xUSDC']);
 
-        (new PaymentLog($logger))->intent($intent);
+        (new PaymentLog($logger, $this->channels(null)))->intent($intent);
 
         self::assertCount(1, $logger->records);
         self::assertSame('info', $logger->records[0]['level']);
@@ -57,7 +64,7 @@ final class PaymentLogTest extends KernelTestCase
     {
         $logger = $this->recorder();
 
-        (new PaymentLog($logger, null))->outcome($this->outcome('settled', ['success' => true, 'transaction' => '0xabc']));
+        (new PaymentLog($logger, $this->channels(null)))->outcome($this->outcome('settled', ['success' => true, 'transaction' => '0xabc']));
 
         self::assertSame('x402 outcome', $logger->records[0]['message']);
     }
@@ -67,7 +74,7 @@ final class PaymentLogTest extends KernelTestCase
         $fallback = $this->recorder();
         $channel = $this->recorder();
 
-        (new PaymentLog($fallback, $channel))->outcome($this->outcome('settled', ['success' => true, 'transaction' => '0xabc']));
+        (new PaymentLog($fallback, $this->channels($channel)))->outcome($this->outcome('settled', ['success' => true, 'transaction' => '0xabc']));
 
         self::assertSame([], $fallback->records);
         self::assertCount(1, $channel->records);
@@ -81,9 +88,9 @@ final class PaymentLogTest extends KernelTestCase
         self::bootKernel();
         $log = self::getContainer()->get(PaymentLog::class);
 
-        $logger = (new \ReflectionProperty(PaymentLog::class, 'logger'))->getValue($log);
-        self::assertSame(self::getContainer()->get('monolog.logger.x402'), $logger);
-        self::assertSame('', (new \ReflectionProperty(PaymentLog::class, 'prefix'))->getValue($log));
+        $channels = (new \ReflectionProperty(PaymentLog::class, 'channels'))->getValue($log);
+        self::assertTrue($channels->has('x402'));
+        self::assertSame(self::getContainer()->get('monolog.logger.x402'), $channels->get('x402'));
     }
 
     public static function levels(): array
@@ -103,7 +110,7 @@ final class PaymentLogTest extends KernelTestCase
     {
         $logger = $this->recorder();
 
-        (new PaymentLog($logger))->outcome($this->outcome($status, ['success' => false, 'transaction' => '0xabc', 'errorReason' => 'invalid_settle']));
+        (new PaymentLog($logger, $this->channels(null)))->outcome($this->outcome($status, ['success' => false, 'transaction' => '0xabc', 'errorReason' => 'invalid_settle']));
 
         self::assertSame($level, $logger->records[0]['level']);
         self::assertSame('x402 outcome', $logger->records[0]['message']);
@@ -115,7 +122,7 @@ final class PaymentLogTest extends KernelTestCase
     public function testTheLogNeverHoldsSecretsOrTheBody(): void
     {
         $logger = $this->recorder();
-        $log = new PaymentLog($logger);
+        $log = new PaymentLog($logger, $this->channels(null));
 
         $log->intent(new PaymentIntent('handling', str_repeat('b', 64), ['network' => 'eip155:84532', 'from' => '0x1'], ['network' => 'eip155:84532', 'payTo' => self::REQ['payTo'], 'amount' => '1', 'asset' => '0xUSDC'], 'pid', '0xabc'));
         $log->outcome($this->outcome('failed_after_settle', ['success' => true, 'transaction' => '0xabc'], null));

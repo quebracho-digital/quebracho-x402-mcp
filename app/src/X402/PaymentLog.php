@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\X402;
 
+use Psr\Container\ContainerInterface;
 use Psr\Log\LoggerInterface;
 use Quebracho\X402\PaymentIntent;
 use Quebracho\X402\PaymentOutcome;
@@ -14,24 +15,34 @@ use Symfony\Component\EventDispatcher\Attribute\AsEventListener;
  * and each payment's outcome. The context never holds the signature, the response body, the facilitator URL or a
  * bearer token.
  *
- * Where it goes: the 'x402' Monolog channel when symfony/monolog-bundle is installed (services.yaml passes it as
- * $channel), else the PSR-3 logger, with the messages prefixed 'x402 ' as Screening's are.
+ * Where it goes: the 'x402' Monolog channel when symfony/monolog-bundle is installed (the $channels locator in
+ * services.yaml holds it only then), else the PSR-3 logger, with the messages prefixed 'x402 ' as Screening's are.
+ * Decided at the first log line, not at construction, so the container compiles with or without the bundle.
  */
 final class PaymentLog
 {
-    private readonly LoggerInterface $logger;
-    private readonly string $prefix;
+    /** @var array{LoggerInterface, string}|null [logger, prefix] */
+    private ?array $target = null;
 
-    public function __construct(LoggerInterface $logger, ?LoggerInterface $channel = null)
+    public function __construct(
+        private readonly LoggerInterface $logger,
+        private readonly ContainerInterface $channels,
+    ) {
+    }
+
+    /** @return array{LoggerInterface, string} */
+    private function target(): array
     {
-        $this->logger = $channel ?? $logger;
-        $this->prefix = null === $channel ? 'x402 ' : '';
+        return $this->target ??= $this->channels->has('x402')
+            ? [$this->channels->get('x402'), '']
+            : [$this->logger, 'x402 '];
     }
 
     #[AsEventListener(event: PaymentIntent::class)]
     public function intent(PaymentIntent $event): void
     {
-        $this->logger->info($this->prefix.'intent', [
+        [$logger, $prefix] = $this->target();
+        $logger->info($prefix.'intent', [
             'phase' => $event->phase,
             'key' => $event->key,
             'network' => $event->req['network'],
@@ -51,7 +62,8 @@ final class PaymentLog
             default => 'warning',
         };
 
-        $this->logger->log($level, $this->prefix.'outcome', [
+        [$logger, $prefix] = $this->target();
+        $logger->log($level, $prefix.'outcome', [
             'status' => $event->status,
             'network' => $event->req['network'] ?? null,
             'transaction' => $event->receipt['transaction'] ?? null,

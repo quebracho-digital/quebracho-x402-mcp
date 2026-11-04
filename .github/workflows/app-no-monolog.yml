@@ -1,0 +1,24 @@
+# Manual only: runs the app the way a production install without the optional MonologBundle does.
+# Trigger: gh workflow run app-no-monolog.yml   (never on push or pull_request)
+name: app-no-monolog
+on:
+  workflow_dispatch:
+jobs:
+  no-monolog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: ctype, iconv, gmp, sodium
+      # --no-dev drops symfony/monolog-bundle (require-dev), so config/packages/x402_log.php returns nothing.
+      - run: composer install --no-dev --no-interaction --no-progress
+        working-directory: app
+      - run: php bin/console cache:warmup --env=prod
+        working-directory: app
+      # PaymentLog must be built with no 'x402' channel: the locator is empty, so it logs through the PSR-3 logger.
+      - run: |
+          php bin/console debug:container 'App\X402\PaymentLog' --env=prod
+          php -r 'require "vendor/autoload.php"; var_dump(class_exists(Symfony\Bundle\MonologBundle\MonologBundle::class));' | grep -qx 'bool(false)'
+        working-directory: app
