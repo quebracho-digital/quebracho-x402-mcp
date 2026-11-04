@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests;
 
 use App\EventListener\McpRateLimit;
+use App\Kernel;
 use App\X402\Pricing;
 use Psr\Cache\CacheItemPoolInterface;
 use Quebracho\X402\Budget;
@@ -108,5 +109,12 @@ final class AppKernelTest extends KernelTestCase
         $refused = $send();
         self::assertSame(429, $refused->getStatusCode());
         self::assertSame(9, json_decode((string) $refused->getContent(), true)['id']);
+    }
+
+    public function testAnOptionalBundleIsRegisteredOnlyWhenItsClassExists(): void
+    {
+        // The app runs without symfony/monolog-bundle (suggested): a missing class yields nothing, no error.
+        self::assertSame([], iterator_to_array(Kernel::optionalBundles(['Not\\Installed\\Bundle'])));
+        self::assertCount(1, iterator_to_array(Kernel::optionalBundles([\Symfony\Bundle\MonologBundle\MonologBundle::class])));
     }
 }

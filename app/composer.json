@@ -86,8 +86,12 @@
         "type": "path",
         "url": "../packages/x402"
     }],
+    "suggest": {
+        "symfony/monolog-bundle": "Enables the 'x402' Monolog channel in production (x402 payment logs). Without it, the app logs through the PSR-3 logger with the 'x402 ' prefix."
+    },
     "require-dev": {
         "phpstan/phpstan": "^2.3",
-        "phpunit/phpunit": "^12"
+        "phpunit/phpunit": "^12",
+        "symfony/monolog-bundle": "^4.1"
     }
 }

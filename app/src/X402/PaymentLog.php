@@ -12,18 +12,26 @@ use Symfony\Component\EventDispatcher\Attribute\AsEventListener;
 /**
  * Logs the x402 steps: the intent before each settle or handler (so a crash after the send still leaves a line),
  * and each payment's outcome. The context never holds the signature, the response body, the facilitator URL or a
- * bearer token. No Monolog in this app, so no channel: the messages carry the 'x402' prefix, as Screening's do.
+ * bearer token.
+ *
+ * Where it goes: the 'x402' Monolog channel when symfony/monolog-bundle is installed (services.yaml passes it as
+ * $channel), else the PSR-3 logger, with the messages prefixed 'x402 ' as Screening's are.
  */
 final class PaymentLog
 {
-    public function __construct(private readonly LoggerInterface $logger)
+    private readonly LoggerInterface $logger;
+    private readonly string $prefix;
+
+    public function __construct(LoggerInterface $logger, ?LoggerInterface $channel = null)
     {
+        $this->logger = $channel ?? $logger;
+        $this->prefix = null === $channel ? 'x402 ' : '';
     }
 
     #[AsEventListener(event: PaymentIntent::class)]
     public function intent(PaymentIntent $event): void
     {
-        $this->logger->info('x402 intent', [
+        $this->logger->info($this->prefix.'intent', [
             'phase' => $event->phase,
             'key' => $event->key,
             'network' => $event->req['network'],
@@ -43,7 +51,7 @@ final class PaymentLog
             default => 'warning',
         };
 
-        $this->logger->log($level, 'x402 outcome', [
+        $this->logger->log($level, $this->prefix.'outcome', [
             'status' => $event->status,
             'network' => $event->req['network'] ?? null,
             'transaction' => $event->receipt['transaction'] ?? null,

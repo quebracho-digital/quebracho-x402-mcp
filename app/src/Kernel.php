@@ -7,10 +7,38 @@ use Symfony\Bundle\FrameworkBundle\Kernel\MicroKernelTrait;
 use Symfony\Component\DependencyInjection\Compiler\CompilerPassInterface;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\HttpKernel\Kernel as BaseKernel;
+use Symfony\Component\HttpKernel\Bundle\BundleInterface;
 
 class Kernel extends BaseKernel implements CompilerPassInterface
 {
-    use MicroKernelTrait;
+    use MicroKernelTrait {
+        registerBundles as private registerTraitBundles;
+    }
+
+    /**
+     * config/bundles.php, plus the optional bundles that are installed (symfony/monolog-bundle is suggested, not required).
+     *
+     * @return iterable<BundleInterface>
+     */
+    public function registerBundles(): iterable
+    {
+        yield from $this->registerTraitBundles();
+        yield from self::optionalBundles([\Symfony\Bundle\MonologBundle\MonologBundle::class]);
+    }
+
+    /**
+     * @param list<class-string<BundleInterface>> $classes
+     *
+     * @return \Generator<BundleInterface>
+     */
+    public static function optionalBundles(array $classes): \Generator
+    {
+        foreach ($classes as $class) {
+            if (class_exists($class)) {
+                yield new $class();
+            }
+        }
+    }
 
     /**
      * @return list<string> An array of allowed values for APP_ENV

@@ -6,12 +6,12 @@ namespace App\Tests\X402;
 
 use App\X402\PaymentLog;
 use PHPUnit\Framework\Attributes\DataProvider;
-use PHPUnit\Framework\TestCase;
+use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 use Psr\Log\AbstractLogger;
 use Quebracho\X402\PaymentIntent;
 use Quebracho\X402\PaymentOutcome;
 
-final class PaymentLogTest extends TestCase
+final class PaymentLogTest extends KernelTestCase
 {
     private const SIGNATURE = '0xdeadbeefSIGNATURE';
     private const BEARER = 'Bearer sk-secret-token';
@@ -51,6 +51,39 @@ final class PaymentLogTest extends TestCase
         self::assertSame('x402 intent', $logger->records[0]['message']);
         self::assertSame(['phase', 'key', 'network', 'payTo', 'amount', 'asset'], array_keys($logger->records[0]['context']));
         self::assertSame('settling', $logger->records[0]['context']['phase']);
+    }
+
+    public function testWithoutTheChannelItLogsThroughThePsrLoggerWithThePrefix(): void
+    {
+        $logger = $this->recorder();
+
+        (new PaymentLog($logger, null))->outcome($this->outcome('settled', ['success' => true, 'transaction' => '0xabc']));
+
+        self::assertSame('x402 outcome', $logger->records[0]['message']);
+    }
+
+    public function testWithTheChannelItLogsThereWithoutThePrefix(): void
+    {
+        $fallback = $this->recorder();
+        $channel = $this->recorder();
+
+        (new PaymentLog($fallback, $channel))->outcome($this->outcome('settled', ['success' => true, 'transaction' => '0xabc']));
+
+        self::assertSame([], $fallback->records);
+        self::assertCount(1, $channel->records);
+        self::assertSame('outcome', $channel->records[0]['message']);
+        self::assertSame('info', $channel->records[0]['level']);
+    }
+
+    public function testTheContainerGivesTheChannelWhenTheBundleIsInstalled(): void
+    {
+        // The dev/test kernel has symfony/monolog-bundle (require-dev): config/packages/x402_log.php defines the channel.
+        self::bootKernel();
+        $log = self::getContainer()->get(PaymentLog::class);
+
+        $logger = (new \ReflectionProperty(PaymentLog::class, 'logger'))->getValue($log);
+        self::assertSame(self::getContainer()->get('monolog.logger.x402'), $logger);
+        self::assertSame('', (new \ReflectionProperty(PaymentLog::class, 'prefix'))->getValue($log));
     }
 
     public static function levels(): array
