@@ -39,12 +39,16 @@ final class X402CheckCommand
         ])] private readonly array $limits,
         #[Autowire('%env(default::X402_TIMEOUTS)%')] private readonly ?string $timeouts,
         #[Autowire('%env(default::X402_BUYER_MAX_TIMEOUT)%')] private readonly ?string $buyerMax,
+        #[Autowire('%env(default::X402_PAID_TOOLS)%')] private readonly ?string $paidTools = null,
     ) {
     }
 
     public function __invoke(SymfonyStyle $io): int
     {
         $errors = [];
+        if ('' === trim((string) $this->paidTools)) {
+            $io->warning('X402_PAID_TOOLS is empty: every tool is free except #[PaidJob] ones.');
+        }
         $check = static function (string $what, \Closure $build) use (&$errors, $io): void {
             try {
                 $build();
