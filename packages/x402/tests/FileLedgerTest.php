@@ -84,6 +84,77 @@ final class FileLedgerTest extends TestCase
         }
     }
 
+    public function testAnUnusableDirectoryMakesAnOpenLedgerUnavailable(): void
+    {
+        [$ledger, $file] = $this->unusableLedger();
+        try {
+            $this->expectException(LedgerUnavailableException::class);
+            $ledger->open('k', [], 600);
+        } finally {
+            unlink($file);
+        }
+    }
+
+    /**
+     * A directory that can be read but not written: its files cannot be created, replaced or deleted.
+     *
+     * @param \Closure(FileLedger): mixed $operation
+     */
+    private function readOnly(\Closure $operation): void
+    {
+        $dir = $this->claimsDir();
+        $ledger = new FileLedger($dir);
+        $ledger->put('k', ['status' => 'settled'], 600);
+        $ledger->open('k', [], 600);
+        $ledger->put('dead', ['status' => 'settled'], -1);
+        $ledger->claim('lock', 600); // leaves .lock, so a claim gets past the lock
+        chmod($dir, 0500);
+        try {
+            $this->expectException(LedgerUnavailableException::class);
+            $operation($ledger);
+        } finally {
+            chmod($dir, 0700);
+        }
+    }
+
+    public function testAReadOnlyDirectoryMakesAClaimLedgerUnavailable(): void
+    {
+        $this->readOnly(static fn (FileLedger $l) => $l->claim('new', 600));
+    }
+
+    public function testAReadOnlyDirectoryMakesAPutLedgerUnavailable(): void
+    {
+        $this->readOnly(static fn (FileLedger $l) => $l->put('k', ['status' => 'delivered'], 600));
+    }
+
+    public function testAReadOnlyDirectoryMakesAnOpenLedgerUnavailable(): void
+    {
+        $this->readOnly(static fn (FileLedger $l) => $l->open('k', ['status' => 'pending'], 600));
+    }
+
+    public function testAReleaseThatCannotDeleteIsLedgerUnavailable(): void
+    {
+        $this->readOnly(static fn (FileLedger $l) => $l->release('k'));
+    }
+
+    public function testACloseThatCannotDeleteIsLedgerUnavailable(): void
+    {
+        $this->readOnly(static fn (FileLedger $l) => $l->close('k'));
+    }
+
+    public function testAPruneThatCannotDeleteIsLedgerUnavailable(): void
+    {
+        $this->readOnly(static fn (FileLedger $l) => $l->prune());
+    }
+
+    public function testReleasingAnAbsentKeyIsNotAnError(): void
+    {
+        $ledger = $this->ledger();
+        $ledger->release('never-claimed');
+        $ledger->close('never-opened');
+        self::assertTrue($ledger->claim('never-claimed', 600));
+    }
+
     public function testOpenListsTheKeyWithItsRefUntilClosed(): void
     {
         $ledger = $this->ledger();

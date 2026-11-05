@@ -23,7 +23,7 @@ final class RedisLedger implements PaymentLedger
     private ?\Redis $redis = null;
 
     /**
-     * @param string $url redis://[user][:password@]host[:port][/db], as in X402_REDIS_URL
+     * @param string $url redis[s]://[user][:password@]host[:port][/db], as in X402_REDIS_URL
      */
     public function __construct(private readonly string $url)
     {
@@ -136,14 +136,20 @@ final class RedisLedger implements PaymentLedger
             return $this->redis;
         }
         $parts = parse_url($this->url);
-        if (!is_array($parts) || !isset($parts['host']) || 'redis' !== ($parts['scheme'] ?? null)) {
-            // The URL itself is not echoed: it may carry a password.
-            throw new \InvalidArgumentException('X402_REDIS_URL must look like redis://host:port.');
+        $scheme = is_array($parts) ? strtolower($parts['scheme'] ?? '') : '';
+        if (!is_array($parts) || '' === ($parts['host'] ?? '') || !in_array($scheme, ['redis', 'rediss'], true)) {
+            // The URL itself is not echoed: it may carry a password. Unavailable, not a 500 on every payment.
+            throw new LedgerUnavailableException('X402_REDIS_URL must look like redis://host:port (or rediss://).');
+        }
+        if (!class_exists(\Redis::class)) {
+            throw new LedgerUnavailableException('X402_REDIS_URL is set but ext-redis is not loaded.');
         }
         $redis = new \Redis();
         try {
             // Connect and read both time out at 2 s: a Redis that stops answering fails the request, it does not hang it.
-            $redis->connect($parts['host'], $parts['port'] ?? 6379, 2.0, null, 0, 2.0);
+            // A missing port is Redis's default, 6379. @: an unresolvable host also raises a PHP warning, which a debug
+            // error handler turns into an ErrorException (a 500); the RedisException that follows says the same.
+            @$redis->connect(('rediss' === $scheme ? 'tls://' : '').$parts['host'], $parts['port'] ?? 6379, 2.0, null, 0, 2.0);
             if (isset($parts['pass'])) {
                 $auth = isset($parts['user']) ? [rawurldecode($parts['user']), rawurldecode($parts['pass'])] : rawurldecode($parts['pass']);
                 if (true !== $redis->auth($auth)) {

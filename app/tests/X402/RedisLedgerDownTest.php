@@ -34,4 +34,25 @@ final class RedisLedgerDownTest extends TestCase
         }
         self::assertSame(4, $thrown, 'every operation must report an unreachable Redis as LedgerUnavailableException');
     }
+
+    /** @return iterable<string, array{string}> */
+    public static function badUrls(): iterable
+    {
+        yield 'no host' => ['redis://'];
+        yield 'not redis' => ['http://x'];
+        yield 'not a URL' => ['redis://:secreto@host:notaport'];
+        yield 'unresolvable host with a password' => ['redis://:secreto@host'];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('badUrls')]
+    public function testAnUnusableUrlIsLedgerUnavailableWithoutItsPassword(string $url): void
+    {
+        try {
+            (new RedisLedger($url))->claim('k', 60);
+            self::fail('expected LedgerUnavailableException');
+        } catch (LedgerUnavailableException $e) {
+            self::assertStringNotContainsString('secreto', $e->getMessage());
+            self::assertStringNotContainsString('@host', $e->getMessage());
+        }
+    }
 }

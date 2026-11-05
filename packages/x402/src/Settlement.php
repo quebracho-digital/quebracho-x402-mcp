@@ -98,10 +98,14 @@ final class Settlement
         if (array_key_exists('payer', $receipt) && (is_string($receipt['payer']) || null === $receipt['payer'])) {
             $out['payer'] = $receipt['payer'];
         }
-        foreach (['errorReason', 'paymentId'] as $field) {
+        foreach (['errorReason', 'errorMessage', 'paymentId'] as $field) {
             if (is_string($receipt[$field] ?? null)) {
                 $out[$field] = $receipt[$field];
             }
+        }
+        // Atomic units, a non-negative integer as a string (an int could already have lost precision).
+        if (is_string($receipt['amount'] ?? null) && 1 === preg_match('/^\d+$/D', $receipt['amount'])) {
+            $out['amount'] = $receipt['amount'];
         }
         if (array_key_exists('extensions', $receipt)) {
             try {

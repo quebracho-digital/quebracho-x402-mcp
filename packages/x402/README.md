@@ -95,8 +95,8 @@ HTTP answers `503 ledger_unavailable` and MCP answers the PaymentRequired with
 - **Written before the money or the handler moves (write-ahead).**
   `settling` is stored before a settle is sent. `handling` is stored before an
   upfront handler runs, and it is closed by `delivered`, or by `settled` with
-  `handler_ran: false` when the handler answered non-2xx or threw (a retry runs
-  it again, as before). If the store refuses the `settling` write, nothing is
+  `handler_ran: false` when the handler answered non-2xx or threw, or on MCP
+  answered `isError` or a JSON-RPC error (a retry runs it again, as before). If the store refuses the `settling` write, nothing is
   sent: `503 ledger_unavailable`. Refused on the `handling` write, the handler
   does not run.
 - **A retry that finds an open intention.** `settling` without a transaction or

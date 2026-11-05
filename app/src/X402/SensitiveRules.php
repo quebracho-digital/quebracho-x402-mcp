@@ -147,7 +147,7 @@ final class SensitiveRules
                 return false;
             }
 
-            return \in_array(strtolower($rule['value']), self::directives($subject->getHeaderLine($rule['name'])), true);
+            return \in_array(strtolower(trim($rule['value'])), self::directives($subject->getHeaderLine($rule['name'])), true);
         }
 
         return match ($rule['kind']) {

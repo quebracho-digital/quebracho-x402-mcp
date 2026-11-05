@@ -262,9 +262,9 @@ final class LedgerReplayTest extends TestCase
     }
 
     /** The JSON-RPC answer of a tool that returns $text (id 2, as the handler names it). */
-    private function toolHandler(string $text = 'paid content'): RequestHandlerInterface
+    private function toolHandler(string $text = 'paid content', bool $isError = false): RequestHandlerInterface
     {
-        $json = json_encode(['jsonrpc' => '2.0', 'id' => 2, 'result' => ['content' => [['type' => 'text', 'text' => $text]]]]);
+        $json = json_encode(['jsonrpc' => '2.0', 'id' => 2, 'result' => ['content' => [['type' => 'text', 'text' => $text]]] + ($isError ? ['isError' => true] : [])]);
 
         return new class($this->runs, $json) implements RequestHandlerInterface {
             public function __construct(private int &$runs, private string $json)
@@ -328,6 +328,21 @@ final class LedgerReplayTest extends TestCase
         self::assertSame(200, $again->getStatusCode());
         self::assertSame('paid content', (string) $again->getBody());
         self::assertTrue(PaymentHeaders::decode($again->getHeaderLine(PaymentHeaders::RESPONSE))['success']);
+        self::assertSame(1, $this->runs);
+    }
+
+    public function testAReplayAnswersTheSameReceiptWithAmountAndErrorMessage(): void
+    {
+        $settle = static fn (array $payment, array $req): array => ['success' => true, 'transaction' => '0xtx', 'network' => $req['network'], 'payer' => $payment['payload']['authorization']['from'], 'errorMessage' => 'note', 'amount' => '10000'];
+        $middleware = $this->http($settle);
+        $payment = $this->httpPayment($middleware);
+
+        $first = PaymentHeaders::decode($middleware->process($this->httpCall($payment), $this->handler())->getHeaderLine(PaymentHeaders::RESPONSE));
+        $again = PaymentHeaders::decode($middleware->process($this->httpCall($payment), $this->handler())->getHeaderLine(PaymentHeaders::RESPONSE));
+
+        self::assertSame('10000', $first['amount']);
+        self::assertSame('note', $first['errorMessage']);
+        self::assertSame($first, $again);
         self::assertSame(1, $this->runs);
     }
 
@@ -539,6 +554,24 @@ final class LedgerReplayTest extends TestCase
         self::assertSame(200, $retry->getStatusCode());
         self::assertSame('paid content', (string) $retry->getBody());
         self::assertSame(2, $this->runs);
+    }
+
+    /** As testUpfrontHandlerFailingAfterAConfirmedSettleStaysRecoverable (HTTP non-2xx): an isError tool did not deliver. */
+    public function testMcpUpfrontToolAnsweringIsErrorRunsAgainOnRetry(): void
+    {
+        $payment = $this->mcpPayment($this->mcp(upfront: true));
+        $calls = 0;
+
+        $failed = self::answer($this->mcp($this->countedSettle($calls), upfront: true)->process(self::mcpCall(2, $payment), $this->toolHandler('boom', true)));
+        self::assertTrue($failed['result']['isError']);
+        self::assertTrue($failed['result']['_meta'][X402McpMiddleware::PAYMENT_RESPONSE]['success'], 'charged: the receipt goes with the failure');
+        self::assertSame(['settled', false], [$this->ledger->get(Settlement::key($payment))['status'], $this->ledger->get(Settlement::key($payment))['handler_ran']]);
+
+        $retry = self::answer($this->mcp($this->countedSettle($calls), upfront: true)->process(self::mcpCall(3, $payment), $this->toolHandler()));
+        self::assertArrayNotHasKey('isError', $retry['result']);
+        self::assertSame('paid content', $retry['result']['content'][0]['text']);
+        self::assertSame(2, $this->runs, 'the tool ran again');
+        self::assertSame(1, $calls, 'no second settle');
     }
 
     public function testMcpUpfrontPendingSettleConfirmedByTheLookupRunsTheToolOnRetry(): void

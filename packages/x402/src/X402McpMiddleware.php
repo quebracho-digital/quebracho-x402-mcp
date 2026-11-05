@@ -276,8 +276,10 @@ final class X402McpMiddleware implements MiddlewareInterface
 
             return $this->required($id, $accepts, $resource, 'unexpected_settle_error');
         }
-        // $receipt is the failed one when the settle refused, else the one this answer carries.
-        $this->record($sale, $receipt, $keep ? $response : null, $id);
+        // $receipt is the failed one when the settle refused, else the one this answer carries. Upfront, a tool that
+        // did not deliver (isError, a JSON-RPC error) is X402Middleware's non-2xx: 'settled' with handler_ran false,
+        // nothing kept, so a retry runs it again with no second settle.
+        $this->record($sale, $receipt, $keep && $delivered ? $response : null, $id, $delivered);
         if (isset($settled['receipt'])) {
             // Settled nothing: the spec says return only the payment error.
             return $this->required($id, $accepts, $resource, $settled['receipt']['errorReason']);

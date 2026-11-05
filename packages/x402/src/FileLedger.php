@@ -28,14 +28,9 @@ final class FileLedger implements PaymentLedger
             if (null !== $this->read($file)) {
                 return false;
             }
-            // Absent or expired: replace it.
-            @unlink($file);
-            $handle = @fopen($file, 'x');
-            if (false === $handle) {
-                throw new LedgerUnavailableException("Cannot claim in the x402 ledger {$this->dir}.");
-            }
-            fwrite($handle, $this->encode(['status' => 'claimed'], $ttl));
-            fclose($handle);
+            // Absent or expired: replace it. The lock keeps other claims out, so the rename is the claim; a write
+            // that fails throws, so a claim is never reported taken without its file.
+            $this->write($file, $this->encode(['status' => 'claimed'], $ttl));
 
             return true;
         } finally {
@@ -57,9 +52,12 @@ final class FileLedger implements PaymentLedger
         $this->write($this->path($key), $this->encode($state, $ttl));
     }
 
+    /**
+     * @throws LedgerUnavailableException when a file stays (I/O); an absent one is already released
+     */
     public function release(string $key): void
     {
-        @unlink($this->path($key));
+        $this->remove($this->path($key));
         $this->close($key);
     }
 
@@ -85,7 +83,7 @@ final class FileLedger implements PaymentLedger
             }
             $entry = $this->readOpen($file);
             if (null === $entry) {
-                @unlink($file);
+                $this->remove($file);
                 continue;
             }
             $out[$entry['key']] = $entry['ref'];
@@ -94,9 +92,12 @@ final class FileLedger implements PaymentLedger
         return $out;
     }
 
+    /**
+     * @throws LedgerUnavailableException when the file stays (I/O)
+     */
     public function close(string $key): void
     {
-        @unlink($this->path($key, 'open'));
+        $this->remove($this->path($key, 'open'));
     }
 
     /**
@@ -106,7 +107,8 @@ final class FileLedger implements PaymentLedger
     {
         $n = 0;
         foreach (glob($this->dir.'/*.json') ?: [] as $file) {
-            if (null === $this->read($file) && @unlink($file)) {
+            if (null === $this->read($file)) {
+                $this->remove($file);
                 ++$n;
             }
         }
@@ -131,9 +133,21 @@ final class FileLedger implements PaymentLedger
         if (false === $tmp) {
             throw new LedgerUnavailableException("Cannot write the x402 ledger in {$this->dir}.");
         }
-        if (false === @file_put_contents($tmp, $content) || !@rename($tmp, $file)) {
+        if (strlen($content) !== @file_put_contents($tmp, $content) || !@rename($tmp, $file)) {
             @unlink($tmp);
             throw new LedgerUnavailableException("Cannot write the x402 ledger entry {$file}.");
+        }
+    }
+
+    /**
+     * Deletes $file; one already gone (another process, or never written) is not an error.
+     *
+     * @throws LedgerUnavailableException when the file is still there
+     */
+    private function remove(string $file): void
+    {
+        if (!@unlink($file) && file_exists($file)) {
+            throw new LedgerUnavailableException("Cannot delete the x402 ledger entry {$file}.");
         }
     }
 

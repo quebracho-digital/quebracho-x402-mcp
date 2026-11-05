@@ -76,6 +76,20 @@ final class SettlementTest extends TestCase
         PaymentHeaders::encode($receipt);
     }
 
+    public function testAmountAndErrorMessageAreKeptWhenOfTheirType(): void
+    {
+        $req = ['network' => 'eip155:84532'];
+        $ok = ['success' => true, 'transaction' => '0xtx', 'network' => 'eip155:84532', 'errorMessage' => 'settled late', 'amount' => '10000'];
+        $receipt = Settlement::run(fn () => $ok, self::payment(), $req);
+        self::assertSame('10000', $receipt['amount']);
+        self::assertSame('settled late', $receipt['errorMessage']);
+
+        foreach ([10000, '-1', '1.5', '1e4', '', "10\n"] as $amount) {
+            self::assertArrayNotHasKey('amount', Settlement::run(fn () => ['amount' => $amount] + $ok, self::payment(), $req), var_export($amount, true));
+        }
+        self::assertArrayNotHasKey('errorMessage', Settlement::run(fn () => ['errorMessage' => ['x']] + $ok, self::payment(), $req));
+    }
+
     public function testAPendingSettlementKeepsItsTransaction(): void
     {
         $pending = Settlement::run(fn () => ['success' => false, 'errorReason' => 'settlement_pending', 'transaction' => '0xtx'], self::payment(), ['network' => 'eip155:84532']);

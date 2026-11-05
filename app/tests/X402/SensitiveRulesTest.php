@@ -46,6 +46,16 @@ final class SensitiveRulesTest extends TestCase
         self::assertSame($sensitive, (new SensitiveRules([], self::shipped()))(self::http($headers)));
     }
 
+    public function testARuleValueIsTrimmed(): void
+    {
+        $rules = new SensitiveRules([], [['kind' => 'header', 'name' => 'Cache-Control', 'value' => ' no-store ']]);
+
+        self::assertTrue($rules(self::http(['Cache-Control' => 'no-store'])));
+        self::assertTrue($rules(self::http(['Cache-Control' => ' max-age=0 , NO-STORE'])));
+        self::assertFalse($rules(self::http(['Cache-Control' => 'max-age=0'])));
+        self::assertFalse($rules(self::http(['Cache-Control' => 'no-store-ish'])));
+    }
+
     public function testMcpArgumentAndTool(): void
     {
         $rules = new SensitiveRules(['analyze_terms'], self::shipped());
