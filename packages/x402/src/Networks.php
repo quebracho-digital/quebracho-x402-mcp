@@ -16,11 +16,21 @@ final class Networks
      * its fee payer); `rpc` a public node, for sweeping; `explorer` where
      * people see a transaction.
      */
-    // The demo testnets, and Ethereum mainnet. Ethereum is here to be *read*: the
+    // Mainnets: Base, Solana and Arc (paying on them costs real money). Ethereum is here to be *read*: the
     // blacklist of its USDC and USDT is an eth_call, which costs no gas. Paying on
-    // it is possible but a settlement there costs real gas. Any other mainnet is
-    // registered by the site with add() (see "Add a blockchain" in the README).
+    // it is possible but a settlement there costs real gas. The testnets are for the demo.
+    // Any other chain is registered by the site with add() (see "Add a blockchain" in the README).
     public const ALL = [
+        'eip155:8453' => [
+            'label' => 'Base (USDC)',
+            // Circle's USDC on Base (developers.circle.com, checked 2026-11-05). The EIP-712 domain was read from
+            // the contract on Base mainnet (name() "USD Coin", version() "2", chain id 8453) on 2026-11-05.
+            'asset' => '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+            'decimals' => 6,
+            'extra' => ['name' => 'USD Coin', 'version' => '2'],
+            'rpc' => 'https://mainnet.base.org',
+            'explorer' => 'https://basescan.org/tx/',
+        ],
         'eip155:1' => [
             'label' => 'Ethereum (USDC)',
             'asset' => '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
@@ -83,6 +93,15 @@ final class Networks
         // Solana devnet, as x402.org/facilitator names it (genesis hash). `asset` is
         // the USDC mint; the facilitator's fee payer goes in `extra` per offer
         // (HttpFacilitator::feePayer).
+        // Solana mainnet-beta: Circle's USDC mint (developers.circle.com, checked 2026-11-05).
+        'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d' => [
+            'label' => 'Solana (USDC)',
+            'asset' => 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+            'decimals' => 6,
+            'extra' => [],
+            'rpc' => 'https://api.mainnet-beta.solana.com',
+            'explorer' => 'https://explorer.solana.com/tx/',
+        ],
         'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1' => [
             'label' => 'Solana devnet (USDC)',
             'asset' => '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU',

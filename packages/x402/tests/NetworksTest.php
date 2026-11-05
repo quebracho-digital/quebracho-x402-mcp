@@ -52,8 +52,8 @@ final class NetworksTest extends TestCase
         Networks::reset();
         self::assertTrue(Networks::has('eip155:84532'));
         self::assertNull(Networks::find('eip155:7'));
-        $sol = Networks::addSolana('5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d', 'EPjFWDvwVrfSoUeVmsKoc8MPa6tdozRmrgHgDt9uhAa7', 'Solana (USDC)');
-        self::assertSame('solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d', $sol);
+        $sol = Networks::addSolana('11111111111111111111111111111111', 'EPjFWDvwVrfSoUeVmsKoc8MPa6tdozRmrgHgDt9uhAa7', 'Solana (USDC)');
+        self::assertSame('solana:11111111111111111111111111111111', $sol);
         self::assertArrayHasKey($sol, Networks::all());
         Networks::reset();
         self::assertFalse(Networks::has($sol));
@@ -71,5 +71,15 @@ final class NetworksTest extends TestCase
                 $this->addToAssertionCount(1);
             }
         }
+    }
+
+    public function testTheMainnetsAreBuiltIn(): void
+    {
+        Networks::reset();
+        self::assertSame('0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', Networks::get('eip155:8453')['asset']);
+        self::assertSame('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', Networks::get('solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d')['asset']);
+        // A Base payment is EIP-3009 (EvmExact); a Solana one is SolanaExact; both build requirements.
+        self::assertSame('0x000000000000000000000000000000000000dEaD', Networks::requirements('eip155:8453', '1', '0x000000000000000000000000000000000000dead')['payTo']);
+        self::assertSame('CKPKJWNdJEqa81x7CkZ14BVPiY6y16Sxs7owznqtWYp5', Networks::requirements('solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d', '1', 'CKPKJWNdJEqa81x7CkZ14BVPiY6y16Sxs7owznqtWYp5')['payTo']);
     }
 }
