@@ -69,8 +69,8 @@ final class X402McpMiddleware implements MiddlewareInterface
      *                                            already_settled (HTTP stays 200, as for every MCP refusal). Replaces $claim
      *                                            and $release.
      * @param ?\Closure                 $lookup
-     *                                            fn(array $state): ?array — asks the chain about a 'pending' payment, as
-     *                                            in X402Middleware
+     *                                            fn(array $state, array $payment, array $req): ?array — asks the chain
+     *                                            about a 'pending' payment, as in X402Middleware
      * @param ?\Closure                 $sensitive
      *                                            fn(array $params): bool — TRUE when this call's answer must not be kept,
      *                                            as in X402Middleware: the state is stored, never the tool's answer.
@@ -175,7 +175,21 @@ final class X402McpMiddleware implements MiddlewareInterface
         if (null !== $reason) {
             return $this->required($id, $accepts, $resource, $reason);
         }
+        try {
+            return $this->charge($request, $handler, $sale, $run, $id, $accepts, $resource, $keep);
+        } finally {
+            // After the outcome is written, whatever it was: the next retry finds it.
+            $sale->endRun();
+        }
+    }
 
+    /**
+     * Settles and runs an admitted call, or runs an upfront one already charged ($run, its run claim held).
+     *
+     * @param ?array<string, mixed> $run
+     */
+    private function charge(ServerRequestInterface $request, RequestHandlerInterface $handler, Sale $sale, ?array $run, mixed $id, array $accepts, array $resource, bool $keep): ResponseInterface
+    {
         $receipt = $run['receipt'] ?? null;
         if (null === $run && $sale->upfront()) {
             // The intention is stored before the money can move: if the store refuses it, nothing is sent.

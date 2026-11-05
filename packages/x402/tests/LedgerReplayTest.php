@@ -736,4 +736,246 @@ final class LedgerReplayTest extends TestCase
 
         self::assertArrayHasKey('response', end($ledger->puts));
     }
+
+    /**
+     * A ledger in memory. $beforeHandling runs once, the first time a 'handling' state is put, before it is
+     * stored: a concurrent retry slipped in between a retry's read and its write.
+     */
+    private function memoryLedger(): PaymentLedger
+    {
+        return new class implements PaymentLedger {
+            /** @var array<string, array<string, mixed>> */
+            public array $states = [];
+            /** @var list<string> */
+            public array $claims = [];
+            public ?\Closure $beforeHandling = null;
+
+            public function claim(string $key, int $ttl): bool
+            {
+                $this->claims[] = $key;
+                if (isset($this->states[$key])) {
+                    return false;
+                }
+                $this->states[$key] = ['status' => 'claimed'];
+
+                return true;
+            }
+
+            public function get(string $key): ?array
+            {
+                return $this->states[$key] ?? null;
+            }
+
+            public function put(string $key, array $state, int $ttl): void
+            {
+                json_encode($state, JSON_THROW_ON_ERROR);
+                if ('handling' === ($state['status'] ?? null) && null !== ($hook = $this->beforeHandling)) {
+                    $this->beforeHandling = null;
+                    $hook();
+                }
+                $this->states[$key] = $state;
+            }
+
+            public function release(string $key): void
+            {
+                unset($this->states[$key]);
+            }
+        };
+    }
+
+    /** A handler that counts its runs and throws. */
+    private function throwingHandler(): RequestHandlerInterface
+    {
+        return new class($this->runs) implements RequestHandlerInterface {
+            public function __construct(private int &$runs)
+            {
+            }
+
+            public function handle(ServerRequestInterface $request): ResponseInterface
+            {
+                ++$this->runs;
+                throw new \RuntimeException('boom');
+            }
+        };
+    }
+
+    /** Failed before the run claim (reproduced by review): both retries read 'run' and both ran the handler. */
+    public function testConcurrentUpfrontRetriesRunTheHandlerOnce(): void
+    {
+        $ledger = $this->memoryLedger();
+        $payment = $this->httpPayment($this->http(ledger: $ledger, upfront: true));
+        self::assertSame(500, $this->http(ledger: $ledger, upfront: true)->process($this->httpCall($payment), $this->handler('boom', 500))->getStatusCode());
+        self::assertSame(1, $this->runs);
+
+        $second = null;
+        $ledger->beforeHandling = function () use (&$second, $ledger, $payment): void {
+            // The first retry read 'run' and holds the run claim; its 'handling' is not stored yet.
+            $second = $this->http($this->noSecondSettle(), ledger: $ledger, upfront: true)->process($this->httpCall($payment), $this->handler());
+        };
+        $first = $this->http($this->noSecondSettle(), ledger: $ledger, upfront: true)->process($this->httpCall($payment), $this->handler());
+
+        self::assertSame(200, $first->getStatusCode());
+        self::assertInstanceOf(ResponseInterface::class, $second);
+        self::assertSame(409, $second->getStatusCode());
+        self::assertSame('in_progress', json_decode((string) $second->getBody(), true)['error']);
+        self::assertSame(2, $this->runs, 'the failed first attempt, then one delivery');
+        self::assertNull($ledger->get(Sale::RUN.Settlement::key($payment)));
+    }
+
+    /** Failed before the run claim, as the HTTP one. */
+    public function testMcpConcurrentUpfrontRetriesRunTheToolOnce(): void
+    {
+        $ledger = $this->memoryLedger();
+        $payment = $this->mcpPayment($this->mcp(ledger: $ledger, upfront: true));
+        $this->mcp(ledger: $ledger, upfront: true)->process(self::mcpCall(2, $payment), $this->handler('boom', 500));
+        self::assertSame(1, $this->runs);
+
+        $second = null;
+        $ledger->beforeHandling = function () use (&$second, $ledger, $payment): void {
+            $second = self::answer($this->mcp($this->noSecondSettle(), ledger: $ledger, upfront: true)->process(self::mcpCall(3, $payment), $this->toolHandler()));
+        };
+        $first = self::answer($this->mcp($this->noSecondSettle(), ledger: $ledger, upfront: true)->process(self::mcpCall(2, $payment), $this->toolHandler()));
+
+        self::assertSame('paid content', $first['result']['content'][0]['text']);
+        self::assertIsArray($second);
+        self::assertTrue($second['result']['isError']);
+        self::assertSame('in_progress', $second['result']['structuredContent']['error']);
+        self::assertSame(2, $this->runs);
+    }
+
+    /** A retry that read 'run' before another finished takes the freed claim, sees 'delivered' and replays. */
+    public function testARetryThatReadRunTooEarlyReplaysInsteadOfRunningAgain(): void
+    {
+        $ledger = $this->memoryLedger();
+        $payment = $this->httpPayment($this->http(ledger: $ledger, upfront: true));
+        $this->http(ledger: $ledger, upfront: true)->process($this->httpCall($payment), $this->handler('boom', 500));
+        $key = Settlement::key($payment);
+        $stale = $ledger->get($key);
+
+        self::assertSame(200, $this->http($this->noSecondSettle(), ledger: $ledger, upfront: true)->process($this->httpCall($payment), $this->handler())->getStatusCode());
+        // Its first read is the stale state; under the claim it reads the delivery.
+        $reads = 0;
+        $late = new class($ledger, $stale, $reads) implements PaymentLedger {
+            public function __construct(private readonly PaymentLedger $real, private readonly ?array $stale, private int &$reads)
+            {
+            }
+
+            public function claim(string $key, int $ttl): bool
+            {
+                return $this->real->claim($key, $ttl);
+            }
+
+            public function get(string $key): ?array
+            {
+                return 0 === $this->reads++ ? $this->stale : $this->real->get($key);
+            }
+
+            public function put(string $key, array $state, int $ttl): void
+            {
+                $this->real->put($key, $state, $ttl);
+            }
+
+            public function release(string $key): void
+            {
+                $this->real->release($key);
+            }
+        };
+        $replay = $this->http($this->noSecondSettle(), ledger: $late, upfront: true)->process($this->httpCall($payment), $this->handler());
+        self::assertSame(200, $replay->getStatusCode());
+        self::assertSame(2, $this->runs);
+        self::assertNull($ledger->get(Sale::RUN.$key));
+    }
+
+    public function testTheRunClaimIsFreedAfterAFailureAnExceptionAndASuccess(): void
+    {
+        $ledger = $this->memoryLedger();
+        $payment = $this->httpPayment($this->http(ledger: $ledger, upfront: true));
+        $run = Sale::RUN.Settlement::key($payment);
+        $retry = fn (RequestHandlerInterface $h): ResponseInterface => $this->http($this->noSecondSettle(), ledger: $ledger, upfront: true)->process($this->httpCall($payment), $h);
+        $this->http(ledger: $ledger, upfront: true)->process($this->httpCall($payment), $this->handler('boom', 500));
+
+        self::assertSame(500, $retry($this->handler('boom', 500))->getStatusCode());
+        self::assertNull($ledger->get($run), 'freed after a non-2xx');
+        try {
+            $retry($this->throwingHandler());
+            self::fail('the handler threw');
+        } catch (\RuntimeException) {
+        }
+        self::assertNull($ledger->get($run), 'freed after an exception');
+        self::assertFalse($ledger->get(Settlement::key($payment))['handler_ran'], 'still to deliver');
+
+        self::assertSame(200, $retry($this->handler())->getStatusCode());
+        self::assertSame(4, $this->runs);
+        self::assertNull($ledger->get($run), 'freed after a delivery');
+        self::assertSame('delivered', $ledger->get(Settlement::key($payment))['status']);
+    }
+
+    public function testOnlyAnUpfrontRetryTakesARunClaim(): void
+    {
+        foreach ([false, true] as $upfront) {
+            $ledger = $this->memoryLedger();
+            $middleware = $this->http(ledger: $ledger, upfront: $upfront);
+            $payment = $this->httpPayment($middleware);
+            self::assertSame(200, $middleware->process($this->httpCall($payment), $this->handler())->getStatusCode());
+            self::assertSame(200, $middleware->process($this->httpCall($payment), $this->handler())->getStatusCode());
+            self::assertSame([Settlement::key($payment)], $ledger->claims, $upfront ? 'upfront' : 'default');
+        }
+        self::assertSame(2, $this->runs);
+    }
+
+    /** @return iterable<string, array{array<string, mixed>}> */
+    public static function foreignReceipts(): iterable
+    {
+        $ok = ['success' => true, 'transaction' => '0xabc', 'network' => 'eip155:84532'];
+        yield 'another transaction' => [['transaction' => '0xdef'] + $ok];
+        yield 'another network' => [['network' => 'eip155:8453'] + $ok];
+        yield 'another payer' => [$ok + ['payer' => '0x0000000000000000000000000000000000000001']];
+        yield 'no network' => [array_diff_key($ok, ['network' => 0])];
+    }
+
+    /** Failed before the comparison: any success:true confirmed the payment. */
+    #[\PHPUnit\Framework\Attributes\DataProvider('foreignReceipts')]
+    public function testALookupSuccessAboutAnotherPaymentConfirmsNothing(array $receipt): void
+    {
+        $payment = $this->httpPayment($this->http());
+        $this->http($this->settledLater())->process($this->httpCall($payment), $this->handler());
+
+        $response = $this->http($this->settledLater(), static fn (array $state): ?array => $receipt)->process($this->httpCall($payment), $this->handler());
+        self::assertSame(409, $response->getStatusCode());
+        self::assertSame('settlement_pending', json_decode((string) $response->getBody(), true)['error']);
+        self::assertSame('pending', $this->ledger->get(Settlement::key($payment))['status'], 'the claim is kept');
+        self::assertSame(1, $this->runs);
+    }
+
+    /** Failed before: the receipt was stored as given, and its INF made every retry a JsonException (500). */
+    public function testALookupWithExtensionsThatCannotBeEncodedStillConfirms(): void
+    {
+        $payment = $this->httpPayment($this->http());
+        $this->http($this->settledLater())->process($this->httpCall($payment), $this->handler());
+
+        $lookup = static fn (array $state): ?array => ['success' => true, 'transaction' => '0xabc', 'network' => 'eip155:84532', 'extensions' => ['x' => INF]];
+        $response = $this->http($this->settledLater(), $lookup)->process($this->httpCall($payment), $this->handler());
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('paid content', (string) $response->getBody());
+        self::assertArrayNotHasKey('extensions', $this->ledger->get(Settlement::key($payment))['receipt']);
+    }
+
+    public function testALookupThatMatchesConfirmsAndGetsThePaymentAndRequirements(): void
+    {
+        $payment = $this->httpPayment($this->http());
+        $this->http($this->settledLater())->process($this->httpCall($payment), $this->handler());
+        $from = $payment['payload']['authorization']['from'];
+        $seen = [];
+        // The payer the signature proves, in another case: EVM hex.
+        $lookup = static function (array $state, array $p, array $req) use ($from, &$seen): ?array {
+            $seen = [$p['payload']['authorization']['from'], $req['network']];
+
+            return ['success' => true, 'transaction' => '0xABC', 'network' => 'eip155:84532', 'payer' => strtoupper($from)];
+        };
+
+        $response = $this->http($this->settledLater(), $lookup)->process($this->httpCall($payment), $this->handler());
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame([$from, 'eip155:84532'], $seen);
+        self::assertSame(1, $this->runs);
+    }
 }

@@ -84,7 +84,7 @@ final class Settlement
      * type is dropped; so are extensions that JSON cannot encode (INF, too deep): the money moved,
      * so success stays and the header encode must not throw later.
      */
-    private static function settled(array $receipt): array
+    public static function settled(array $receipt): array
     {
         $out = ['success' => true];
         foreach (['transaction', 'network'] as $field) {

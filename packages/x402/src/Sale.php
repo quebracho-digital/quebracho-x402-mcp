@@ -24,8 +24,13 @@ final class Sale
     /** The largest response body kept in the ledger, in bytes. */
     public const MAX_BODY = 1048576;
 
+    /** The prefix of the claim one retry holds while it runs an upfront handler that has not delivered. */
+    public const RUN = 'run:';
+
     private ?AddressCheck $check = null;
     private bool $claimed = false;
+    /** The ledger whose run claim this sale holds, until endRun(). */
+    private ?PaymentLedger $running = null;
 
     public function __construct(
         private readonly array $schemes,
@@ -98,7 +103,8 @@ final class Sale
     /**
      * What this payment already bought, read once its signature proves who paid (offline: a forged
      * payment costs nothing). ['state' => ...] to replay, ['refuse' => reason] to answer with, or
-     * NULL to admit it as new.
+     * NULL to admit it as new. ['run' => state] comes with the run claim held: the caller runs the handler and
+     * then calls endRun(), on every path.
      *
      * @return ?array{state?: array<string, mixed>, run?: array<string, mixed>, refuse?: string}
      */
@@ -109,10 +115,52 @@ final class Sale
         }
         $key = Settlement::key($this->payment);
         $state = $ledger->get($key);
-        if (null === $state) {
-            return null;
+        $answer = null === $state ? null : $this->classify($ledger, $key, $state, $lookup);
+        if (!isset($answer['run'])) {
+            return $answer;
+        }
+        // Charged upfront, never delivered: of N concurrent retries one runs the handler, the rest wait.
+        if (!$ledger->claim(self::RUN.$key, self::ttl($this->payment))) {
+            return ['refuse' => 'in_progress'];
+        }
+        $this->running = $ledger;
+        try {
+            // Read again under the claim: a retry that finished between our read and our claim already ran it.
+            $state = $ledger->get($key);
+            $answer = null === $state ? null : $this->classify($ledger, $key, $state, $lookup);
+        } catch (\Throwable $e) {
+            $this->endRun();
+            throw $e;
+        }
+        if (!isset($answer['run'])) {
+            $this->endRun();
         }
 
+        return $answer;
+    }
+
+    /**
+     * Frees the run claim stored() took, once the handler's outcome is written. A release that fails leaves
+     * it to its TTL: retries wait (in_progress), none runs twice.
+     */
+    public function endRun(): void
+    {
+        if (null === $this->running) {
+            return;
+        }
+        try {
+            $this->running->release(self::RUN.Settlement::key($this->payment));
+        } catch (\Throwable) {
+            // ponytail: see the docblock; the answer already given is not changed.
+        }
+        $this->running = null;
+    }
+
+    /**
+     * @return ?array{state?: array<string, mixed>, run?: array<string, mixed>, refuse?: string}
+     */
+    private function classify(PaymentLedger $ledger, string $key, array $state, ?\Closure $lookup): ?array
+    {
         return match ($state['status'] ?? null) {
             'delivered', 'settled' => $this->answer($state),
             'pending' => $this->confirm($ledger, $key, $state, $lookup),
@@ -262,7 +310,7 @@ final class Sale
     private function confirm(PaymentLedger $ledger, string $key, array $state, ?\Closure $lookup, string $unknown = 'settlement_pending'): ?array
     {
         try {
-            $receipt = null === $lookup ? null : $lookup($state);
+            $receipt = null === $lookup ? null : $lookup($state, $this->payment, $this->req);
         } catch (\Throwable) {
             // The lookup goes to the facilitator: unreachable means still pending, not refused.
             $receipt = null;
@@ -272,10 +320,12 @@ final class Sale
 
             return null;
         }
-        if (true !== ($receipt['success'] ?? null)) {
+        // A success about another transaction, network or payer confirms nothing: still unknown, claim kept.
+        if (true !== ($receipt['success'] ?? null) || !$this->same($state, $receipt)) {
             return ['refuse' => $unknown];
         }
-        $state['receipt'] = $receipt;
+        // Normalized as a settle's receipt: what cannot be encoded is dropped, so the store does not throw.
+        $state['receipt'] = Settlement::settled($receipt);
         if ('settling' === ($state['status'] ?? null) && $this->upfront()) {
             // Upfront, a settling state is written before the handler: confirmed, the handler has not run yet.
             $state['handler_ran'] = false;
@@ -284,6 +334,24 @@ final class Sale
         $ledger->put($key, $state, self::ttl($this->payment));
 
         return $this->answer($state);
+    }
+
+    /**
+     * Whether a lookup's receipt is about this payment: its network, the stored transaction and paymentId
+     * (when stored), and the payer the signature proves (when the lookup names one). EVM hex is compared
+     * without case; anything else byte for byte (base58 is case-sensitive).
+     */
+    private function same(array $state, array $receipt): bool
+    {
+        $stored = is_array($state['receipt'] ?? null) ? $state['receipt'] : [];
+        $evm = str_starts_with($this->req['network'], 'eip155:');
+        $eq = static fn (mixed $a, mixed $b): bool => is_string($a) && is_string($b) && ($evm ? 0 === strcasecmp($a, $b) : $a === $b);
+        $known = static fn (mixed $v): bool => is_string($v) && '' !== $v;
+
+        return ($receipt['network'] ?? null) === $this->req['network']
+          && (!$known($stored['transaction'] ?? null) || $eq($receipt['transaction'] ?? null, $stored['transaction']))
+          && (!$known($stored['paymentId'] ?? null) || !isset($receipt['paymentId']) || $eq($receipt['paymentId'], $stored['paymentId']))
+          && (null === ($receipt['payer'] ?? null) || $eq($receipt['payer'], $this->scheme()->payer($this->payment)));
     }
 
     /**

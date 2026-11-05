@@ -55,14 +55,17 @@ final class X402Middleware implements MiddlewareInterface
      *                                            description, mimeType); default: the request URL
      * @param ?PaymentLedger            $ledger
      *                                            Keeps each payment's outcome, so a retry gets the stored response
-     *                                            (replayed, not run again), 409 while it is in progress, or 409 when
+     *                                            (replayed, not run again), 409 while it is in progress (also while
+     *                                            another retry runs an upfront handler that did not deliver), or 409 when
      *                                            it settled without a response to keep. Also 409 settlement_unknown
      *                                            (a settle sent, outcome lost, no reference) and needs_review (upfront
      *                                            handler started, never closed). Replaces $claim and $release.
      * @param ?\Closure                 $lookup
-     *                                            fn(array $state): ?array — asks the chain about a 'pending' payment:
-     *                                            a receipt with success true settles it, success false frees it, NULL
-     *                                            (or no lookup) answers 409 settlement_pending.
+     *                                            fn(array $state, array $payment, array $req): ?array — asks the chain
+     *                                            about a 'pending' payment: a receipt with success true settles it, success
+     *                                            false frees it, NULL (or no lookup) answers 409 settlement_pending. A
+     *                                            success whose network, transaction, paymentId or payer is not this
+     *                                            payment's stays pending.
      *                                            A 'settling' state (outcome lost) is looked up only with a transaction
      *                                            or paymentId; otherwise, or when unknown, 409 settlement_unknown.
      * @param ?\Closure                 $sensitive
@@ -144,7 +147,12 @@ final class X402Middleware implements MiddlewareInterface
         }
 
         if (null !== $run) {
-            return $this->deliverUpfront($request, $handler, $sale, $run['receipt'], $keep);
+            try {
+                return $this->deliverUpfront($request, $handler, $sale, $run['receipt'], $keep);
+            } finally {
+                // After the outcome is written, whatever it was: the next retry finds it.
+                $sale->endRun();
+            }
         }
         if ($sale->upfront()) {
             // The intention is stored before the money can move: if the store refuses it, nothing is sent.
