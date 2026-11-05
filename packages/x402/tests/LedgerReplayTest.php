@@ -1285,4 +1285,107 @@ final class LedgerReplayTest extends TestCase
         self::assertSame(['settling', 'pending'], array_column($pending->puts, 'status'));
         self::assertSame(86400, $pending->ttls[1]);
     }
+
+    public function testLedgerDownOnTheClaimSettlesNothingAndRunsNothing(): void
+    {
+        foreach ([false, true] as $upfront) {
+            $calls = 0;
+            $flow = $upfront ? 'upfront' : 'default';
+            $payment = $this->httpPayment($this->http(upfront: $upfront));
+            $response = $this->http($this->countedSettle($calls), ledger: $this->downLedger('claim'), upfront: $upfront)->process($this->httpCall($payment), $this->handler());
+            self::assertSame([503, 'ledger_unavailable'], [$response->getStatusCode(), self::answer($response)['error']], $flow);
+
+            $payment = $this->mcpPayment($this->mcp(upfront: $upfront));
+            $answer = self::answer($this->mcp($this->countedSettle($calls), ledger: $this->downLedger('claim'), upfront: $upfront)->process(self::mcpCall(2, $payment), $this->toolHandler()));
+            self::assertSame('ledger_unavailable', $answer['result']['structuredContent']['error'], $flow);
+            self::assertSame([0, 0], [$this->runs, $calls], $flow);
+        }
+    }
+
+    public function testAHandlerThatThrowsBeforeTheSettleChargesNothingAndFreesTheClaim(): void
+    {
+        $calls = 0;
+        $payment = $this->httpPayment($this->http());
+        try {
+            $this->http($this->countedSettle($calls))->process($this->httpCall($payment), $this->throwingHandler());
+            self::fail('the exception goes on');
+        } catch (\RuntimeException $e) {
+            self::assertSame('boom', $e->getMessage());
+        }
+        self::assertSame(0, $calls);
+        self::assertNull($this->ledger->get(Settlement::key($payment)), 'the claim is freed');
+        // The payment still buys one delivery.
+        self::assertSame(200, $this->http($this->countedSettle($calls))->process($this->httpCall($payment), $this->handler())->getStatusCode());
+        self::assertSame(1, $calls);
+    }
+
+    public function testAToolThatThrowsBeforeTheSettleChargesNothingAndFreesTheClaim(): void
+    {
+        $calls = 0;
+        $payment = $this->mcpPayment($this->mcp());
+        try {
+            $this->mcp($this->countedSettle($calls))->process(self::mcpCall(2, $payment), $this->throwingHandler());
+            self::fail('the exception goes on');
+        } catch (\RuntimeException $e) {
+            self::assertSame('boom', $e->getMessage());
+        }
+        self::assertSame(0, $calls);
+        self::assertNull($this->ledger->get(Settlement::key($payment)), 'the claim is freed');
+        $answer = self::answer($this->mcp($this->countedSettle($calls))->process(self::mcpCall(2, $payment), $this->toolHandler()));
+        self::assertSame('paid content', $answer['result']['content'][0]['text']);
+        self::assertSame(1, $calls);
+    }
+
+    /** What an upfront handler that threw after the settle leaves: no answer with its data, the claim kept as charged and undelivered. */
+    private function assertChargedAndUndelivered(array $payment, int $calls): void
+    {
+        $state = $this->ledger->get(Settlement::key($payment));
+        self::assertSame(['settled', false, true], [$state['status'], $state['handler_ran'], $state['receipt']['success']]);
+        self::assertArrayNotHasKey('response', $state);
+        self::assertFalse($this->ledger->claim(Settlement::key($payment), 60), 'the claim is kept');
+        self::assertSame(1, $calls);
+    }
+
+    public function testAHandlerThatThrowsAfterAnUpfrontSettleIsWithheldAndKeepsTheClaim(): void
+    {
+        $calls = 0;
+        $payment = $this->httpPayment($this->http(upfront: true));
+        try {
+            $this->http($this->countedSettle($calls), upfront: true)->process($this->httpCall($payment), $this->throwingHandler());
+            self::fail('no answer goes out: the exception goes on');
+        } catch (\RuntimeException) {
+        }
+        $this->assertChargedAndUndelivered($payment, $calls);
+        // A retry runs the handler again, with no second settle.
+        self::assertSame('paid content', (string) $this->http($this->noSecondSettle(), upfront: true)->process($this->httpCall($payment), $this->handler())->getBody());
+    }
+
+    public function testAToolThatThrowsAfterAnUpfrontSettleIsWithheldAndKeepsTheClaim(): void
+    {
+        $calls = 0;
+        $payment = $this->mcpPayment($this->mcp(upfront: true));
+        try {
+            $this->mcp($this->countedSettle($calls), upfront: true)->process(self::mcpCall(2, $payment), $this->throwingHandler());
+            self::fail('no answer goes out: the exception goes on');
+        } catch (\RuntimeException) {
+        }
+        $this->assertChargedAndUndelivered($payment, $calls);
+        $answer = self::answer($this->mcp($this->noSecondSettle(), upfront: true)->process(self::mcpCall(2, $payment), $this->toolHandler()));
+        self::assertSame('paid content', $answer['result']['content'][0]['text']);
+        self::assertTrue($answer['result']['_meta'][X402McpMiddleware::PAYMENT_RESPONSE]['success']);
+    }
+
+    public function testAReleaseThatFailsDeliversNothing(): void
+    {
+        $calls = 0;
+        $payment = $this->httpPayment($this->http());
+        // The handler fails, and freeing the claim fails too: the failure is the answer, nothing is charged.
+        $response = $this->http($this->countedSettle($calls), ledger: $this->downLedger('release'))->process($this->httpCall($payment), $this->handler('boom', 500));
+        self::assertSame([500, 'boom', 0], [$response->getStatusCode(), (string) $response->getBody(), $calls]);
+        self::assertFalse($response->hasHeader(PaymentHeaders::RESPONSE));
+        // The claim stays until its TTL: a retry waits, it is neither run nor settled.
+        $retry = $this->http($this->countedSettle($calls))->process($this->httpCall($payment), $this->handler());
+        self::assertSame([409, 'in_progress'], [$retry->getStatusCode(), self::answer($retry)['error']]);
+        self::assertSame([1, 0], [$this->runs, $calls]);
+    }
 }
