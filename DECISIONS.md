@@ -202,3 +202,21 @@ An accepted decision is never rewritten: if it changes, a new one replaces it.
   - `header` rules read an HTTP request (`X402Middleware`); `argument` and `tool` rules read MCP params (`X402McpMiddleware`, which passes only the params, so headers on an MCP call are not seen). The app has no paid HTTP route today, so the header rules are covered by direct tests of `SensitiveRules` only.
   - A quoted directive argument containing commas (`no-cache="a, no-store"`) can produce a stray `no-store` token and mark the request; that errs toward not storing.
   - Tests: `SensitiveRulesTest` (headers, precedence, arguments, tools, no rule, invalid YAML, the warmer), `SensitiveToolsTest` and `SensitiveToolsWarmerTest` (the env still works).
+
+## D19 — ChainFacilitator's transaction is stored before it is sent (2026-11-04)
+
+- Date: 2026-11-04
+- Status: accepted (Leo: "si, implementa")
+- Context: `ChainFacilitator::settle` computes the transaction hash before `eth_sendRawTransaction`, but the hash reached the ledger only with the outcome. A process that died between the send and that write left `settling` with no reference: the buyer paid, a retry got `409 settlement_unknown` until the TTL, and the payment could not be reconciled from the ledger.
+- Decision:
+  - The chain reference is written before it is sent. `ChainFacilitator::settle` takes an optional `?\Closure $reference` (`fn(string $transaction): bool`) and calls it with the hash just before the send. `Settlement::run` passes it to `$settle` as a third argument; a closure that does not take it ignores it, so `Facilitator` and the existing closures do not change.
+  - `Sale` gives that callback: it adds `receipt.transaction` to the `settling` state `intend()` already wrote, through the same `intend()`.
+  - A write that fails sends nothing: the callback returning false or throwing gives `reference_unavailable` with no transaction, the claim is freed, HTTP answers `503 ledger_unavailable` and MCP an `isError` result.
+  - A `settling` or `pending` state with a transaction lives 24 h (`Sale::REFERENCED_TTL`, 86400 s) instead of `min(600, validBefore − now)`. States without one keep that TTL.
+  - The residual window stays open, and documented, for HTTP facilitators (`HttpFacilitator`, `CircleFacilitator`): they return no reference before they answer.
+  - Reconciliation (finding and resolving the payments stuck in `settling` or `pending`) is separate work.
+- Consequences:
+  - Each chain settle writes the ledger one more time, inside the network lock, before the send.
+  - The 24 h covers the time for a buyer's retry or a person to reconcile with the hash after a crash or an unconfirmed send. The 600 s TTL let that reference go before anyone could use it. A key that lives longer also keeps the claim longer, which can only block a second charge, never allow one. The cost is ledger space for those few states.
+  - A `$settle` closure that wraps `ChainFacilitator` without passing the third argument gets the old behaviour. The README says to pass `$chain->settle(...)`.
+  - Tests: `FacilitatorsTest::testChainHandsTheReferenceOverBeforeSendingAndSendsNothingWithoutIt`, and in `LedgerReplayTest` the crash after the send, the retry asking the lookup about that transaction, a refused reference over HTTP and MCP (no send), and the TTLs.

@@ -68,7 +68,13 @@ final class ChainFacilitator implements Facilitator
         return ['invalidReason' => $reason] + $result;
     }
 
-    public function settle(array $payment, array $req): array
+    /**
+     * @param ?\Closure $reference
+     *                             fn(string $transaction): bool, called with the hash before the send (Settlement::run
+     *                             passes the one Sale gives, which stores it in the ledger). FALSE or a throw sends
+     *                             nothing: 'reference_unavailable', no transaction, the claim is freed.
+     */
+    public function settle(array $payment, array $req, ?\Closure $reference = null): array
     {
         $result = ['success' => false, 'transaction' => '', 'network' => $req['network'], 'payer' => $payment['payload']['authorization']['from'] ?? null];
         $reason = $this->mismatch($payment, $req);
@@ -82,7 +88,7 @@ final class ChainFacilitator implements Facilitator
         // broadcasting still leaves a transaction to reconcile.
         // Set as soon as the hash exists, before the send: if the lock fails after the send, the hash is still here.
         $transaction = '';
-        $send = function () use ($rpc, $call, $req, &$transaction): array {
+        $send = function () use ($rpc, $call, $req, $reference, &$transaction): array {
             $base = Rpc::number($rpc('eth_gasPrice', []));
             $tip = Rpc::number($rpc('eth_maxPriorityFeePerGas', []));
             // Twice today's price, so a busier block still takes it.
@@ -102,6 +108,15 @@ final class ChainFacilitator implements Facilitator
                 'data' => $call['data'],
             ]);
             $hash = Eip712::keccak(Eip712::raw($raw));
+            // Stored before it can move money: a crash after the send still leaves the hash to reconcile.
+            try {
+                $kept = null === $reference || true === $reference($hash);
+            } catch (\Throwable) {
+                $kept = false;
+            }
+            if (!$kept) {
+                throw new \RuntimeException('reference_unavailable');
+            }
             $transaction = $hash;
             try {
                 $rpc('eth_sendRawTransaction', [$raw]);

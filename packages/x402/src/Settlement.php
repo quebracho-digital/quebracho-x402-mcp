@@ -54,12 +54,15 @@ final class Settlement
     /**
      * A receipt; success only when the facilitator said `success: true`.
      *
-     * @param \Closure $settle fn(array $payment, array $req): array
+     * @param \Closure  $settle    fn(array $payment, array $req): array
+     * @param ?\Closure $reference fn(string $transaction): bool, given to $settle as a third argument: a closure
+     *                             that takes it (ChainFacilitator's settle(...)) stores its reference before sending;
+     *                             one that does not ignores it (PHP drops extra arguments)
      */
-    public static function run(\Closure $settle, array $payment, array $req): array
+    public static function run(\Closure $settle, array $payment, array $req, ?\Closure $reference = null): array
     {
         try {
-            $receipt = $settle($payment, $req);
+            $receipt = null === $reference ? $settle($payment, $req) : $settle($payment, $req, $reference);
         } catch (FacilitatorException) {
             // Not the buyer's fault: the HTTP transport answers 502. It may have sent the
             // transaction before going silent, so the claim is kept.

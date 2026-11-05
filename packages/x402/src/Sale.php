@@ -21,6 +21,8 @@ final class Sale
     public const UNEXPECTED_VERIFY = 'unexpected_verify_error';
     /** How long a claim or a state lives, at most: seconds. */
     public const TTL = 600;
+    /** How long a 'settling' or 'pending' state that holds a transaction lives: a day to reconcile it. */
+    public const REFERENCED_TTL = 86400;
     /** The largest response body kept in the ledger, in bytes. */
     public const MAX_BODY = 1048576;
 
@@ -31,6 +33,12 @@ final class Sale
     private bool $claimed = false;
     /** The ledger whose run claim this sale holds, until endRun(). */
     private ?PaymentLedger $running = null;
+    /**
+     * The 'settling' state intend() stored, and where: the settle adds its transaction to it before sending.
+     *
+     * @var ?array{0: PaymentLedger, 1: array<string, mixed>}
+     */
+    private ?array $settling = null;
 
     public function __construct(
         private readonly array $schemes,
@@ -202,6 +210,9 @@ final class Sale
         }
         try {
             $this->remember($ledger, $state);
+            if ('settling' === $state['status']) {
+                $this->settling = [$ledger, $state];
+            }
 
             return true;
         } catch (\Throwable) {
@@ -245,7 +256,7 @@ final class Sale
             $state['response'] = $kept;
             $state['status'] = 'settled' === $state['status'] ? 'delivered' : $state['status'];
         }
-        $ledger->put(Settlement::key($this->payment), $state, self::ttl($this->payment));
+        $ledger->put(Settlement::key($this->payment), $state, self::ttl($this->payment, $state));
     }
 
     /**
@@ -257,10 +268,18 @@ final class Sale
     }
 
     /**
-     * How long a claim or state lives: until the signature expires, at most TTL seconds.
+     * How long a claim or state lives: until the signature expires, at most TTL seconds. A 'settling' or
+     * 'pending' state with a transaction lives REFERENCED_TTL: its money may have moved, and the hash is
+     * what a retry (the lookup) or a person reconciles it with.
+     *
+     * @param array<string, mixed> $state
      */
-    public static function ttl(array $payment): int
+    public static function ttl(array $payment, array $state = []): int
     {
+        $tx = is_array($state['receipt'] ?? null) ? ($state['receipt']['transaction'] ?? null) : null;
+        if (\in_array($state['status'] ?? null, ['settling', 'pending'], true) && is_string($tx) && '' !== $tx) {
+            return self::REFERENCED_TTL;
+        }
         $until = $payment['payload']['authorization']['validBefore'] ?? null;
         $left = is_numeric($until) ? (int) $until - time() : self::TTL;
 
@@ -331,7 +350,7 @@ final class Sale
             $state['handler_ran'] = false;
         }
         $state['status'] = isset($state['response']) ? 'delivered' : 'settled';
-        $ledger->put($key, $state, self::ttl($this->payment));
+        $ledger->put($key, $state, self::ttl($this->payment, $state));
 
         return $this->answer($state);
     }
@@ -388,10 +407,26 @@ final class Sale
     public function settle(?int $handlerStatus = null): array
     {
         $late = $this->check?->verdict();
+        $referenced = '';
+        // A settle that takes it (ChainFacilitator) adds its transaction to the 'settling' state before sending;
+        // a write the store refuses sends nothing.
+        $reference = null === $this->settling ? null : function (string $transaction) use (&$referenced): bool {
+            [$ledger, $state] = $this->settling;
+            if (!$this->intend($ledger, ['receipt' => ['transaction' => $transaction, 'network' => $this->req['network']]] + $state)) {
+                return false;
+            }
+            $referenced = $transaction;
+
+            return true;
+        };
         $receipt = null === $late
-          ? Settlement::run($this->settle, $this->payment, $this->req)
+          ? Settlement::run($this->settle, $this->payment, $this->req, $reference)
           // Ran but not paid for: withheld, as when settlement fails.
           : ['success' => false, 'errorReason' => $late, 'transaction' => '', 'network' => $this->req['network']];
+        if (true !== $receipt['success'] && '' !== $referenced && '' === $receipt['transaction']) {
+            // Sent, then the settle lost its hash (a wrapper that threw): the stored one is kept, not overwritten.
+            $receipt['transaction'] = $referenced;
+        }
         if (true === $receipt['success']) {
             $this->outcome('settled', $handlerStatus, $receipt);
         } else {

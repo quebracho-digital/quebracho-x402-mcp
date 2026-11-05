@@ -112,10 +112,13 @@ HTTP answers `503 ledger_unavailable` and MCP answers the PaymentRequired with
   answers `409 settlement_unknown` until its TTL frees the claim. After that the
   retry goes through verify again: if the settle did happen, the token rejects
   the spent nonce, so nothing is charged twice, but the buyer paid and got no
-  response, and nothing tells the seller on its own. This applies to every
-  facilitator, not only those without a hash.
+  response, and nothing tells the seller on its own. `ChainFacilitator` closes
+  it: its transaction is stored in `settling` before it is sent (pass
+  `$chain->settle(...)` as `$settle`), and a store that refuses that write sends
+  nothing (`503 ledger_unavailable`).
 - **What is kept.** Only a 2xx response of at most 1 MiB, base64 in the state.
-  Its TTL is `min(600, validBefore − now)`; each state expires with it.
+  Its TTL is `min(600, validBefore − now)` (24 h for a `settling` or `pending`
+  state with a transaction); each state expires with it.
 - **The store is read only after the signature verifies offline**: the nonce
   is public, so anyone can copy a payment, and a forged copy costs no read.
 - **Pending.** A settle that may have charged and is not confirmed (its claim
@@ -137,6 +140,8 @@ any `Facilitator` (all PSR-18 + PSR-17):
   the generic client, any x402 facilitator by URL with an optional bearer key
   (`verify`, `settle`, `supported`, `feePayer()` for Solana). A settle counts only when consistent: 2xx, `success: true`, a
   transaction, our network, the payer who signed. Verified on Base Sepolia.
+  The crash window between the send and the answer stays open with HTTP
+  facilitators (this one and Circle's): they give no reference before they answer.
 - Circle: `new CircleFacilitator($http, $psr17, $psr17, $bearer, $seller)`
   (URL `CircleFacilitator::URL`), with an API key (`$bearer`), or keyless
   with the payTo key (`$seller` signs the seller proof). A pending settle is

@@ -300,9 +300,12 @@ final class X402Middleware implements MiddlewareInterface
      */
     private function failed(array $accepts, array $resource, array $receipt): ResponseInterface
     {
-        $response = Sale::UNAVAILABLE === $receipt['errorReason']
-          ? $this->json(502, ['error' => Sale::UNAVAILABLE])
-          : $this->required($accepts, $resource, $receipt['errorReason']);
+        $response = match ($receipt['errorReason']) {
+            Sale::UNAVAILABLE => $this->json(502, ['error' => Sale::UNAVAILABLE]),
+            // The ledger refused the transaction's reference, so it was never sent: as a refused intention.
+            'reference_unavailable' => $this->json(503, ['error' => 'ledger_unavailable']),
+            default => $this->required($accepts, $resource, $receipt['errorReason']),
+        };
 
         return $response->withHeader(PaymentHeaders::RESPONSE, PaymentHeaders::encode($receipt));
     }

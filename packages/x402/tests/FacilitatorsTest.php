@@ -191,6 +191,27 @@ final class FacilitatorsTest extends TestCase
         $this->assertSame([], $this->sent);
     }
 
+    public function testChainHandsTheReferenceOverBeforeSendingAndSendsNothingWithoutIt(): void
+    {
+        $seen = [];
+        $kept = $this->chain($this->sendable() + ['eth_getTransactionReceipt' => ['status' => '0x1']])
+            ->settle($this->payment(), $this->req(), function (string $tx) use (&$seen): bool {
+                $seen[] = [$tx, count($this->sent)];
+
+                return true;
+            });
+        $this->assertTrue($kept['success']);
+        // Handed over after the four reads, before the send.
+        $this->assertSame([[$kept['transaction'], 4]], $seen);
+
+        foreach (['refused' => fn () => false, 'thrown' => fn () => throw new \RuntimeException('store down')] as $case => $reference) {
+            $this->sent = [];
+            $result = $this->chain($this->sendable())->settle($this->payment(), $this->req(), $reference);
+            $this->assertSame(['reference_unavailable', '', false], [$result['errorReason'], $result['transaction'], $result['success']], $case);
+            $this->assertNotContains('eth_sendRawTransaction', array_map(fn ($r) => json_decode((string) $r->getBody(), true)['method'], $this->sent), $case);
+        }
+    }
+
     public function testChainGasCapSendsNothing(): void
     {
         $f = new Psr17Factory();

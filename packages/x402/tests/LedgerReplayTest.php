@@ -8,15 +8,19 @@ use Nyholm\Psr7\Factory\Psr17Factory;
 use Nyholm\Psr7\Response;
 use Nyholm\Psr7\ServerRequest;
 use PHPUnit\Framework\TestCase;
+use Psr\Http\Client\ClientInterface;
+use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Server\RequestHandlerInterface;
+use Quebracho\X402\ChainFacilitator;
 use Quebracho\X402\EvmExact;
 use Quebracho\X402\FileLedger;
 use Quebracho\X402\LedgerUnavailableException;
 use Quebracho\X402\Networks;
 use Quebracho\X402\PaymentHeaders;
 use Quebracho\X402\PaymentLedger;
+use Quebracho\X402\Rpc;
 use Quebracho\X402\Sale;
 use Quebracho\X402\Settlement;
 use Quebracho\X402\Signer;
@@ -80,6 +84,8 @@ final class LedgerReplayTest extends TestCase
         return new class($this->ledger) implements PaymentLedger {
             /** @var list<array<string, mixed>> */
             public array $puts = [];
+            /** @var list<int> */
+            public array $ttls = [];
 
             public function __construct(private readonly PaymentLedger $real)
             {
@@ -98,6 +104,7 @@ final class LedgerReplayTest extends TestCase
             public function put(string $key, array $state, int $ttl): void
             {
                 $this->puts[] = $state;
+                $this->ttls[] = $ttl;
                 $this->real->put($key, $state, $ttl);
             }
 
@@ -977,5 +984,121 @@ final class LedgerReplayTest extends TestCase
         self::assertSame(200, $response->getStatusCode());
         self::assertSame([$from, 'eip155:84532'], $seen);
         self::assertSame(1, $this->runs);
+    }
+
+    /** ChainFacilitator's settle on Base Sepolia against a scripted node; $sends counts eth_sendRawTransaction. */
+    private function chainSettle(int &$sends): \Closure
+    {
+        $f = new Psr17Factory();
+        $node = new class($sends) implements ClientInterface {
+            public function __construct(private int &$sends)
+            {
+            }
+
+            public function sendRequest(RequestInterface $request): ResponseInterface
+            {
+                $method = json_decode((string) $request->getBody(), true)['method'];
+                $this->sends += 'eth_sendRawTransaction' === $method ? 1 : 0;
+                $result = match ($method) {
+                    'eth_sendRawTransaction' => '0x'.str_repeat('ab', 32),
+                    'eth_getTransactionReceipt' => ['status' => '0x1'],
+                    default => '0x1',
+                };
+
+                return new Response(200, [], json_encode(['result' => $result]));
+            }
+        };
+        $chain = new ChainFacilitator(new Rpc($node, $f, $f, 'https://rpc.example'), new Signer('0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a'), 'eip155:84532', static fn (string $name, callable $run) => $run(), null, 0, 1);
+
+        return $chain->settle(...);
+    }
+
+    /**
+     * A chain settle whose outcome is lost after the send: the store takes the 'settling' state and its
+     * reference, then fails on the outcome's write, as a process that died there. Returns the payment.
+     */
+    private function crashAfterTheChainSend(int &$sends): array
+    {
+        $payment = $this->httpPayment($this->http());
+        $this->http($this->chainSettle($sends), ledger: $this->brokenPutLedger(new \Error('crashed'), 2))->process($this->httpCall($payment), $this->handler());
+
+        return $payment;
+    }
+
+    public function testACrashAfterTheChainSendLeavesItsTransactionInTheLedger(): void
+    {
+        $sends = 0;
+        $payment = $this->crashAfterTheChainSend($sends);
+
+        $state = $this->ledger->get(Settlement::key($payment));
+        self::assertSame(1, $sends);
+        self::assertSame('settling', $state['status']);
+        self::assertMatchesRegularExpression('/^0x[0-9a-f]{64}$/', $state['receipt']['transaction']);
+    }
+
+    public function testARetryAfterTheCrashAsksTheLookupAboutThatTransaction(): void
+    {
+        $sends = 0;
+        $payment = $this->crashAfterTheChainSend($sends);
+        $stored = $this->ledger->get(Settlement::key($payment))['receipt']['transaction'] ?? null;
+        $seen = null;
+        $lookup = static function (array $state) use (&$seen): ?array {
+            $seen = $state['receipt']['transaction'] ?? null;
+
+            return null;
+        };
+
+        $retry = $this->http($this->chainSettle($sends), $lookup)->process($this->httpCall($payment), $this->handler());
+        self::assertNotNull($seen);
+        self::assertSame($stored, $seen);
+        // Asked, not confirmed: still unknown, and nothing is sent or run again.
+        self::assertSame(409, $retry->getStatusCode());
+        self::assertSame([1, 1], [$sends, $this->runs]);
+    }
+
+    public function testHttpALedgerThatRefusesTheReferenceSendsNothing(): void
+    {
+        $sends = 0;
+        $payment = $this->httpPayment($this->http());
+        // The 'settling' write lands, its reference does not.
+        $response = $this->http($this->chainSettle($sends), ledger: $this->brokenPutLedger(new LedgerUnavailableException('down'), 1))->process($this->httpCall($payment), $this->handler());
+
+        self::assertSame(0, $sends);
+        self::assertSame(503, $response->getStatusCode());
+        self::assertSame('ledger_unavailable', json_decode((string) $response->getBody(), true)['error']);
+        // Nothing sent: the claim is freed.
+        self::assertNull($this->ledger->get(Settlement::key($payment)));
+    }
+
+    public function testMcpALedgerThatRefusesTheReferenceSendsNothing(): void
+    {
+        $sends = 0;
+        $payment = $this->mcpPayment($this->mcp());
+        $answer = self::answer($this->mcp($this->chainSettle($sends), ledger: $this->brokenPutLedger(new LedgerUnavailableException('down'), 1))->process(self::mcpCall(2, $payment), $this->toolHandler()));
+
+        self::assertSame(0, $sends);
+        self::assertTrue($answer['result']['isError']);
+        self::assertSame('reference_unavailable', $answer['result']['structuredContent']['error']);
+    }
+
+    public function testOnlyAStateWithATransactionLivesADay(): void
+    {
+        $payment = $this->httpPayment($this->http());
+        $left = min(Sale::TTL, (int) $payment['payload']['authorization']['validBefore'] - time());
+        $sends = 0;
+        $spy = $this->spyLedger();
+        $this->http($this->chainSettle($sends), ledger: $spy)->process($this->httpCall($payment), $this->handler());
+
+        // 'settling', the same with its transaction, then 'delivered' (with the response).
+        self::assertSame(['settling', 'settling', 'delivered'], array_column($spy->puts, 'status'));
+        self::assertEqualsWithDelta($left, $spy->ttls[0], 1);
+        self::assertSame(Sale::REFERENCED_TTL, $spy->ttls[1]);
+        self::assertEqualsWithDelta($left, $spy->ttls[2], 1);
+
+        $other = $this->httpPayment($this->http());
+        $pending = $this->spyLedger();
+        $this->http($this->settledLater(), ledger: $pending)->process($this->httpCall($other), $this->handler());
+        self::assertSame(['settling', 'pending'], array_column($pending->puts, 'status'));
+        self::assertSame(86400, $pending->ttls[1]);
     }
 }
