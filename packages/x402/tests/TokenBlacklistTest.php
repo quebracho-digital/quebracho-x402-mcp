@@ -230,6 +230,20 @@ final class TokenBlacklistTest extends TestCase
         self::assertCount(1, $this->calls);
     }
 
+    public function testADeclaredTokenIsAskedWhateverTheCaseOfItsAddress(): void
+    {
+        // Registered checksummed, required in lower case and in another mix: the same token.
+        $usdc = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
+        Networks::add(778, $usdc, 'USD Coin', '2', rpc: 'https://x.example', blacklist: 'isBlacklisted');
+        foreach ([strtolower($usdc), '0xa0B86991C6218B36C1D19d4A2E9eB0Ce3606Eb48'] as $asset) {
+            $check = new AddressCheck(AddressCheck::PAYER, 'eip155:778', self::ADDRESS, ['network' => 'eip155:778', 'asset' => $asset]);
+            ($this->listener($this->answer(self::FROZEN)))($check);
+
+            self::assertSame('address_blacklisted', $check->reason(), $asset);
+            self::assertSame('0xfe575a87', substr(end($this->calls)['params'][0]['data'], 0, 10), $asset);
+        }
+    }
+
     public function testTheTokensArgumentWinsOverTheDeclaredFunction(): void
     {
         $usdc = '0x1111111111111111111111111111111111111111';
