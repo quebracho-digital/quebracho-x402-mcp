@@ -112,6 +112,21 @@ final class LedgerReplayTest extends TestCase
             {
                 $this->real->release($key);
             }
+
+            public function open(string $key, array $ref, int $ttl): void
+            {
+                $this->real->open($key, $ref, $ttl);
+            }
+
+            public function openKeys(int $limit): array
+            {
+                return $this->real->openKeys($limit);
+            }
+
+            public function close(string $key): void
+            {
+                $this->real->close($key);
+            }
         };
     }
 
@@ -156,6 +171,23 @@ final class LedgerReplayTest extends TestCase
                 $this->check('release');
                 $this->real->release($key);
             }
+
+            public function open(string $key, array $ref, int $ttl): void
+            {
+                $this->check('open');
+                $this->real->open($key, $ref, $ttl);
+            }
+
+            public function openKeys(int $limit): array
+            {
+                return $this->real->openKeys($limit);
+            }
+
+            public function close(string $key): void
+            {
+                $this->check('close');
+                $this->real->close($key);
+            }
         };
     }
 
@@ -193,6 +225,21 @@ final class LedgerReplayTest extends TestCase
             public function release(string $key): void
             {
                 $this->real->release($key);
+            }
+
+            public function open(string $key, array $ref, int $ttl): void
+            {
+                $this->real->open($key, $ref, $ttl);
+            }
+
+            public function openKeys(int $limit): array
+            {
+                return $this->real->openKeys($limit);
+            }
+
+            public function close(string $key): void
+            {
+                $this->real->close($key);
             }
         };
     }
@@ -785,7 +832,25 @@ final class LedgerReplayTest extends TestCase
 
             public function release(string $key): void
             {
-                unset($this->states[$key]);
+                unset($this->states[$key], $this->open[$key]);
+            }
+
+            /** @var array<string, array<string, mixed>> */
+            public array $open = [];
+
+            public function open(string $key, array $ref, int $ttl): void
+            {
+                $this->open[$key] = $ref;
+            }
+
+            public function openKeys(int $limit): array
+            {
+                return array_slice($this->open, 0, $limit, true);
+            }
+
+            public function close(string $key): void
+            {
+                unset($this->open[$key]);
             }
         };
     }
@@ -885,6 +950,21 @@ final class LedgerReplayTest extends TestCase
             public function release(string $key): void
             {
                 $this->real->release($key);
+            }
+
+            public function open(string $key, array $ref, int $ttl): void
+            {
+                $this->real->open($key, $ref, $ttl);
+            }
+
+            public function openKeys(int $limit): array
+            {
+                return $this->real->openKeys($limit);
+            }
+
+            public function close(string $key): void
+            {
+                $this->real->close($key);
             }
         };
         $replay = $this->http($this->noSecondSettle(), ledger: $late, upfront: true)->process($this->httpCall($payment), $this->handler());
@@ -1034,6 +1114,77 @@ final class LedgerReplayTest extends TestCase
         self::assertSame(1, $sends);
         self::assertSame('settling', $state['status']);
         self::assertMatchesRegularExpression('/^0x[0-9a-f]{64}$/', $state['receipt']['transaction']);
+    }
+
+    public function testTheSettlingStateWithItsTransactionIsOpenForTheReconciler(): void
+    {
+        $sends = 0;
+        $payment = $this->crashAfterTheChainSend($sends);
+        $key = Settlement::key($payment);
+        $auth = $payment['payload']['authorization'];
+
+        $open = $this->ledger->openKeys(10);
+        self::assertSame([$key], array_keys($open));
+        $ref = $open[$key];
+        self::assertSame($this->ledger->get($key)['receipt']['transaction'], $ref['transaction']);
+        self::assertSame(['settling', 'eip155:84532', $auth['from'], $auth['nonce'], (int) $auth['validBefore'], false], [$ref['status'], $ref['network'], $ref['from'], $ref['nonce'], $ref['validBefore'], $ref['upfront']]);
+        // The minimal data to ask the chain: never the signature, nor a body.
+        $fields = array_keys($ref);
+        sort($fields);
+        self::assertSame(['amount', 'asset', 'from', 'network', 'nonce', 'opened', 'payTo', 'paymentId', 'status', 'transaction', 'upfront', 'validBefore'], $fields);
+        self::assertStringNotContainsString($payment['payload']['signature'], json_encode($ref, JSON_THROW_ON_ERROR));
+    }
+
+    public function testADeliveredSaleClosesTheEntryItsSettleOpened(): void
+    {
+        $sends = 0;
+        $payment = $this->httpPayment($this->http());
+        $ledger = $this->memoryLedger();
+        $seen = [];
+        // Read inside the settle, after the reference was written: the entry is open while the money moves.
+        $settle = $this->chainSettle($sends);
+        $watching = function (array $p, array $r, ?\Closure $reference = null) use ($settle, $ledger, &$seen): array {
+            $out = $settle($p, $r, null === $reference ? null : function (string $tx) use ($reference, $ledger, &$seen): bool {
+                $ok = $reference($tx);
+                $seen = $ledger->openKeys(10);
+
+                return $ok;
+            });
+
+            return $out;
+        };
+
+        $response = $this->http($watching, ledger: $ledger)->process($this->httpCall($payment), $this->handler());
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame(1, $sends);
+        $key = Settlement::key($payment);
+        self::assertSame('settling', $seen[$key]['status'] ?? null);
+        self::assertNotNull($seen[$key]['transaction']);
+        self::assertSame('delivered', $ledger->get($key)['status']);
+        self::assertSame([], $ledger->openKeys(10), 'closed once delivered');
+    }
+
+    public function testAPendingSettleIsOpenAndARefutedOneIsClosedWithItsRelease(): void
+    {
+        $payment = $this->httpPayment($this->http());
+        $this->http($this->settledLater())->process($this->httpCall($payment), $this->handler());
+        $key = Settlement::key($payment);
+        self::assertSame(['pending', '0xabc'], [$this->ledger->openKeys(10)[$key]['status'], $this->ledger->openKeys(10)[$key]['transaction']]);
+
+        $refuted = static fn (array $state): array => ['success' => false, 'errorReason' => 'transaction_reverted'];
+        $this->http(Settlement::mock(), $refuted)->process($this->httpCall($payment), $this->handler());
+        self::assertSame([], $this->ledger->openKeys(10));
+    }
+
+    public function testAnOpenThatFailsRefusesTheSettlingWriteAndSendsNothing(): void
+    {
+        $payment = $this->httpPayment($this->http());
+        $calls = 0;
+
+        $response = $this->http($this->countedSettle($calls), ledger: $this->downLedger('open'))->process($this->httpCall($payment), $this->handler());
+        self::assertSame(503, $response->getStatusCode());
+        self::assertSame(0, $calls);
+        self::assertNull($this->ledger->get(Settlement::key($payment)), 'the claim is freed');
     }
 
     public function testARetryAfterTheCrashAsksTheLookupAboutThatTransaction(): void

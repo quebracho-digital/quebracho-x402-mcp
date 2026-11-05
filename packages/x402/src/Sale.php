@@ -23,6 +23,11 @@ final class Sale
     public const TTL = 600;
     /** How long a 'settling' or 'pending' state that holds a transaction lives: a day to reconcile it. */
     public const REFERENCED_TTL = 86400;
+    /**
+     * How long an open entry (PaymentLedger::open) lives: three days, so a reconciler still sees it after the
+     * 24 h in which it may resolve it, and marks it needs_review.
+     */
+    public const OPEN_TTL = 259200;
     /** The largest response body kept in the ledger, in bytes. */
     public const MAX_BODY = 1048576;
 
@@ -256,7 +261,64 @@ final class Sale
             $state['response'] = $kept;
             $state['status'] = 'settled' === $state['status'] ? 'delivered' : $state['status'];
         }
-        $ledger->put(Settlement::key($this->payment), $state, self::ttl($this->payment, $state));
+        $key = Settlement::key($this->payment);
+        $ledger->put($key, $state, self::ttl($this->payment, $state));
+        $this->track($ledger, $key, $state);
+    }
+
+    /**
+     * Keeps the ledger's open entries in step with the state just written: 'settling' and 'pending' are opened
+     * (the money may have moved, a reconciler checks the chain), 'settled' and 'delivered' closed. A release
+     * closes the entry too (PaymentLedger::release).
+     *
+     * An open that fails throws. In intend() that refuses the 'settling' write, so nothing is sent (503
+     * ledger_unavailable), as when the state itself cannot be written: the same store refused. After a settle
+     * the middlewares' record() drops it, so the payment is never blocked by the index. A close that fails is
+     * dropped: the reconciler finds the state settled and closes the entry.
+     *
+     * @param array<string, mixed> $state
+     */
+    private function track(PaymentLedger $ledger, string $key, array $state): void
+    {
+        $status = $state['status'] ?? null;
+        if (\in_array($status, ['settling', 'pending'], true)) {
+            $ledger->open($key, $this->ref($state), self::OPEN_TTL);
+        } elseif (\in_array($status, ['settled', 'delivered'], true)) {
+            try {
+                $ledger->close($key);
+            } catch (\Throwable) {
+                // ponytail: see the docblock.
+            }
+        }
+    }
+
+    /**
+     * What a reconciler needs to ask the chain about this payment: never the signature nor a body.
+     *
+     * @param array<string, mixed> $state
+     *
+     * @return array<string, mixed>
+     */
+    private function ref(array $state): array
+    {
+        $auth = is_array($this->payment['payload']['authorization'] ?? null) ? $this->payment['payload']['authorization'] : [];
+        $receipt = is_array($state['receipt'] ?? null) ? $state['receipt'] : [];
+        $text = static fn (mixed $v): ?string => is_string($v) && '' !== $v ? $v : null;
+
+        return [
+            'network' => $this->req['network'],
+            'asset' => $this->req['asset'] ?? null,
+            'from' => $this->scheme()->payer($this->payment),
+            'nonce' => $text($auth['nonce'] ?? null),
+            'payTo' => $this->req['payTo'] ?? null,
+            'amount' => $this->req['amount'] ?? null,
+            'validBefore' => is_numeric($auth['validBefore'] ?? null) ? (int) $auth['validBefore'] : null,
+            'transaction' => $text($receipt['transaction'] ?? null),
+            'paymentId' => $text($receipt['paymentId'] ?? null),
+            'status' => $state['status'],
+            // Upfront, a confirmed 'settling' or 'pending' has not run its handler yet (see confirm()).
+            'upfront' => $this->upfront(),
+        ];
     }
 
     /**
@@ -351,6 +413,7 @@ final class Sale
         }
         $state['status'] = isset($state['response']) ? 'delivered' : 'settled';
         $ledger->put($key, $state, self::ttl($this->payment, $state));
+        $this->track($ledger, $key, $state);
 
         return $this->answer($state);
     }

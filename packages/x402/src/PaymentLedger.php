@@ -38,7 +38,32 @@ interface PaymentLedger
     public function put(string $key, array $state, int $ttl): void;
 
     /**
-     * Deletes the key: a payment that charged nothing is good again.
+     * Deletes the key, and its open entry (open()): a payment that charged nothing is good again.
      */
     public function release(string $key): void;
+
+    /**
+     * Lists the key as open (to reconcile against the chain), with $ref: the minimal data to ask the chain
+     * about it (network, asset, from, nonce, payTo, amount, validBefore, transaction, paymentId, status), never
+     * a signature or a body. The entry lives $ttl seconds, apart from the state's own TTL. The ledger sets
+     * `opened` (Unix time) on the first open of a key (the one given in $ref, else now) and keeps it when the
+     * key is opened again.
+     *
+     * @param array<string, mixed> $ref
+     *
+     * @throws LedgerUnavailableException when the store cannot write it
+     */
+    public function open(string $key, array $ref, int $ttl): void;
+
+    /**
+     * Up to $limit open entries, key => ref (with `opened`); expired ones are left out.
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    public function openKeys(int $limit): array;
+
+    /**
+     * Removes the key from the open entries; its state is not touched.
+     */
+    public function close(string $key): void;
 }

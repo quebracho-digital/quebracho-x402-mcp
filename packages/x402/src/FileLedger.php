@@ -54,21 +54,49 @@ final class FileLedger implements PaymentLedger
      */
     public function put(string $key, array $state, int $ttl): void
     {
-        $this->ensureDir();
-        $file = $this->path($key);
-        $tmp = @tempnam($this->dir, 'put');
-        if (false === $tmp) {
-            throw new LedgerUnavailableException("Cannot write the x402 ledger in {$this->dir}.");
-        }
-        if (false === @file_put_contents($tmp, $this->encode($state, $ttl)) || !@rename($tmp, $file)) {
-            @unlink($tmp);
-            throw new LedgerUnavailableException("Cannot write the x402 ledger entry {$file}.");
-        }
+        $this->write($this->path($key), $this->encode($state, $ttl));
     }
 
     public function release(string $key): void
     {
         @unlink($this->path($key));
+        $this->close($key);
+    }
+
+    /**
+     * One `<sha256>.open` file per key, next to its state: {expires, key, ref}.
+     *
+     * @throws LedgerUnavailableException on an I/O failure
+     */
+    public function open(string $key, array $ref, int $ttl): void
+    {
+        $file = $this->path($key, 'open');
+        $before = $this->readOpen($file);
+        $ref['opened'] = $before['ref']['opened'] ?? (is_int($ref['opened'] ?? null) ? $ref['opened'] : time());
+        $this->write($file, json_encode(['expires' => time() + $ttl, 'key' => $key, 'ref' => $ref], JSON_THROW_ON_ERROR));
+    }
+
+    public function openKeys(int $limit): array
+    {
+        $out = [];
+        foreach (glob($this->dir.'/*.open') ?: [] as $file) {
+            if (count($out) >= $limit) {
+                break;
+            }
+            $entry = $this->readOpen($file);
+            if (null === $entry) {
+                @unlink($file);
+                continue;
+            }
+            $out[$entry['key']] = $entry['ref'];
+        }
+
+        return $out;
+    }
+
+    public function close(string $key): void
+    {
+        @unlink($this->path($key, 'open'));
     }
 
     /**
@@ -86,9 +114,41 @@ final class FileLedger implements PaymentLedger
         return $n;
     }
 
-    private function path(string $key): string
+    private function path(string $key, string $extension = 'json'): string
     {
-        return $this->dir.'/'.hash('sha256', $key).'.json';
+        return $this->dir.'/'.hash('sha256', $key).'.'.$extension;
+    }
+
+    /**
+     * Writes through a rename, so a reader never sees half a file.
+     *
+     * @throws LedgerUnavailableException on an I/O failure; the file is unchanged
+     */
+    private function write(string $file, string $content): void
+    {
+        $this->ensureDir();
+        $tmp = @tempnam($this->dir, 'put');
+        if (false === $tmp) {
+            throw new LedgerUnavailableException("Cannot write the x402 ledger in {$this->dir}.");
+        }
+        if (false === @file_put_contents($tmp, $content) || !@rename($tmp, $file)) {
+            @unlink($tmp);
+            throw new LedgerUnavailableException("Cannot write the x402 ledger entry {$file}.");
+        }
+    }
+
+    /**
+     * @return ?array{key: string, ref: array<string, mixed>} NULL when absent, unreadable or expired
+     */
+    private function readOpen(string $file): ?array
+    {
+        $raw = @file_get_contents($file);
+        $data = false === $raw ? null : json_decode($raw, true);
+        if (!is_array($data) || !is_int($data['expires'] ?? null) || !is_string($data['key'] ?? null) || !is_array($data['ref'] ?? null) || $data['expires'] <= time()) {
+            return null;
+        }
+
+        return ['key' => $data['key'], 'ref' => $data['ref']];
     }
 
     /**

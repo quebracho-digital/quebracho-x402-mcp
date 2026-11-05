@@ -84,6 +84,51 @@ final class FileLedgerTest extends TestCase
         }
     }
 
+    public function testOpenListsTheKeyWithItsRefUntilClosed(): void
+    {
+        $ledger = $this->ledger();
+        $ledger->open('k', ['status' => 'settling', 'transaction' => '0xabc'], 600);
+        $open = $ledger->openKeys(10);
+        self::assertSame(['k'], array_keys($open));
+        self::assertSame(['status' => 'settling', 'transaction' => '0xabc'], array_diff_key($open['k'], ['opened' => 0]));
+        self::assertEqualsWithDelta(time(), $open['k']['opened'], 2);
+
+        $ledger->close('k');
+        self::assertSame([], $ledger->openKeys(10));
+    }
+
+    public function testOpeningAgainKeepsTheFirstOpenedTime(): void
+    {
+        $ledger = $this->ledger();
+        $ledger->open('k', ['status' => 'settling', 'opened' => 1], 600);
+        $ledger->open('k', ['status' => 'pending'], 600);
+        self::assertSame(['status' => 'pending', 'opened' => 1], $ledger->openKeys(10)['k']);
+    }
+
+    public function testOpenKeysHonoursTheLimitAndSkipsTheExpired(): void
+    {
+        $ledger = $this->ledger();
+        $ledger->open('a', [], 600);
+        $ledger->open('b', [], 600);
+        $ledger->open('dead', [], -1);
+        self::assertCount(1, $ledger->openKeys(1));
+        self::assertEqualsCanonicalizing(['a', 'b'], array_keys($ledger->openKeys(10)));
+    }
+
+    public function testReleaseClosesTheEntryAndPruneLeavesOpenEntriesAlone(): void
+    {
+        $ledger = $this->ledger();
+        $ledger->put('k', ['status' => 'pending'], 600);
+        $ledger->open('k', [], 600);
+        $ledger->put('dead', ['status' => 'settled'], -1);
+        self::assertSame(1, $ledger->prune());
+        self::assertSame(['k'], array_keys($ledger->openKeys(10)));
+
+        $ledger->release('k');
+        self::assertSame([], $ledger->openKeys(10));
+        self::assertNull($ledger->get('k'));
+    }
+
     public function testPruneRemovesOnlyTheExpired(): void
     {
         $ledger = $this->ledger();
