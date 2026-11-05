@@ -107,8 +107,15 @@ services:
 
     # The 'x402' Monolog channel exists only with symfony/monolog-bundle (optional; config/packages/x402_log.php).
     # '@?' leaves the key out of the locator without it; PaymentLog asks at runtime with has().
+    # Without the bundle, PaymentLog logs through this logger. The framework's own 'logger' (HttpKernel's) stops at
+    # 'error' unless SHELL_VERBOSITY says otherwise, so the intent and settled lines would be dropped in production.
+    app.x402_stderr_logger:
+        class: Symfony\Component\HttpKernel\Log\Logger
+        arguments: ['info', 'php://stderr']
+
     App\X402\PaymentLog:
         arguments:
+            $logger: '@app.x402_stderr_logger'
             $channels: !service_locator
                 x402: '@?monolog.logger.x402'
 

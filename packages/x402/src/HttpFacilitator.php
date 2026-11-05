@@ -30,13 +30,11 @@ final class HttpFacilitator implements Facilitator
     private readonly string $url;
 
     /**
-     * @param ?Signer $seller
      *                        @deprecated removed in 1.0: keyless Circle is CircleFacilitator, which sends the seller proof.
      *                        Setting it triggers E_USER_DEPRECATED.
-     * @param int     $pollDelaySeconds
      *                        @deprecated removed in 1.0, with $seller: CircleFacilitator polls /status.
-     * @param int     $pollAttempts
      *                        @deprecated removed in 1.0, with $seller: CircleFacilitator polls /status.
+     *
      * @param ?\Closure $headers
      *                           fn (string $purpose, string $method, string $body, string $network): array<string, string>,
      *                           the extra headers of each call (a wrapper's). It may throw

@@ -27,55 +27,55 @@ final class X402McpMiddleware implements MiddlewareInterface
 
     /**
      * @param Scheme[]                  $schemes
-     *                                            The schemes this seller verifies, one per chain family
+     *                                             The schemes this seller verifies, one per chain family
      * @param \Closure                  $price
-     *                                            fn(array $params): ?array — the `accepts` list for a tools/call with
-     *                                            these params (name, arguments), or NULL when the tool is free
+     *                                             fn(array $params): ?array — the `accepts` list for a tools/call with
+     *                                             these params (name, arguments), or NULL when the tool is free
      * @param \Closure                  $claim
-     *                                            fn(string $key): bool — TRUE the first time a payment is seen, FALSE
-     *                                            after; atomic and durable (FileClaims, or a DB unique key). Runs before
-     *                                            the handler, so a payment buys one delivery even before it settles.
+     *                                             fn(string $key): bool — TRUE the first time a payment is seen, FALSE
+     *                                             after; atomic and durable (FileClaims, or a DB unique key). Runs before
+     *                                             the handler, so a payment buys one delivery even before it settles.
      * @param \Closure                  $settle
-     *                                            fn(array $payment, array $req): array — a facilitator's settle result.
-     *                                            Settlement::mock() is mock mode, never implicit: nothing moves.
+     *                                             fn(array $payment, array $req): array — a facilitator's settle result.
+     *                                             Settlement::mock() is mock mode, never implicit: nothing moves.
      * @param ?EventDispatcherInterface $events
-     *                                            Dispatches an AddressCheck on the payer and a PaymentOutcome; NULL: neither
+     *                                             Dispatches an AddressCheck on the payer and a PaymentOutcome; NULL: neither
      * @param ?\Closure                 $verify
-     *                                            fn(array $payment, array $req): ?string — online check before the claim.
-     *                                            NULL when good, or a non-empty reason; any other return or exception
-     *                                            refuses as `unexpected_verify_error`, except a FacilitatorException
-     *                                            (`facilitator_unavailable`). Nothing is claimed on a refusal, as in X402Middleware
+     *                                             fn(array $payment, array $req): ?string — online check before the claim.
+     *                                             NULL when good, or a non-empty reason; any other return or exception
+     *                                             refuses as `unexpected_verify_error`, except a FacilitatorException
+     *                                             (`facilitator_unavailable`). Nothing is claimed on a refusal, as in X402Middleware
      * @param ?\Closure                 $release
-     *                                            fn(string $key): void — frees a claim when nothing was charged
+     *                                             fn(string $key): void — frees a claim when nothing was charged
      * @param ?\Closure                 $resource
-     *                                            fn(array $params): array — the PaymentRequired's resource (url,
-     *                                            description, mimeType); default: mcp://tool/<name>
+     *                                             fn(array $params): array — the PaymentRequired's resource (url,
+     *                                             description, mimeType); default: mcp://tool/<name>
      * @param ?\Closure                 $validate
-     *                                            fn(array $params): ?string — why these params cannot be sold, or NULL.
-     *                                            Runs before any payment is read: a reason is a JSON-RPC -32602 error,
-     *                                            nothing is claimed, settled or run (price() returning NULL means free,
-     *                                            so it cannot refuse)
+     *                                             fn(array $params): ?string — why these params cannot be sold, or NULL.
+     *                                             Runs before any payment is read: a reason is a JSON-RPC -32602 error,
+     *                                             nothing is claimed, settled or run (price() returning NULL means free,
+     *                                             so it cannot refuse)
      * @param ?\Closure                 $payer
-     *                                            fn(array $params, string $payer): ?string — once the signature proved
-     *                                            who pays, why this payer cannot buy this call, or NULL; before the claim
+     *                                             fn(array $params, string $payer): ?string — once the signature proved
+     *                                             who pays, why this payer cannot buy this call, or NULL; before the claim
      * @param ?\Closure                 $duration
-     *                                            fn(array $params): int — worst-case seconds from the claim until the
-     *                                            settle is sent; a signature that expires sooner (plus EvmExact::SLACK) is
-     *                                            refused before the claim. 0 or NULL: no check (EVM validBefore only)
+     *                                             fn(array $params): int — worst-case seconds from the claim until the
+     *                                             settle is sent; a signature that expires sooner (plus EvmExact::SLACK) is
+     *                                             refused before the claim. 0 or NULL: no check (EVM validBefore only)
      * @param ?PaymentLedger            $ledger
-     *                                            Keeps each payment's outcome: a retry gets the stored answer (replayed with
-     *                                            its receipt, the handler not run again), or an isError result with reason
-     *                                            in_progress, settlement_pending, settlement_unknown, needs_review or
-     *                                            already_settled (HTTP stays 200, as for every MCP refusal). Replaces $claim
-     *                                            and $release.
+     *                                             Keeps each payment's outcome: a retry gets the stored answer (replayed with
+     *                                             its receipt, the handler not run again), or an isError result with reason
+     *                                             in_progress, settlement_pending, settlement_unknown, needs_review or
+     *                                             already_settled (HTTP stays 200, as for every MCP refusal). Replaces $claim
+     *                                             and $release.
      * @param ?\Closure                 $lookup
-     *                                            fn(array $state, array $payment, array $req): ?array — asks the chain
-     *                                            about a 'pending' payment, as in X402Middleware
+     *                                             fn(array $state, array $payment, array $req): ?array — asks the chain
+     *                                             about a 'pending' payment, as in X402Middleware
      * @param ?\Closure                 $sensitive
-     *                                            fn(array $params): bool — TRUE when this call's answer must not be kept,
-     *                                            as in X402Middleware: the state is stored, never the tool's answer.
-     *                                            Called once per paid call; throwing or any answer but FALSE counts as
-     *                                            sensitive. A retry of a settled sensitive call gets already_settled.
+     *                                             fn(array $params): bool — TRUE when this call's answer must not be kept,
+     *                                             as in X402Middleware: the state is stored, never the tool's answer.
+     *                                             Called once per paid call; throwing or any answer but FALSE counts as
+     *                                             sensitive. A retry of a settled sensitive call gets already_settled.
      */
     public function __construct(
         private readonly array $schemes,

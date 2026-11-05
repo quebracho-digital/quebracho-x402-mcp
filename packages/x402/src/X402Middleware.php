@@ -22,59 +22,59 @@ final class X402Middleware implements MiddlewareInterface
 {
     /**
      * @param Scheme[]                  $schemes
-     *                                            The schemes this seller verifies, one per chain family
+     *                                             The schemes this seller verifies, one per chain family
      * @param \Closure                  $price
-     *                                            fn(ServerRequestInterface): ?array — the `accepts` list (payment
-     *                                            requirements) for a request, or NULL when it is free
+     *                                             fn(ServerRequestInterface): ?array — the `accepts` list (payment
+     *                                             requirements) for a request, or NULL when it is free
      * @param \Closure                  $claim
-     *                                            fn(string $key): bool — TRUE the first time a payment is seen, FALSE
-     *                                            after; atomic and durable (FileClaims, or a DB unique key). Runs before
-     *                                            the handler, so a payment buys one delivery even before it settles.
+     *                                             fn(string $key): bool — TRUE the first time a payment is seen, FALSE
+     *                                             after; atomic and durable (FileClaims, or a DB unique key). Runs before
+     *                                             the handler, so a payment buys one delivery even before it settles.
      * @param \Closure                  $settle
-     *                                            fn(array $payment, array $req): array — a facilitator's settle result
-     *                                            (success, transaction, network, payer, errorReason). Settlement::mock()
-     *                                            is mock mode, never implicit: nothing moves on chain.
-     *                                            A FacilitatorException answers 502: not the buyer's fault.
+     *                                             fn(array $payment, array $req): array — a facilitator's settle result
+     *                                             (success, transaction, network, payer, errorReason). Settlement::mock()
+     *                                             is mock mode, never implicit: nothing moves on chain.
+     *                                             A FacilitatorException answers 502: not the buyer's fault.
      * @param ?EventDispatcherInterface $events
-     *                                            Dispatches an AddressCheck on the payer and a PaymentOutcome; NULL: neither
+     *                                             Dispatches an AddressCheck on the payer and a PaymentOutcome; NULL: neither
      * @param ?\Closure                 $verify
-     *                                            fn(array $payment, array $req): ?string — an online check (facilitator
-     *                                            /verify, eth_call) after the offline one, before the claim. Returns NULL
-     *                                            when good, or a non-empty reason string. Any other return (an empty
-     *                                            string, FALSE, an array) or any exception refuses as
-     *                                            `unexpected_verify_error` (402), except a FacilitatorException, which
-     *                                            answers 502. Nothing is claimed and the handler does not run on a refusal.
-     *                                            NULL skips the check: the handler may run for a payment
-     *                                            settle then refuses (its output withheld).
+     *                                             fn(array $payment, array $req): ?string — an online check (facilitator
+     *                                             /verify, eth_call) after the offline one, before the claim. Returns NULL
+     *                                             when good, or a non-empty reason string. Any other return (an empty
+     *                                             string, FALSE, an array) or any exception refuses as
+     *                                             `unexpected_verify_error` (402), except a FacilitatorException, which
+     *                                             answers 502. Nothing is claimed and the handler does not run on a refusal.
+     *                                             NULL skips the check: the handler may run for a payment
+     *                                             settle then refuses (its output withheld).
      * @param ?\Closure                 $release
-     *                                            fn(string $key): void — frees a claim when nothing was charged (the
-     *                                            handler failed, or settle failed with no transaction), so the buyer's
-     *                                            signature is good again. NULL keeps every claim.
+     *                                             fn(string $key): void — frees a claim when nothing was charged (the
+     *                                             handler failed, or settle failed with no transaction), so the buyer's
+     *                                             signature is good again. NULL keeps every claim.
      * @param ?\Closure                 $resource
-     *                                            fn(ServerRequestInterface): array — the 402's resource (url,
-     *                                            description, mimeType); default: the request URL
+     *                                             fn(ServerRequestInterface): array — the 402's resource (url,
+     *                                             description, mimeType); default: the request URL
      * @param ?PaymentLedger            $ledger
-     *                                            Keeps each payment's outcome, so a retry gets the stored response
-     *                                            (replayed, not run again), 409 while it is in progress (also while
-     *                                            another retry runs an upfront handler that did not deliver), or 409 when
-     *                                            it settled without a response to keep. Also 409 settlement_unknown
-     *                                            (a settle sent, outcome lost, no reference) and needs_review (upfront
-     *                                            handler started, never closed). Replaces $claim and $release.
+     *                                             Keeps each payment's outcome, so a retry gets the stored response
+     *                                             (replayed, not run again), 409 while it is in progress (also while
+     *                                             another retry runs an upfront handler that did not deliver), or 409 when
+     *                                             it settled without a response to keep. Also 409 settlement_unknown
+     *                                             (a settle sent, outcome lost, no reference) and needs_review (upfront
+     *                                             handler started, never closed). Replaces $claim and $release.
      * @param ?\Closure                 $lookup
-     *                                            fn(array $state, array $payment, array $req): ?array — asks the chain
-     *                                            about a 'pending' payment: a receipt with success true settles it, success
-     *                                            false frees it, NULL (or no lookup) answers 409 settlement_pending. A
-     *                                            success whose network, transaction, paymentId or payer is not this
-     *                                            payment's stays pending.
-     *                                            A 'settling' state (outcome lost) is looked up only with a transaction
-     *                                            or paymentId; otherwise, or when unknown, 409 settlement_unknown.
+     *                                             fn(array $state, array $payment, array $req): ?array — asks the chain
+     *                                             about a 'pending' payment: a receipt with success true settles it, success
+     *                                             false frees it, NULL (or no lookup) answers 409 settlement_pending. A
+     *                                             success whose network, transaction, paymentId or payer is not this
+     *                                             payment's stays pending.
+     *                                             A 'settling' state (outcome lost) is looked up only with a transaction
+     *                                             or paymentId; otherwise, or when unknown, 409 settlement_unknown.
      * @param ?\Closure                 $sensitive
-     *                                            fn(ServerRequestInterface): bool — TRUE when this request's answer must
-     *                                            not be kept: the ledger stores the payment's state (claim, settling,
-     *                                            handling, receipt) but never the response body. Called once per paid
-     *                                            request, before anything is stored; one that throws, or returns anything
-     *                                            but FALSE, counts as sensitive. A retry of a sensitive payment already
-     *                                            settled gets 409 already_settled, not the body. NULL: every answer is kept.
+     *                                             fn(ServerRequestInterface): bool — TRUE when this request's answer must
+     *                                             not be kept: the ledger stores the payment's state (claim, settling,
+     *                                             handling, receipt) but never the response body. Called once per paid
+     *                                             request, before anything is stored; one that throws, or returns anything
+     *                                             but FALSE, counts as sensitive. A retry of a sensitive payment already
+     *                                             settled gets 409 already_settled, not the body. NULL: every answer is kept.
      */
     public function __construct(
         private readonly array $schemes,

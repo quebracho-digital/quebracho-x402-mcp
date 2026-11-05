@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace App\Tests\Command;
 
 use App\Command\X402CheckCommand;
-use Quebracho\X402\EvmExact;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Quebracho\X402\EvmExact;
 use Symfony\Bundle\FrameworkBundle\Console\Application;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 use Symfony\Component\Console\Input\ArrayInput;

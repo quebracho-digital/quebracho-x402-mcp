@@ -20,9 +20,9 @@ use Quebracho\X402\EvmExact;
 use Quebracho\X402\FileClaims;
 use Quebracho\X402\HttpFacilitator;
 use Quebracho\X402\Networks;
-use Quebracho\X402\PaymentHeaders;
 use Quebracho\X402\PayingHttpClient;
 use Quebracho\X402\PayingMcpClient;
+use Quebracho\X402\PaymentHeaders;
 use Quebracho\X402\Rpc;
 use Quebracho\X402\Settlement;
 use Quebracho\X402\Signer;
@@ -235,7 +235,7 @@ final class CompatibilityTest extends TestCase
 
     private static function paidHandler(): RequestHandlerInterface
     {
-        return new class() implements RequestHandlerInterface {
+        return new class implements RequestHandlerInterface {
             public function handle(ServerRequestInterface $request): ResponseInterface
             {
                 return new Response(200, [], 'paid content');
@@ -485,7 +485,7 @@ final class CompatibilityTest extends TestCase
     public function testReadmeMcpExampleChargesTheWisdomToolThroughTheClient(): void
     {
         $psr17 = new Psr17Factory();
-        $price = fn (array $params) => $params['name'] === 'wisdom' ? [Networks::requirements('eip155:84532', '0.01', self::PAY_TO)] : null;
+        $price = fn (array $params) => 'wisdom' === $params['name'] ? [Networks::requirements('eip155:84532', '0.01', self::PAY_TO)] : null;
         $claim = (new FileClaims($this->claimsDir()))(...);
         $middleware = new X402McpMiddleware([new EvmExact()], $price, $claim, $psr17, $psr17, Settlement::mock());
 

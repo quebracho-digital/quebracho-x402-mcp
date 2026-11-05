@@ -137,7 +137,7 @@ final class SensitiveRules
     }
 
     /**
-     * @param array<string, mixed>                       $rule
+     * @param array<string, mixed>                        $rule
      * @param ServerRequestInterface|array<string, mixed> $subject
      */
     private static function matches(array $rule, ServerRequestInterface|array $subject): bool

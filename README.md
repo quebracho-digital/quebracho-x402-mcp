@@ -189,8 +189,10 @@ Answers are memoised for 7 days by a hash of the text, so a repeated text
 answers faster, and that speed tells a caller that someone sent the same text
 recently. Pass `sensitive: true` to skip the memo (not read, not written) and
 the ledger's copy of the answer; it protects your call, not texts others sent
-unmarked (a known, accepted risk: DECISIONS.md, D17). The ways to ask for no cache (`Cache-Control: no-store`,
-`Pragma: no-cache` without `Cache-Control`, `sensitive: true`) are listed in `app/config/x402_sensitive.yaml`.
+unmarked (a known, accepted risk: DECISIONS.md, D17). Over MCP the only way to ask for no cache is the tool's
+`sensitive: true` argument (or a `tool` rule in `X402_SENSITIVE_TOOLS`, which also skips the memo): the HTTP
+headers `Cache-Control: no-store` and `Pragma: no-cache` are read only on plain HTTP routes, never on `/mcp`.
+The rules live in `app/config/x402_sensitive.yaml`.
 
 **The dataset behind it.** The 19 categories are not invented for the demo: they
 come from [`quebracho-digital/terminos-es`](https://huggingface.co/datasets/quebracho-digital/terminos-es),

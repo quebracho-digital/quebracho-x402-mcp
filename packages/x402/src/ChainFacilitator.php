@@ -135,6 +135,7 @@ final class ChainFacilitator implements Facilitator
             if ('' !== $transaction) {
                 return ['errorReason' => 'settlement_pending', 'transaction' => $transaction] + $result;
             }
+
             // Nothing was sent: a refusal frees the claim.
             return ['errorReason' => $e instanceof \RuntimeException ? $e->getMessage() : 'settle_refused'] + $result;
         }

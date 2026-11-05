@@ -6,6 +6,7 @@ namespace App\Mcp;
 
 use App\EventListener\McpRateLimit;
 use App\Terms\TermsAnalyzer;
+use App\X402\SensitiveRules;
 use Mcp\Capability\Attribute\McpTool;
 use Mcp\Exception\ToolCallException;
 use Symfony\Component\DependencyInjection\Attribute\Target;
@@ -26,6 +27,9 @@ final class AnalyzeTermsTool
         #[Target('terms_ip.limiter')] private readonly RateLimiterFactoryInterface $perClient,
         #[Target('terms_day.limiter')] private readonly RateLimiterFactoryInterface $perDay,
         private readonly RequestStack $requests,
+        // The same rules that keep the ledger's copy out (config/x402_sensitive.yaml, X402_SENSITIVE_TOOLS): a call they mark
+        // skips the memo too, not only the ledger. Without this a tool rule kept the answer out of the ledger but not out of the memo.
+        private readonly SensitiveRules $sensitiveRules,
     ) {
     }
 
@@ -38,6 +42,7 @@ final class AnalyzeTermsTool
         } catch (\InvalidArgumentException $e) {
             throw new ToolCallException($e->getMessage(), 0, $e);
         }
+        $sensitive = $sensitive || ($this->sensitiveRules)(['name' => 'analyze_terms', 'arguments' => ['sensitive' => $sensitive]]);
         // Before the model call: a refused call throws, so nothing is charged and the model is not called.
         $client = McpRateLimit::client($this->requests->getCurrentRequest()?->getClientIp());
         if (!$this->perClient->create($client)->consume()->isAccepted() || !$this->perDay->create('all')->consume()->isAccepted()) {

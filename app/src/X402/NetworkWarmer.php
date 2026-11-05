@@ -17,8 +17,8 @@ use Symfony\Component\HttpKernel\CacheWarmer\CacheWarmerInterface;
 final class NetworkWarmer implements CacheWarmerInterface
 {
     /**
-     * @param array<string, array{job: ?array, schema: string}> $tools app.mcp_tools
-     * @param Scheme[]                                           $schemes
+     * @param array<string, array{job: ?array, schema: string}> $tools   app.mcp_tools
+     * @param Scheme[]                                          $schemes
      */
     public function __construct(
         #[Autowire('%env(default::X402_NETWORK)%')] private readonly ?string $network,

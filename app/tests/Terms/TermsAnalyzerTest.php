@@ -6,6 +6,7 @@ namespace App\Tests\Terms;
 
 use App\Mcp\AnalyzeTermsTool;
 use App\Terms\TermsAnalyzer;
+use App\X402\SensitiveRules;
 use Mcp\Exception\ToolCallException;
 use PHPUnit\Framework\TestCase;
 use Symfony\AI\Platform\Test\MockPlatformFactory;
@@ -35,7 +36,7 @@ final class TermsAnalyzerTest extends TestCase
     {
         $limiter = static fn (string $id, int $limit) => new RateLimiterFactory(['id' => $id, 'policy' => 'fixed_window', 'limit' => $limit, 'interval' => '1 day'], new InMemoryStorage());
 
-        return new AnalyzeTermsTool($analyzer, $limiter('ip', $perIp), $limiter('day', $perDay), $requests ?? new RequestStack());
+        return new AnalyzeTermsTool($analyzer, $limiter('ip', $perIp), $limiter('day', $perDay), $requests ?? new RequestStack(), new SensitiveRules([], []));
     }
 
     public function testKeepsOnlyQuotesFoundInTheTextAndCountsTheRest(): void
@@ -395,5 +396,17 @@ in Delaware'],
         self::assertSame(1, $calls->n, 'unmarked: the memo answers the second call');
         $tool(self::TEXT, true);
         self::assertSame(2, $calls->n, 'sensitive: the model is asked although the memo has the text');
+    }
+
+    public function testAToolRuleSkipsTheMemoToo(): void
+    {
+        // X402_SENSITIVE_TOOLS=analyze_terms (a `tool` rule) keeps the ledger's copy out; it must keep the memo out too.
+        [$analyzer, $calls] = $this->counting(['{}']);
+        $limiter = static fn (string $id, int $limit) => new RateLimiterFactory(['id' => $id, 'policy' => 'fixed_window', 'limit' => $limit, 'interval' => '1 day'], new InMemoryStorage());
+        $tool = new AnalyzeTermsTool($analyzer, $limiter('ip', 10), $limiter('day', 500), new RequestStack(), new SensitiveRules(['analyze_terms'], []));
+
+        $tool(self::TEXT);
+        $tool(self::TEXT);
+        self::assertSame(2, $calls->n, 'a tool rule: the memo never answers, the model is asked each time');
     }
 }

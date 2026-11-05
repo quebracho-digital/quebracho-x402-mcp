@@ -224,7 +224,7 @@ An accepted decision is never rewritten: if it changes, a new one replaces it.
 ## D20 — An open index of unresolved payments, and a reconciler that corrects it with the chain (2026-11-05)
 
 - Date: 2026-11-05
-- Status: proposed (implemented on request of the working session; Leo's acceptance is not recorded yet)
+- Status: accepted. Decidido por Leo (2026-11-05 05:39): "acepto d20". Implemented on request of the working session; the real-node test against testnet is still pending Leo's go-ahead for testnet payments.
 - Context: D19 left reconciliation as separate work. A process that dies after the settle went out leaves `settling` or `pending` (with a transaction or not): the buyer may have paid and got nothing, a retry gets `settlement_unknown` or `settlement_pending` until the TTL, and nobody looks at those states.
 - Decision:
   - `PaymentLedger` gets `open(key, ref, ttl)`, `openKeys(limit)` and `close(key)`; `release()` closes the entry too. `FileLedger` keeps one `<sha256>.open` file per key next to its state (`prune()` leaves them alone); `RedisLedger` keeps the ref under `x402:open:<key>` with its own TTL and the key in the set `x402:open` (`openKeys` samples it with SRANDMEMBER and drops members whose ref expired). The ledger stamps `opened` on the first open and keeps it on later ones.

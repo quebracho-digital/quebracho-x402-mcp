@@ -6,11 +6,11 @@ namespace App\Tests\X402;
 
 use App\X402\PaymentLog;
 use PHPUnit\Framework\Attributes\DataProvider;
-use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
-use Symfony\Component\DependencyInjection\ServiceLocator;
 use Psr\Log\AbstractLogger;
 use Quebracho\X402\PaymentIntent;
 use Quebracho\X402\PaymentOutcome;
+use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
+use Symfony\Component\DependencyInjection\ServiceLocator;
 
 final class PaymentLogTest extends KernelTestCase
 {
