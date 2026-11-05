@@ -82,8 +82,13 @@ body is never stored: a retry after it settled gets `already_settled`, not a
 replay.
 
 `claim($key, $ttl)` must be atomic (of N concurrent calls exactly one returns
-TRUE), `get`, `put` and `release` complete the interface. `FileLedger` is one
-host: one JSON file per key. A store that cannot answer throws
+TRUE); `get`, `put` and `release` complete the state part of the interface.
+`open`, `openKeys` and `close` keep an index of open payments: every
+`settling` or `pending` state is opened (with the network, payer, nonce, payTo,
+amount, validBefore and any transaction or `paymentId`, never a signature or a
+body) for three days, and `settled` or `delivered` closes it, so a reconciler
+can walk them (`openKeys($limit)`) and ask the chain. `FileLedger` is one
+host: one JSON file per key, plus one `.open` file per open entry. A store that cannot answer throws
 `LedgerUnavailableException`, and nothing is charged: before the handler runs,
 HTTP answers `503 ledger_unavailable` and MCP answers the PaymentRequired with
 `error: ledger_unavailable` in-band.
@@ -236,6 +241,13 @@ With `Budget::usd($network, $usd, $used)`, where `$used` reads the token's
 `authorizationState` on chain, a signature the seller never settled frees
 its amount once it expires unused.
 
+Concurrent payments in one process (Fibers, ReactPHP, Amp) share the same
+`Budget` object, and the cap holds across them: `reserve()` checks the offer
+and counts it in one step before signing, and `release()` gives it back if the
+payment never left (a failed signature). The budget lives in that one process
+only: separate processes, workers or hosts each have their own cap, so a
+shared limit needs the app to store the spent totals itself.
+
 `onRefused: fn(array $req, string $reason)` on both buyers says why an offer
 was not paid (`no_scheme`, `not_allowed`, or the screening's reason).
 PSR-18 has no per-request options: give the wrapped client a timeout longer
@@ -245,8 +257,8 @@ a buyer that hangs up early may be charged for an answer it never reads.
 ## Networks
 
 Built in: the demo testnets (Base Sepolia, Arc testnet, Ethereum Sepolia,
-Avalanche Fuji, Polygon Amoy) and **Ethereum mainnet**. The library only *reads*
-Ethereum: it asks the blacklist of its USDC and USDT with an `eth_call`, which
+Avalanche Fuji, Polygon Amoy, Solana devnet), **Arc mainnet** (`eip155:5042`)
+and **Ethereum mainnet**. Ethereum is there to be *read*: the library asks the blacklist of its USDC and USDT with an `eth_call`, which
 costs no gas. Settling a payment there costs real gas, often more than a small
 price, so charge on Ethereum only for amounts that justify it. Any other chain
 is yours to add.
@@ -284,7 +296,8 @@ all `(address) returns (bool)`:
 | USDT0 | `isBlocked(address)` | `0xfbac3951` (not active, see `TokenBlacklist::TOKENS`) |
 
 `TokenBlacklist::TOKENS` already lists the native USDC of these mainnets, each
-read from a public RPC on 2026-11-03 (they are asked once you register the network):
+read from a public RPC on 2026-11-03 (Ethereum and Arc are built in; the others are
+asked once you register the network):
 
 | Chain | `eip155:` id | USDC contract |
 |---|---|---|
@@ -294,7 +307,7 @@ read from a public RPC on 2026-11-03 (they are asked once you register the netwo
 | Avalanche C-Chain | 43114 | `0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E` |
 | Optimism | 10 | `0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85` |
 | Arbitrum One | 42161 | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` |
-| Arc | 5042 | `0x3600000000000000000000000000000000000000` |
+| Arc (built in) | 5042 | `0x3600000000000000000000000000000000000000` |
 
 `$tokens` is for a token that is already registered (one added before
 `blacklist:` existed), or to override the function of one:
@@ -445,9 +458,11 @@ who signed) is "paid"; anything else withholds the output.
   legacy USDT's) on-chain blacklist before a signature is spent.
 
 *Known limits*
-- Pending or silent settles are reconciled only when the buyer retries and a
-  `lookup` answers; nothing sweeps them on a timer. Without a lookup they stay
-  pending until their TTL.
+- Inside the middlewares, pending or silent settles are reconciled only when
+  the buyer retries and a `lookup` answers; without a lookup they stay pending
+  until their TTL. The ledger's open index lists them, but the library runs
+  nothing on a timer: the sweep is the caller's (the demo app's
+  `app:x402:reconcile`, from cron).
 - `FileClaims` and `FileLedger` are single-host; several hosts need an atomic
   store.
 - A third-party HTTP facilitator may accept at `/verify` and still fail at

@@ -29,7 +29,7 @@ Drupal module [x402_pay](https://www.drupal.org/project/x402_pay).
 - **Why:** agents can call tools but cannot pay for them. API keys and accounts do not scale to machines.
 - **How:** the agent calls a tool, gets a price (402), signs within a budget, retries with the payment, and receives the result with an on-chain receipt.
 - **Safe by construction:** verify is not paid. One signature buys one delivery, a replay never runs the handler, smart-wallet signatures are refused, gas is bounded, and addresses are screened. Each defence has a test.
-- **Proven:** 153 library tests with no network, EVM, Solana and NEAR (experimental) schemes, a real USDC settle on Base Sepolia, and a real purchase on Arc mainnet through Ombú's MCP server.
+- **Proven:** 444 library tests and 230 app tests with no network, EVM, Solana and NEAR (experimental) schemes, a real USDC settle on Base Sepolia, and a real purchase on Arc mainnet through Ombú's MCP server.
 - **Used by:** ombu.quebracho.digital, in production on mainnet, and the Drupal module [x402_pay](https://www.drupal.org/project/x402_pay): release 1.0.0-beta3 on drupal.org runs on this library (`quebracho/x402 ^0.3`). The library grew from that module, so one codebase serves Drupal and Symfony.
 - **Try it:** `bin/smoke.sh` after `ddev start` (below). Mock mode needs no wallet and no faucet.
 
@@ -190,9 +190,10 @@ answers faster, and that speed tells a caller that someone sent the same text
 recently. Pass `sensitive: true` to skip the memo (not read, not written) and
 the ledger's copy of the answer; it protects your call, not texts others sent
 unmarked (a known, accepted risk: DECISIONS.md, D17). Over MCP the only way to ask for no cache is the tool's
-`sensitive: true` argument (or a `tool` rule in `X402_SENSITIVE_TOOLS`, which also skips the memo): the HTTP
-headers `Cache-Control: no-store` and `Pragma: no-cache` are read only on plain HTTP routes, never on `/mcp`.
-The rules live in `app/config/x402_sensitive.yaml`.
+`sensitive: true` argument (or a `tool` rule, from `X402_SENSITIVE_TOOLS` or
+`app/config/x402_sensitive.yaml`, which also skips the memo): the HTTP headers `Cache-Control: no-store` and
+`Pragma: no-cache` are read only on plain HTTP routes (`X402Middleware`), never on `/mcp`, and this app has no
+paid plain HTTP route. The rules live in `app/config/x402_sensitive.yaml` (DECISIONS.md, D18).
 
 **The dataset behind it.** The 19 categories are not invented for the demo: they
 come from [`quebracho-digital/terminos-es`](https://huggingface.co/datasets/quebracho-digital/terminos-es),
@@ -256,10 +257,12 @@ a limit the answer is HTTP 429 with a `Retry-After` header (seconds, at least
 `{"jsonrpc":"2.0","id":<the request's id>,"error":{"code":-32000,"message":"Rate limit reached for /mcp. Nothing was charged; try later."}}`;
 the id is `null` for a batch, a notification or a body over 8 KB (not parsed).
 `analyze_terms` then has its own limits inside the tool: `TERMS_LIMIT_IP` calls
-per client per hour (5), so one client cannot spend the whole day, and
-`TERMS_LIMIT_DAY` in total per day (500). Over either is a tool error, so
-nothing is charged (an empty text, one over 1,200 words or over 12,000
-characters is refused before it uses any limit).
+per client per hour (5), counted before the payment is read: a paid
+`analyze_terms` call over it gets HTTP 429 with `Retry-After`, and nothing is
+verified or charged. `TERMS_LIMIT_DAY` (500 per day, in total) is checked by
+the tool after the payment is verified and claimed, so a refused call costs
+nothing. An empty text, one over 1,200 words or over 12,000 characters is
+refused before it uses any limit.
 
 The client is the IP behind `TRUSTED_PROXIES`, an IPv6 address counted by its
 /64 (one host usually holds the whole /64). Default `private_ranges`; add Cloudflare's ranges in
@@ -315,7 +318,9 @@ with one name, and on a pair that does not point back with the other role.
 The catalog is read from the tools the MCP bundle actually registered on each
 server, so a tool served through a service id the registry (`App\Mcp\` in
 `mcp.yaml`) matches counts even when its class lives elsewhere, and the build
-fails if a served tool is missing from it.
+fails if a served tool is missing from it. No tool in `app/` carries the flag
+yet (only test fixtures do): the job tools themselves, their job store and a
+`_status` tool are planned, not built.
 
 Before any payment is read, a paid call's arguments are checked against its
 tool's input schema, the one the SDK generates and serves in `tools/list`,
@@ -382,7 +387,7 @@ that was never charged, and the buyer's retry then gets the usual answer (an
 upfront tool runs once; a default-flow call without a kept answer gets
 `already_settled`). Rows marked `needs_review` (a reverted transaction, a used
 authorization whose transaction it cannot find, a payment open for more than
-24 h) are also logged and need a person. It always exits 0. See DECISIONS.md, D20.
+24 h) need a person; they and `rpc_error` rows are logged as warnings. It always exits 0. See DECISIONS.md, D20.
 
 ### Address screening
 
@@ -412,7 +417,7 @@ in `TokenBlacklist::TOKENS` is not asked** (it passes): add yours with its
 |---|---|---|
 | USDC on Base Sepolia, Arc testnet, Avalanche Fuji | `isBlacklisted` | answers; a made-up selector reverts |
 | USDC on Ethereum Sepolia, Polygon Amoy | `isBlacklisted` | unreachable when tried, assumed (Circle's contract) |
-| USDC on Ethereum, Base, Polygon, Avalanche, Optimism, Arbitrum, Arc mainnets | `isBlacklisted` | answers; a made-up selector reverts (read from public RPCs, 2026-11-03). Asked once you register the network with `Networks::add()`: none is a built-in network |
+| USDC on Ethereum, Base, Polygon, Avalanche, Optimism, Arbitrum, Arc mainnets | `isBlacklisted` | answers; a made-up selector reverts (read from public RPCs, 2026-11-03). Ethereum and Arc are built-in networks, so they are asked as they are; the others are asked once you register the network with `Networks::add()` |
 | USDT on Ethereum | `isBlackListed`, `getBlackListStatus` | `true` for 8 of 8 OFAC-listed addresses |
 | USDT0 on Arbitrum and Rootstock | `isBlocked` | answers, but `false` for the same 8: never seen to freeze, **not active** |
 
@@ -434,9 +439,12 @@ first request, and the command exits 1 naming each bad value: a name in
 no tool (a typo there would leave the tool you meant to charge free), a price
 that is not a positive amount for any paid tool (`X402_PRICE`, `X402_PRICES`
 or a `#[PaidJob]` price), a limit that is not a positive integer, a bad
-timeout or duration, a buyer budget that does not build, and an
-`X402_TIMEOUTS` above `X402_BUYER_MAX_TIMEOUT` (our own agent would refuse
-it), and an `X402_PRICES` entry for a tool that is not paid. A typo in a
+timeout or duration, an `X402_NETWORK` no scheme supports, a buyer budget that
+does not build, a payment ledger that does not take a test claim (Redis, or
+`var/x402-ledger`), a bad sensitive rule (`app/config/x402_sensitive.yaml`
+malformed or duplicated, or an `X402_SENSITIVE_TOOLS` or `tool` rule name that
+is no served tool), an `X402_TIMEOUTS` above `X402_BUYER_MAX_TIMEOUT` (our own
+agent would refuse it), and an `X402_PRICES` entry for a tool that is not paid. A typo in a
 tool name is reported before the timeout or duration error it causes. An
 empty `X402_PAID_TOOLS` is only a warning (every tool free but the
 `#[PaidJob]` ones). The same Pricing errors also answer every `/mcp` request
@@ -459,7 +467,7 @@ with a 500.
 | `TERMS_MODEL` | `deepseek-ai/DeepSeek-V4.1-Flash` | The model behind `analyze_terms` (super beta): open weights on Inference Providers; needs `HF_TOKEN`. |
 | `MCP_LIMIT_IP` | `60` | `POST /mcp` requests per client per minute (an IPv6 client by its /64), refused with 429 before any payment is checked. |
 | `MCP_LIMIT_GLOBAL` | `600` | `POST /mcp` requests per minute for the whole server, counted only for clients within their own limit. |
-| `TERMS_LIMIT_IP` / `TERMS_LIMIT_DAY` | `5` / `500` | `analyze_terms` calls per client per hour and in total per day; over either is a tool error, nothing charged. |
+| `TERMS_LIMIT_IP` / `TERMS_LIMIT_DAY` | `5` / `500` | `analyze_terms` paid calls per client per hour (HTTP 429, before the payment is read) and in total per day (a tool error, after the payment is claimed); nothing is charged in either case. |
 | `HF_MODEL` | `openai/gpt-oss-20b` | The model `--hf` uses: any chat model on Inference Providers with tool calling. |
 | `X402_BUDGETS` | `{"eip155:84532":"0.05"}` | The agent's spending cap per run, in USD, JSON by network. A network not listed is never paid (Arc mainnet is left out on purpose: add it in `.env.local` with a non-public key). |
 | `X402_MAX_PER_PAYMENT` | `{"eip155:84532":"0.02"}` | Ceiling for one single payment, same shape. |
@@ -470,7 +478,15 @@ with a 500.
 | `X402_SCREENING_TIMEOUT` | `3` | Seconds to wait for the API. |
 | `X402_SCREENING_UNAVAILABLE` | `reject` | No API answer in time (or a 5xx): `reject` or `allow`. |
 | `MCP_URL` | the DDEV site's `/mcp` | The MCP server the agent connects to. |
+| `OMBU_MCP_URL` | `https://ombu.quebracho.digital/mcp` | Ombú's MCP server, the agent's second client (search only, see above). |
 | `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | placeholders | The agent's OpenAI-compatible LLM; set them in `.env.local`. |
+
+**Payment logs.** `App\X402\PaymentLog` logs an `intent` line before each
+settle or upfront tool run, and an `outcome` line per paid call (never the
+signature, the response body or a token). With `symfony/monolog-bundle`
+installed (a `require-dev` here) it uses the `x402` Monolog channel; without
+it (`composer install --no-dev`) it writes to `php://stderr` at level `info`
+(`app.x402_stderr_logger` in `app/config/services.yaml`), prefixed `x402 `.
 
 ## Using the library
 
@@ -500,7 +516,7 @@ $client = new PayingHttpClient(
 );
 ```
 
-**Networks**: built in are the demo testnets (Base Sepolia, Arc testnet, Ethereum Sepolia, Avalanche Fuji, Polygon Amoy) and Ethereum mainnet, which the library only reads (the blacklist of its USDC and USDT: an `eth_call`, no gas). Any other EVM chain, mainnets included, whose token implements EIP-3009, is added with `Networks::add()`. The steps, the contract and the blacklist function to use are in [Add a blockchain](packages/x402/README.md#add-a-blockchain):
+**Networks**: built in are the demo testnets (Base Sepolia, Arc testnet, Ethereum Sepolia, Avalanche Fuji, Polygon Amoy, Solana devnet), Arc mainnet (`eip155:5042`, where Ombú sells), and Ethereum mainnet, which is there to be read (the blacklist of its USDC and USDT: an `eth_call`, no gas). Any other EVM chain, mainnets included, whose token implements EIP-3009, is added with `Networks::add()`. The steps, the contract and the blacklist function to use are in [Add a blockchain](packages/x402/README.md#add-a-blockchain):
 
 ```php
 $network = Networks::add(chainId: 4202, asset: '0x…', name: 'USDC', version: '2');
@@ -574,6 +590,11 @@ Working and verified:
 
 Not yet:
 - Unverified: the EIP-712 domains of USDC on Ethereum Sepolia, Avalanche Fuji and Polygon Amoy (confirmed by the first testnet payment on each).
+
+Found on the way, reported upstream: the MCP bundle's HTTP controller cannot take an application
+middleware (`MiddlewareFactory` is `final` and the stack is fixed), so the app copies the controller
+(`app/src/Controller/McpController.php`) and must follow bundle changes by hand. Issue
+[symfony/ai#2883](https://github.com/symfony/ai/issues/2883) proposes an extension point.
 
 Plan, open tasks and what comes after the hackathon: [ROADMAP.md](ROADMAP.md).
 

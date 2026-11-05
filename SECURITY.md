@@ -7,10 +7,11 @@ in production on mainnet (Arc), through the Drupal module `x402_pay` at
 https://ombu.quebracho.digital; this repository also holds a demo app that
 defaults to testnets:
 
-- Built-in networks are the demo testnets plus Ethereum mainnet, which the
-  library only reads (the blacklist of its USDC and USDT, an `eth_call` with no
-  gas). Every other mainnet is registered by the site with `Networks::add()`;
-  nothing selects a mainnet unless a site configures it.
+- Built-in networks are the demo testnets, Arc mainnet (where Ombú sells) and
+  Ethereum mainnet, which is there to be read (the blacklist of its USDC and
+  USDT, an `eth_call` with no gas). Every other mainnet is registered by the
+  site with `Networks::add()`; nothing selects a mainnet unless a site
+  configures it.
 - `X402_FACILITATOR` is `mock` (nothing settles) or a facilitator URL; the demo
   settles real testnet USDC on Base Sepolia through https://x402.org/facilitator.
 - The key in `app/.env` is the public example key from the web3.js docs, kept on
