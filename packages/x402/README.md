@@ -429,8 +429,8 @@ who signed) is "paid"; anything else withholds the output.
   are refused on purpose: they bring executable bytes and unbounded gas into
   verification. Solana smart wallets and lookup tables are refused likewise.
 - Simulates with `eth_call` first and estimates gas (+20 %); `maxGasCost`
-  aborts anything dearer; one lock per network serialises the gas wallet's
-  nonce; the transaction hash is known before it is sent, so a send that times
+  aborts anything dearer (`maxGasCost`, in wei: the caller sets it, `null` is
+  no cap); one lock per network serialises the gas wallet's nonce; the transaction hash is known before it is sent, so a send that times
   out still leaves something to reconcile; the receipt must have `status 0x1`.
 - Refuses what would revert anyway: a payment that is not for our payTo,
   amount or network, an expired one, a frozen payer or payTo (see Address

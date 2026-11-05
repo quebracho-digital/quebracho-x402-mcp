@@ -5,7 +5,12 @@ declare(strict_types=1);
 namespace App\Tests;
 
 use App\EventListener\McpRateLimit;
+use App\Job\FileJobStore;
+use App\Job\JobRunner;
+use App\Job\JobStore;
 use App\Kernel;
+use App\X402\Facilitator;
+use App\X402\JobDesk;
 use App\X402\Pricing;
 use App\X402\ReceiptLookup;
 use Psr\Cache\CacheItemPoolInterface;
@@ -96,7 +101,7 @@ final class AppKernelTest extends KernelTestCase
         \assert(\is_array($tools));
         // The test env serves JobToolsFixture under the id App\Mcp\AliasedJobs (the registry
         // matches the id, not the class) and tags InvokableJobStartFixture outside the registry.
-        self::assertEqualsCanonicalizing(['analyze_terms', 'echo', 'ombu_search', 'wisdom', 'demo_start', 'demo_result', 'demo_status'], array_keys($tools));
+        self::assertEqualsCanonicalizing(['analyze_terms', 'analyze_terms_start', 'analyze_terms_result', 'analyze_terms_status', 'echo', 'ombu_search', 'wisdom', 'demo_start', 'demo_result', 'demo_status'], array_keys($tools));
         self::assertSame(['text'], json_decode($tools['analyze_terms']['schema'], true)['required']);
         self::assertStringContainsString('100%percent%', $tools['demo_start']['schema'], 'a "%name%" survives the container');
 
@@ -158,6 +163,42 @@ final class AppKernelTest extends KernelTestCase
         $refused = $send();
         self::assertSame(429, $refused->getStatusCode());
         self::assertSame('Rate limit reached for analyze_terms. Nothing was charged; try later.', json_decode((string) $refused->getContent(), true)['error']['message']);
+    }
+
+    public function testJobModeIsWiredThroughJobDesk(): void
+    {
+        $container = self::getContainer();
+        $desk = $container->get(JobDesk::class);
+        // Every job hook on the middleware is JobDesk's: one missing and a _start would settle with no row
+        // written first, or a _result be sold to anyone.
+        $middleware = $container->get(X402McpMiddleware::class);
+        foreach (['settle', 'validate', 'payer', 'sensitive'] as $hook) {
+            $closure = (new \ReflectionProperty(X402McpMiddleware::class, $hook))->getValue($middleware);
+            \assert($closure instanceof \Closure);
+            $fn = new \ReflectionFunction($closure);
+            self::assertSame([$desk, $hook], [$fn->getClosureThis(), $fn->getName()], $hook);
+        }
+        // And JobDesk settles with the facilitator.
+        $settle = (new \ReflectionProperty(JobDesk::class, 'settle'))->getValue($desk);
+        \assert($settle instanceof \Closure);
+        self::assertInstanceOf(Facilitator::class, (new \ReflectionFunction($settle))->getClosureThis());
+
+        // Decision 9: jobs are files outside the cache, which cache:clear and a deploy wipe.
+        $dir = (string) (new \ReflectionProperty(FileJobStore::class, 'dir'))->getValue($container->get(JobStore::class));
+        $cache = (string) $container->getParameter('kernel.cache_dir');
+        self::assertStringStartsNotWith(\dirname($cache), $dir, 'not under var/cache');
+        self::assertStringEndsWith('/var/jobs', $dir);
+
+        // Priced by their #[PaidJob]: the deposit upfront, the rest after; the status free.
+        $pricing = $container->get(Pricing::class);
+        self::assertSame(['10000', 'upfront'], [$pricing(['name' => 'analyze_terms_start'])[0]['amount'], $pricing(['name' => 'analyze_terms_start'])[0]['extra']['paymentFlow']]);
+        self::assertSame(['10000', null], [$pricing(['name' => 'analyze_terms_result'])[0]['amount'], $pricing(['name' => 'analyze_terms_result'])[0]['extra']['paymentFlow'] ?? null]);
+        self::assertNull($pricing(['name' => 'analyze_terms_status']));
+        self::assertNotNull($container->get(JobRunner::class)->work('analyze_terms_start'), 'its work is tagged');
+        self::assertArrayNotHasKey('context', json_decode($container->getParameter('app.mcp_tools')['analyze_terms_start']['schema'], true)['properties'], 'the RequestContext is injected, not asked of the buyer');
+
+        // Registered for cron; not run here: the test env shares var/jobs with dev.
+        self::assertTrue((new Application(self::bootKernel()))->has('app:jobs:janitor'));
     }
 
     public function testAnOptionalBundleIsRegisteredOnlyWhenItsClassExists(): void

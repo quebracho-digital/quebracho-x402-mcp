@@ -146,7 +146,8 @@ final class TermsAnalyzer
     /**
      * @return array{model: string, categories: array<string, list<string>>, quotes_dropped: int}
      *
-     * @throws \RuntimeException The model did not answer with a JSON object
+     * @throws \UnexpectedValueException The model did not answer with a JSON object (a RuntimeException: job mode
+     *                                   files it as invalid_reply, apart from the provider's own failures)
      */
     private function ask(string $text): array
     {
@@ -160,7 +161,7 @@ final class TermsAnalyzer
 
         // reasoning_effort none: Qwen3.8 otherwise spends the whole answer thinking.
         $reply = $this->platform->invoke($this->model, $messages, ['temperature' => 0, 'max_tokens' => 1500, 'reasoning_effort' => 'none'])->asText();
-        $got = $this->firstJsonObject($reply) ?? throw new \RuntimeException('The model did not answer with a JSON object; nothing was charged.');
+        $got = $this->firstJsonObject($reply) ?? throw new \UnexpectedValueException('The model did not answer with a JSON object; nothing was charged.');
 
         $found = [];
         $dropped = 0;

@@ -401,6 +401,18 @@ checked and is read just before settling; answers are cached
 `X402_SCREENING_UNAVAILABLE`. Until `app:screening sync` has run once, the OFAC step
 matches nothing and only logs a warning: run it before taking payments.
 
+OFAC changes without a fixed schedule, so sync it **every day** from cron (the
+command replaces the file atomically, and exits non-zero if the download fails,
+so cron's mail shows it):
+
+```cron
+# daily, 06:00: OFAC's lists into app/var/screening/ofac.txt
+0 6 * * * cd /path/to/quebracho-x402-mcp/app && bin/console app:screening sync
+```
+
+OFAC no longer publishes an RSS feed; its recent actions reach people by email
+(GovDelivery, `USTREAS_61`). Subscribing is a person's job, not the code's.
+
 After those lists, `Quebracho\X402\TokenBlacklist` asks the token itself: Circle
 (USDC) and Tether (USDT) freeze addresses in the token contract, OFAC or not,
 and a frozen payer or `payTo` makes the settlement revert. It is one `eth_call`

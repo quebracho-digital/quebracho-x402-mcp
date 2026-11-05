@@ -193,6 +193,15 @@ final class McpRateLimitTest extends TestCase
         self::assertSame(429, $this->event('203.0.113.1', body: self::toolCall('analyze_terms'))->getResponse()?->getStatusCode());
     }
 
+    public function testTheJobStartSpendsTheSameHourlyBucket(): void
+    {
+        // analyze_terms_start calls the same model: one bucket per client for both tools, or the job doubles the limit.
+        $this->limit = self::limit(perClient: 100, terms: 1);
+        self::assertNull($this->event('203.0.113.1', body: self::toolCall('analyze_terms_start'))->getResponse());
+        self::assertSame(429, $this->event('203.0.113.1', body: self::toolCall('analyze_terms'))->getResponse()?->getStatusCode());
+        self::assertNull($this->event('203.0.113.1', body: self::toolCall('analyze_terms_status'))->getResponse(), 'the free status read is not counted');
+    }
+
     public function testAnalyzeTermsCountsAnIpv6ClientByIts64(): void
     {
         $this->limit = self::limit(perClient: 100, terms: 1);

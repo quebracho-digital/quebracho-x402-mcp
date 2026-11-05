@@ -33,7 +33,8 @@ final class ChainFacilitator implements Facilitator
      *                             at a time, or parallel settles replace each other's transactions
      * @param ?string  $maxGasCost
      *                             Wei: no settle whose gas limit × max fee costs more (a buyer can make
-     *                             our transaction revert and burn gas); NULL is no cap
+     *                             our transaction revert and burn gas); NULL is no cap. The caller sets
+     *                             it (the app: from its config), no default here
      */
     public function __construct(
         private readonly Rpc $rpc,

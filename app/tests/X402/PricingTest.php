@@ -86,7 +86,7 @@ final class PricingTest extends TestCase
             self::assertNotNull($offer, "$name must be paid");
             self::assertSame('start' === $m[1] ? 'upfront' : null, $offer[0]['extra']['paymentFlow'] ?? null, $name);
         }
-        self::assertSame(['start', 'result', 'status'], array_keys($seen), 'the scan reached one tool of each kind');
+        self::assertEqualsCanonicalizing(['start', 'result', 'status'], array_keys($seen), 'the scan reached one tool of each kind');
     }
 
     /** @return iterable<string, array{list<string>, array<string, string>, array<string, int>, array<string, int>, string}> */

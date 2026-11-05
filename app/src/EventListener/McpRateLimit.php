@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\EventListener;
 
+use App\Mcp\AnalyzeTermsJobTool;
 use App\Mcp\AnalyzeTermsTool;
 use App\Terms\TermsAnalyzer;
 use Mcp\Server\Transport\Http\Middleware\DnsRebindingProtectionMiddleware;
@@ -82,14 +83,14 @@ final class McpRateLimit
     }
 
     /**
-     * A tools/call of analyze_terms that carries a payment (what X402McpMiddleware would verify) and a text the
+     * A tools/call of analyze_terms (or analyze_terms_start, the same model call as a job) that carries a payment (what X402McpMiddleware would verify) and a text the
      * tool would take. Unpaid, the middleware only answers with the price; a bad text is refused by the tool,
      * charged nothing, and must not use up the client's limit either.
      */
     private static function paidTerms(Request $request): bool
     {
         $m = json_decode($request->getContent(), true);
-        if (!\is_array($m) || 'tools/call' !== ($m['method'] ?? null) || AnalyzeTermsTool::NAME !== ($m['params']['name'] ?? null)
+        if (!\is_array($m) || 'tools/call' !== ($m['method'] ?? null) || !\in_array($m['params']['name'] ?? null, [AnalyzeTermsTool::NAME, AnalyzeTermsJobTool::START], true)
           || !\is_array($m['params']['_meta'][X402McpMiddleware::PAYMENT] ?? null) || !\is_string($text = $m['params']['arguments']['text'] ?? null)) {
             return false;
         }
