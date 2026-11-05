@@ -256,3 +256,14 @@ An accepted decision is never rewritten: if it changes, a new one replaces it.
   - The re-read before the write is not atomic: a retry that writes between it and ours is overwritten (a lost replay copy, never a second charge), and the next run sees the result.
   - Each `settling` or `pending` write costs one more ledger write (two Redis calls, one more file).
   - Tested against a scripted node only; no real RPC was asked. Tests: `FileLedgerTest` and `RedisLedgerTest` (open, openKeys, close, release, expiry), `LedgerReplayTest` (open with the transaction after a crash, closed once delivered, pending opened, an open that fails sends nothing), `ReconcilerTest` (each row of the table), `X402ReconcileCommandTest`.
+
+## D21 — The buyer's cap is reserved before signing; a payment that fails before it is sent gives its amount back (2026-11-05)
+
+- Status: accepted (Leo, through the docs session: "que Budget reserve el monto de forma atómica antes de firmar, y que libere la reserva si el pago falla")
+- Context: the buyer ran choose (allows) → sign → spend. Two payments concurrent in one process could both pass allows() before either spent, so the total could exceed the cap by up to N payments. Reachable only with a Fiber-aware PSR-18 client: Solana and NEAR make RPC calls between choose and spend, and the address screening can block on a lookup. Separately, two concurrent reclaim() calls could free the same unsettled signature twice.
+- Decision:
+  - `Budget::reserve()` checks the cap and adds the amount in one synchronous step, and returns false without changing anything when it does not fit. Nothing is signed or sent for a refused reservation.
+  - `Budget::release()` gives the amount back when signing or encoding fails before the request leaves. A payment that may have reached the seller keeps its reservation, as before (`unsettled()` and `reclaim()`).
+  - `reclaim()` removes an entry before asking the chain, skips entries another reclaim has taken, and restores the entry if the lookup throws.
+  - The budget lives in one process. Separate processes, workers or hosts each have their own cap; a shared limit needs the application to store the spent totals.
+- Consequences: no public method of the library is removed (tests/CompatibilityTest.php). Tests: `BudgetTest` (reserve, release, concurrent reclaims), `PayingHttpClientTest` (a payment that cannot be sent gives its reservation back; five concurrent payments never pass the cap).

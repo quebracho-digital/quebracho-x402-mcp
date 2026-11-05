@@ -293,7 +293,7 @@ final class CompatibilityTest extends TestCase
         foreach ($api['constants'] as $name => $c) {
             if (!$rc->hasConstant($name)) {
                 $problems[] = "constante $name eliminada";
-            } elseif ($fqn === Networks::class && 'ALL' === $name && \is_array($rc->getConstant($name))) {
+            } elseif (Networks::class === $fqn && 'ALL' === $name && \is_array($rc->getConstant($name))) {
                 // Networks::ALL may gain entries (a new chain is an addition); every 0.3.0 entry must stay as it was. Other tables are strict.
                 foreach ($c['value'] as $key => $value) {
                     if (($rc->getConstant($name)[$key] ?? null) !== $value) {

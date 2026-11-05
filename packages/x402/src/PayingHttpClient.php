@@ -64,6 +64,11 @@ final class PayingHttpClient implements ClientInterface
         // The first offer we have a scheme for and the budget allows.
         foreach ($required['accepts'] ?? [] as $req) {
             [$scheme, $reason] = $this->budget->choose($this->schemes, $req, $this->events);
+            // Checked again and counted in one step: the screening may have yielded, and
+            // payments running concurrently on this budget must not all pass the cap.
+            if (null === $reason && !$this->budget->reserve($req)) {
+                $reason = 'not_allowed';
+            }
             if (null !== $reason) {
                 try {
                     $this->onRefused?->__invoke(is_array($req) ? $req : [], $reason);
@@ -72,17 +77,23 @@ final class PayingHttpClient implements ClientInterface
                 }
                 continue;
             }
-            // Signed first: a failed signature spends nothing.
-            $payment = $scheme->pay($required, $req);
-            // Spent when signed, just before it is sent: a signed authorization is money
-            // the seller can settle on its own, whatever it answers. Never refunded here.
-            $this->budget->spend($req);
-            // The same request, paid: the body is read again from the start.
-            if ($request->getBody()->isSeekable()) {
-                $request->getBody()->rewind();
+            // Reserved, then signed: a signed authorization is money the seller can settle
+            // on its own, whatever it answers.
+            try {
+                $payment = $scheme->pay($required, $req);
+                // The same request, paid: the body is read again from the start.
+                if ($request->getBody()->isSeekable()) {
+                    $request->getBody()->rewind();
+                }
+                $signed = $request->withHeader(PaymentHeaders::SIGNATURE, PaymentHeaders::encode($payment));
+            } catch (\Throwable $e) {
+                // Never left this process: a failed signature spends nothing.
+                $this->budget->release($req);
+
+                throw $e;
             }
             try {
-                $paid = $this->client->sendRequest($request->withHeader(PaymentHeaders::SIGNATURE, PaymentHeaders::encode($payment)));
+                $paid = $this->client->sendRequest($signed);
             } catch (\Throwable $e) {
                 // It may have reached the seller: kept as unsettled, to be reclaimed once expired.
                 $this->budget->unsettled($req, $payment);

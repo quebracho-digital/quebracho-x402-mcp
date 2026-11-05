@@ -71,6 +71,11 @@ final class PayingMcpClient implements ClientInterface
         // The first offer we have a scheme for and the budget allows.
         foreach ($required['accepts'] ?? [] as $req) {
             [$scheme, $reason] = $this->budget->choose($this->schemes, $req, $this->events);
+            // Checked again and counted in one step: the screening may have yielded, and
+            // payments running concurrently on this budget must not all pass the cap.
+            if (null === $reason && !$this->budget->reserve($req)) {
+                $reason = 'not_allowed';
+            }
             if (null !== $reason) {
                 try {
                     $this->onRefused?->__invoke(is_array($req) ? $req : [], $reason);
@@ -79,13 +84,18 @@ final class PayingMcpClient implements ClientInterface
                 }
                 continue;
             }
-            // Signed first: a failed signature spends nothing.
-            $payment = $scheme->pay($required, $req);
-            // Spent when signed, just before it is sent: a signed authorization is money
-            // the seller can settle on its own, whatever it answers. Never refunded here.
-            $this->budget->spend($req);
-            $call['params']['_meta'][X402McpMiddleware::PAYMENT] = $payment;
-            $paid = $request->withBody($this->streams->createStream(json_encode($call, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)));
+            // Reserved, then signed: a signed authorization is money the seller can settle
+            // on its own, whatever it answers.
+            try {
+                $payment = $scheme->pay($required, $req);
+                $call['params']['_meta'][X402McpMiddleware::PAYMENT] = $payment;
+                $paid = $request->withBody($this->streams->createStream(json_encode($call, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)));
+            } catch (\Throwable $e) {
+                // Never left this process: a failed signature spends nothing.
+                $this->budget->release($req);
+
+                throw $e;
+            }
             try {
                 [$response, $result] = $this->answer($this->client->sendRequest($paid), $call['id']);
             } catch (\Throwable $e) {

@@ -12,7 +12,9 @@ use Psr\EventDispatcher\EventDispatcherInterface;
  * ponytail: in memory, so it lasts one process (one agent run); persist the
  * spent totals if a cap must hold across runs.
  *
- * Spent when signed, never refunded on a seller's word. With an on-chain
+ * Reserved before signing (reserve(), check and count in one step, so
+ * concurrent payments in this process share the cap) and given back only if
+ * the payment never left (release()); never refunded on a seller's word. With an on-chain
  * check ($used), a signature the seller never settled frees its amount once
  * it has expired and the chain says its nonce is unused: then it can never
  * move money.
@@ -144,6 +146,35 @@ final class Budget
         return null === $reason ? [$scheme, null] : [null, $reason];
     }
 
+    /**
+     * Checks the offer and counts it as spent in one step, or returns false
+     * and changes nothing. Nothing in between can yield (no I/O, no Fiber
+     * suspension), so payments running concurrently on this object cannot
+     * all pass the check before any of them counts: the cap holds.
+     */
+    public function reserve(array $req): bool
+    {
+        if (!$this->allows($req)) {
+            return false;
+        }
+        $this->spend($req);
+
+        return true;
+    }
+
+    /**
+     * Gives back a reserve() whose payment never left this process (the
+     * signature failed, or the request could not be built). Never for one
+     * that may have reached the seller: that is unsettled()'s job.
+     */
+    public function release(array $req): void
+    {
+        $this->spent[$req['network']] = gmp_strval(gmp_sub($this->spent[$req['network']] ?? 0, (string) $req['amount']));
+    }
+
+    /**
+     * Counts $req as spent without checking it; reserve() checks and counts.
+     */
     public function spend(array $req): void
     {
         $this->spent[$req['network']] = gmp_strval(gmp_add($this->spent[$req['network']] ?? 0, (string) $req['amount']));
@@ -175,19 +206,24 @@ final class Budget
             // Still valid, or close enough that the chain's clock may disagree with
             // ours: the seller may settle it yet.
             // ponytail: fixed 60 s skew margin; read the latest block's timestamp if it bites.
-            if ($validBefore + 60 >= $now) {
+            // Gone already: a concurrent reclaim() took it while this one waited on the chain.
+            if (!isset($this->unsettled[$i]) || $validBefore + 60 >= $now) {
                 continue;
             }
+            // Taken out before asking the chain: the call may yield, and a concurrent
+            // reclaim() must not free the same signature a second time.
+            $entry = $this->unsettled[$i];
+            unset($this->unsettled[$i]);
             try {
                 $used = ($this->used)($network, $from, $nonce);
             } catch (\Throwable) {
                 // Unknown: stays spent, asked again next time.
+                $this->unsettled[] = $entry;
                 continue;
             }
             if (false === $used) {
                 $this->spent[$network] = gmp_strval(gmp_sub($this->spent[$network] ?? 0, $amount));
             }
-            unset($this->unsettled[$i]);
         }
     }
 

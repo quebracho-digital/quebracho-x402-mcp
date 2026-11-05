@@ -198,6 +198,128 @@ final class PayingHttpClientTest extends TestCase
         self::assertSame('0', $budget->spent('eip155:84532'));
     }
 
+    public function testAPaymentThatCannotBeSentGivesTheReservationBack(): void
+    {
+        // Signs, but into something no header can carry: it never leaves this process.
+        $unsendable = new class implements Scheme {
+            public function supports(string $network): bool
+            {
+                return true;
+            }
+
+            public function pay(array $required, array $req): array
+            {
+                return ['payload' => "\xff"];
+            }
+
+            public function verify(array $payment, array $req): ?string
+            {
+                return null;
+            }
+
+            public function payer(array $payment): ?string
+            {
+                return null;
+            }
+        };
+        $budget = Budget::usd('eip155:84532', '0.05');
+        $sent = 0;
+        $send = function () use (&$sent): Response {
+            ++$sent;
+
+            return new Response(200);
+        };
+        $client = new PayingHttpClient($this->quoting($send), [$unsendable], $budget);
+
+        try {
+            $client->sendRequest(new Request('POST', 'https://example.test/mcp'));
+            self::fail('the encoding error must reach the caller');
+        } catch (\JsonException) {
+        }
+        self::assertSame(0, $sent);
+        self::assertSame('0', $budget->spent('eip155:84532'));
+    }
+
+    /**
+     * Five agents in one process (Fibers, as ReactPHP or Amp run them) share a
+     * 0.02 budget and each pays 0.01. pay() suspends, as a scheme that fetches a
+     * blockhash or a block height through a Fiber-aware client does: every
+     * payment is in flight before any finishes. Only two may be signed and sent.
+     */
+    public function testConcurrentPaymentsNeverPassTheCap(): void
+    {
+        $evm = new EvmExact($this->key());
+        $scheme = new class($evm) implements Scheme {
+            public int $signed = 0;
+
+            public function __construct(private EvmExact $evm)
+            {
+            }
+
+            public function supports(string $network): bool
+            {
+                return $this->evm->supports($network);
+            }
+
+            public function pay(array $required, array $req): array
+            {
+                \Fiber::suspend();
+                ++$this->signed;
+
+                return $this->evm->pay($required, $req);
+            }
+
+            public function verify(array $payment, array $req): ?string
+            {
+                return $this->evm->verify($payment, $req);
+            }
+
+            public function payer(array $payment): ?string
+            {
+                return $this->evm->payer($payment);
+            }
+        };
+        $f = new Psr17Factory();
+        $quote = $f->createResponse(402)->withHeader(PaymentHeaders::REQUIRED, PaymentHeaders::encode(['x402Version' => 2, 'resource' => ['url' => 'https://example.test/mcp'], 'accepts' => [Networks::requirements('eip155:84532', '0.01', '0x000000000000000000000000000000000000dEaD')]]));
+        $paid = $f->createResponse(200)->withHeader(PaymentHeaders::RESPONSE, PaymentHeaders::encode(['success' => true]));
+        $seller = new class($quote, $paid) implements ClientInterface {
+            public int $sent = 0;
+
+            public function __construct(private ResponseInterface $quote, private ResponseInterface $paid)
+            {
+            }
+
+            public function sendRequest(RequestInterface $request): ResponseInterface
+            {
+                if (!$request->hasHeader(PaymentHeaders::SIGNATURE)) {
+                    return $this->quote;
+                }
+                ++$this->sent;
+
+                return $this->paid;
+            }
+        };
+        $budget = Budget::usd('eip155:84532', '0.02');
+        $client = new PayingHttpClient($seller, [$scheme], $budget);
+
+        $fibers = array_map(fn () => new \Fiber(fn () => $client->sendRequest(new Request('POST', 'https://example.test/mcp'))->getStatusCode()), range(1, 5));
+        foreach ($fibers as $fiber) {
+            $fiber->start();
+        }
+        foreach ($fibers as $fiber) {
+            if ($fiber->isSuspended()) {
+                $fiber->resume();
+            }
+        }
+        $statuses = array_map(fn (\Fiber $fiber) => $fiber->getReturn(), $fibers);
+        sort($statuses);
+
+        self::assertSame(2, $scheme->signed, 'signed no more than the cap holds');
+        self::assertSame(2, $seller->sent, 'sent exactly the payments that fit');
+        self::assertSame([200, 200, 402, 402, 402], $statuses);
+        self::assertSame('20000', $budget->spent('eip155:84532'));
+    }
+
     public function testNeverPaysOnANetworkWithoutACap(): void
     {
         $response = $this->buyer(Budget::usd('eip155:11155111', '1'))->sendRequest(new Request('POST', 'https://example.test/mcp'));

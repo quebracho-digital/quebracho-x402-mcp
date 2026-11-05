@@ -123,6 +123,60 @@ final class BudgetTest extends TestCase
         self::assertSame('20000', $budget->spent('eip155:84532'), 'used, freed, still valid');
     }
 
+    public function testReserveRefusesWhatWouldPassTheCapAndChangesNothing(): void
+    {
+        $budget = Budget::usd('eip155:84532', '0.015');
+        self::assertTrue($budget->reserve(self::offer()));
+        self::assertSame('10000', $budget->spent('eip155:84532'));
+        self::assertFalse($budget->reserve(self::offer()), '0.02 would pass the 0.015 cap');
+        self::assertSame('10000', $budget->spent('eip155:84532'), 'a refused reserve counts nothing');
+        self::assertFalse($budget->reserve(['amount' => 'abc'] + self::offer()), 'whatever allows() refuses');
+        self::assertSame('10000', $budget->spent('eip155:84532'));
+    }
+
+    public function testReleaseGivesBackExactlyTheReservedAmount(): void
+    {
+        $budget = Budget::usd('eip155:84532', '0.05');
+        $budget->reserve(self::offer());
+        $small = Networks::requirements('eip155:84532', '0.003', '0x000000000000000000000000000000000000dEaD');
+        $budget->reserve($small);
+        self::assertSame('13000', $budget->spent('eip155:84532'));
+        $budget->release($small);
+        self::assertSame('10000', $budget->spent('eip155:84532'));
+        $budget->release(self::offer());
+        self::assertSame('0', $budget->spent('eip155:84532'));
+    }
+
+    public function testConcurrentReclaimsFreeASignatureOnce(): void
+    {
+        $now = 2000;
+        // The chain lookup suspends, as a Fiber-aware HTTP client would.
+        $used = function (): bool {
+            \Fiber::suspend();
+
+            return false;
+        };
+        $budget = new Budget(['eip155:84532' => '50000'], $used, function () use (&$now) { return $now; });
+        foreach (['0xaaa', '0xbbb'] as $from) {
+            $budget->spend(self::offer());
+            $budget->unsettled(self::offer(), ['payload' => ['authorization' => ['from' => $from, 'nonce' => '0x01', 'validBefore' => '1000']]]);
+        }
+        // A third, still-spent payment: a double free would hide inside a total of 0.
+        $budget->spend(self::offer());
+        $fibers = [new \Fiber($budget->reclaim(...)), new \Fiber($budget->reclaim(...))];
+        foreach ($fibers as $f) {
+            $f->start();
+        }
+        while (array_filter($fibers, fn (\Fiber $f) => !$f->isTerminated())) {
+            foreach ($fibers as $f) {
+                if ($f->isSuspended()) {
+                    $f->resume();
+                }
+            }
+        }
+        self::assertSame('10000', $budget->spent('eip155:84532'), 'two freed once each, the third still spent');
+    }
+
     public function testChooseSaysWhyAnOfferIsNotPaid(): void
     {
         $req = Networks::requirements('eip155:84532', '0.01', '0x000000000000000000000000000000000000dEaD');
