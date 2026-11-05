@@ -282,6 +282,54 @@ final class FacilitatorsTest extends TestCase
         $this->assertSame(['settlement_pending', 'pay-1'], [$result['errorReason'], $result['paymentId']]);
     }
 
+    private function pendingSettle(string $id): Response
+    {
+        return $this->json(200, ['success' => false, 'extensions' => ['settlement-status' => ['paymentId' => $id]]]);
+    }
+
+    public function testACompletedStatusIsASuccessWithItsTransactionAndNetwork(): void
+    {
+        $result = $this->circle([
+            $this->pendingSettle('pay-1'),
+            $this->json(200, ['status' => 'completed', 'transaction' => self::TX, 'network' => self::NETWORK, 'payer' => self::BUYER]),
+        ], 'KEY')->settle($this->payment(), $this->req());
+
+        $this->assertSame([true, self::TX, self::NETWORK], [$result['success'], $result['transaction'], $result['network']]);
+        $this->assertSame(1, $this->statusQueries());
+    }
+
+    public function testStatusRefusesAPaymentIdThatIsNotOneBeforeAnyRequest(): void
+    {
+        foreach (['a/../b', 'x?y'] as $id) {
+            try {
+                $this->circle([], 'KEY')->status($id, self::NETWORK);
+                $this->fail($id);
+            } catch (\InvalidArgumentException) {
+                $this->addToAssertionCount(1);
+            }
+        }
+        $this->assertSame([], $this->sent);
+    }
+
+    public function testAPaymentIdWithPathCharactersIsNeverQueried(): void
+    {
+        foreach (['a/../b', 'x?y'] as $id) {
+            $this->sent = [];
+            $result = $this->circle([$this->pendingSettle($id)], 'KEY')->settle($this->payment(), $this->req());
+            $this->assertSame(0, $this->statusQueries(), $id);
+            $this->assertSame(['settlement_pending', false], [$result['errorReason'], $result['success']], $id);
+        }
+    }
+
+    public function testACompletedStatusForAnotherNetworkOrPayerIsRefused(): void
+    {
+        $completed = ['status' => 'completed', 'transaction' => self::TX, 'network' => self::NETWORK, 'payer' => self::BUYER];
+        foreach (['other network' => ['network' => 'eip155:84532'], 'other payer' => ['payer' => self::PAY_TO]] as $case => $change) {
+            $result = $this->circle([$this->pendingSettle('pay-1'), $this->json(200, $change + $completed)], 'KEY')->settle($this->payment(), $this->req());
+            $this->assertSame([false, 'invalid_settle_response'], [$result['success'], $result['errorReason']], $case);
+        }
+    }
+
     public function testOnlyAConsistentSettleCounts(): void
     {
         $good = ['success' => true, 'transaction' => self::TX, 'network' => self::NETWORK, 'payer' => strtolower(self::BUYER)];
