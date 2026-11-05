@@ -62,8 +62,8 @@ final class TokenBlacklist
         'eip155:1|0xdac17f958d2ee523a2206206994597c13d831ec7' => 'isBlackListed',
         // Circle's native USDC on mainnets (2026-11-03: name() "USD Coin" (Arc: "USDC"),
         // version() "2", 6 decimals; isBlacklisted answered, a made-up selector reverted).
-        // Only asked once the network is registered (Networks::add), so listing them
-        // makes no mainnet a built-in network.
+        // Listing them is what screens the token; whether its network is built in is Networks' decision
+        // (Base, Solana and Arc mainnets are; the others are registered with Networks::add).
         'eip155:1|0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48' => 'isBlacklisted',
         'eip155:8453|0x833589fcd6edb6e08f4c7c32d4f71b54bda02913' => 'isBlacklisted',
         'eip155:137|0x3c499c542cef5e3811e1192ce70d8cc03d5c3359' => 'isBlacklisted',

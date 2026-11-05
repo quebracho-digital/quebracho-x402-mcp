@@ -111,7 +111,7 @@ services:
     # 'error' unless SHELL_VERBOSITY says otherwise, so the intent and settled lines would be dropped in production.
     app.x402_stderr_logger:
         class: Symfony\Component\HttpKernel\Log\Logger
-        arguments: ['info', 'php://stderr']
+        arguments: ['info', 'php://stderr', '@App\X402\PaymentLogFormatter']
 
     App\X402\PaymentLog:
         arguments:

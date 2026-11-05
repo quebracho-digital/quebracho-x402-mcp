@@ -19,6 +19,7 @@ use Symfony\Component\RateLimiter\RateLimiterFactoryInterface;
  */
 final class AnalyzeTermsTool
 {
+    public const NAME = 'analyze_terms';
     public const NOTICE = 'SUPER BETA: an example for the hackathon demo, not legal advice. A model can miss clauses or flag the wrong ones. Read the quotes in the document before you rely on them.';
 
     public function __construct(
@@ -33,7 +34,7 @@ final class AnalyzeTermsTool
     ) {
     }
 
-    #[McpTool(name: 'analyze_terms', description: 'SUPER BETA, an example for the hackathon demo, not legal advice. Flags the clauses of a terms of service or privacy policy (up to 1200 words) in 19 categories, each with a quote checked against your text. Answers are memoised for 7 days by a hash of the text, so a repeated text answers faster; set sensitive to true to skip the memo (not read, not written) and the payment ledger\'s copy of the answer: the model is always called, and a retry of a settled payment gets already_settled instead of the answer. Paid.')]
+    #[McpTool(name: self::NAME, description: 'SUPER BETA, an example for the hackathon demo, not legal advice. Flags the clauses of a terms of service or privacy policy (up to 1200 words) in 19 categories, each with a quote checked against your text. Answers are memoised for 7 days by a hash of the text, so a repeated text answers faster; set sensitive to true to skip the memo (not read, not written) and the payment ledger\'s copy of the answer: the model is always called, and a retry of a settled payment gets already_settled instead of the answer. Paid.')]
     public function __invoke(string $text, bool $sensitive = false): string
     {
         // A bad text costs nothing, so it must not use up anybody's limit.
@@ -42,7 +43,7 @@ final class AnalyzeTermsTool
         } catch (\InvalidArgumentException $e) {
             throw new ToolCallException($e->getMessage(), 0, $e);
         }
-        $sensitive = $sensitive || ($this->sensitiveRules)(['name' => 'analyze_terms', 'arguments' => ['sensitive' => $sensitive]]);
+        $sensitive = $sensitive || ($this->sensitiveRules)(['name' => self::NAME, 'arguments' => ['sensitive' => $sensitive]]);
         // Before the model call: a refused call throws, so nothing is charged and the model is not called.
         $client = McpRateLimit::client($this->requests->getCurrentRequest()?->getClientIp());
         if (!$this->perClient->create($client)->consume()->isAccepted() || !$this->perDay->create('all')->consume()->isAccepted()) {

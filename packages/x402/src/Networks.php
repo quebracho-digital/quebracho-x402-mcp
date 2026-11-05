@@ -94,7 +94,7 @@ final class Networks
         // the USDC mint; the facilitator's fee payer goes in `extra` per offer
         // (HttpFacilitator::feePayer).
         // Solana mainnet-beta: Circle's USDC mint (developers.circle.com, checked 2026-11-05).
-        'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d' => [
+        'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp' => [
             'label' => 'Solana (USDC)',
             'asset' => 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
             'decimals' => 6,
