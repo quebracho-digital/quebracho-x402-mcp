@@ -44,7 +44,7 @@ use Symfony\Component\Lock\Store\FlockStore;
  */
 final class JobFlowTest extends TestCase
 {
-    private const PAY_TO = '0x7e510E6B4c3E2121CB64CD0686a4f241Df326510';
+    private const PAY_TO = '0xcb2d7f50D917FeD02b82ef08cEfBF9827463B794';
     private const BUYER = '0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318';
     private const BUYER_ADDRESS = '0x2c7536E3605D9C16a7a3D7b1898e529396a65c23';
     private const OTHER = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d';

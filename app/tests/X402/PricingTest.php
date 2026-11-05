@@ -13,7 +13,7 @@ use PHPUnit\Framework\TestCase;
 
 final class PricingTest extends TestCase
 {
-    private const PAY_TO = '0x7e510E6B4c3E2121CB64CD0686a4f241Df326510';
+    private const PAY_TO = '0xcb2d7f50D917FeD02b82ef08cEfBF9827463B794';
     private const TOOLS = [
         'wisdom' => ['job' => null, 'schema' => '{"type":"object","properties":{"topic":{"type":["null","string"],"default":null}}}'],
         'analyze_terms' => ['job' => null, 'schema' => '{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}'],

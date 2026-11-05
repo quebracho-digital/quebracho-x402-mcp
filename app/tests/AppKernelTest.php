@@ -115,7 +115,7 @@ final class AppKernelTest extends KernelTestCase
         $client = self::getContainer()->get(PayingMcpClient::class);
         $budget = (new \ReflectionProperty(PayingMcpClient::class, 'budget'))->getValue($client);
         \assert($budget instanceof Budget);
-        $offer = static fn (int $timeout) => Networks::requirements('eip155:84532', '0.01', '0x7e510E6B4c3E2121CB64CD0686a4f241Df326510', $timeout);
+        $offer = static fn (int $timeout) => Networks::requirements('eip155:84532', '0.01', '0xcb2d7f50D917FeD02b82ef08cEfBF9827463B794', $timeout);
 
         self::assertSame('170', $_SERVER['X402_BUYER_MAX_TIMEOUT'] ?? null, 'the committed default');
         self::assertTrue($budget->allows($offer(170)));
