@@ -220,3 +220,39 @@ An accepted decision is never rewritten: if it changes, a new one replaces it.
   - The 24 h covers the time for a buyer's retry or a person to reconcile with the hash after a crash or an unconfirmed send. The 600 s TTL let that reference go before anyone could use it. A key that lives longer also keeps the claim longer, which can only block a second charge, never allow one. The cost is ledger space for those few states.
   - A `$settle` closure that wraps `ChainFacilitator` without passing the third argument gets the old behaviour. The README says to pass `$chain->settle(...)`.
   - Tests: `FacilitatorsTest::testChainHandsTheReferenceOverBeforeSendingAndSendsNothingWithoutIt`, and in `LedgerReplayTest` the crash after the send, the retry asking the lookup about that transaction, a refused reference over HTTP and MCP (no send), and the TTLs.
+
+## D20 — An open index of unresolved payments, and a reconciler that corrects it with the chain (2026-11-05)
+
+- Date: 2026-11-05
+- Status: proposed (implemented on request of the working session; Leo's acceptance is not recorded yet)
+- Context: D19 left reconciliation as separate work. A process that dies after the settle went out leaves `settling` or `pending` (with a transaction or not): the buyer may have paid and got nothing, a retry gets `settlement_unknown` or `settlement_pending` until the TTL, and nobody looks at those states.
+- Decision:
+  - `PaymentLedger` gets `open(key, ref, ttl)`, `openKeys(limit)` and `close(key)`; `release()` closes the entry too. `FileLedger` keeps one `<sha256>.open` file per key next to its state (`prune()` leaves them alone); `RedisLedger` keeps the ref under `x402:open:<key>` with its own TTL and the key in the set `x402:open` (`openKeys` samples it with SRANDMEMBER and drops members whose ref expired). The ledger stamps `opened` on the first open and keeps it on later ones.
+  - The ref is the minimum to ask the chain: network, asset, from, nonce, payTo, amount, validBefore, transaction, paymentId, the status, and `upfront`. Never a signature nor a body.
+  - `Sale` opens the key whenever it writes `settling` (with or without a transaction) or `pending`, and closes it when it writes `settled` or `delivered` (`remember()` and the lookup's `confirm()`). The entry lives `Sale::OPEN_TTL`, 3 days: 24 h to resolve it, then visible as needs_review.
+  - An open that fails throws. While writing `settling` (`intend()`) that refuses the write, so nothing is sent: 503 `ledger_unavailable` over HTTP, an `isError` over MCP, the rule for a `settling` the ledger refuses. After a settle (`pending`) the middlewares' `record()` drops the error: the index never blocks a payment whose money moved. A close that fails is dropped; the reconciler finds the state settled and closes it.
+  - `App\X402\Reconciler` (`app:x402:reconcile [--limit=100]`, cron every 5 minutes, not set up by us) never delivers nor charges. Per open key, all RPC questions first, then at most one write:
+
+    | Chain | Result |
+    |---|---|
+    | state already settled, delivered, handling or claimed | entry closed, `untouched` |
+    | `authorizationState` true, our transaction mined with status `0x1` | `settled` with that transaction, closed |
+    | true, our transaction `0x0` | `needs_review`, nothing freed |
+    | true, no transaction (or ours not mined): `AuthorizationUsed(from, nonce)` found by `eth_getLogs` | `settled` with its `transactionHash`, closed |
+    | true, no event in the window | `needs_review` |
+    | false, `validBefore + 60 s` passed | `released` (state deleted, entry closed) |
+    | false, still valid | `untouched` |
+    | any RPC call failed | `untouched`, nothing changed |
+    | network without `rpc` | `rpc_error` |
+    | not EIP-3009 (Solana, NEAR) or a ref without from/nonce/asset | `untouched` (by hand) |
+    | `untouched` or `rpc_error` and open more than 24 h | `needs_review`, logged |
+
+  - The `settled` it writes is the one `Sale::confirm()` writes: the receipt `{success, transaction, network, payer}` normalised by `Settlement::settled`, `delivered` when a response was kept, `handler_ran: false` for an upfront payment, and `Sale::ttl` (until validBefore, at most 600 s).
+  - `eth_getLogs` looks at the last 10,000 blocks (`Reconciler::LOG_BLOCKS`): the range public nodes and most providers accept in one call, about 5.5 h on Base and 33 h on Ethereum. The event is mined before validBefore, so a cron that runs every 5 minutes finds it.
+- Consequences:
+  - `PaymentLedger` has three more methods: any ledger written outside this repo must implement them (a breaking change of the library's interface).
+  - A default-flow payment the reconciler settles answers `already_settled` to a retry: it cannot reproduce an answer that was not kept. An upfront one runs its handler on a retry while the signature is valid; after `validBefore` the offline verify refuses the retry, as it does after `confirm()`.
+  - `needs_review` is not resolved by anything: a person reads the log or the table and checks the explorer. A key the cron does not reach for longer than the window above is `needs_review` too.
+  - The re-read before the write is not atomic: a retry that writes between it and ours is overwritten (a lost replay copy, never a second charge), and the next run sees the result.
+  - Each `settling` or `pending` write costs one more ledger write (two Redis calls, one more file).
+  - Tested against a scripted node only; no real RPC was asked. Tests: `FileLedgerTest` and `RedisLedgerTest` (open, openKeys, close, release, expiry), `LedgerReplayTest` (open with the transaction after a crash, closed once delivered, pending opened, an open that fails sends nothing), `ReconcilerTest` (each row of the table), `X402ReconcileCommandTest`.

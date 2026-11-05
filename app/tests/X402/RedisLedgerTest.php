@@ -61,6 +61,43 @@ final class RedisLedgerTest extends TestCase
         self::assertNull($this->ledger->get($this->key));
     }
 
+    public function testOpenListsTheKeyWithItsRefUntilClosed(): void
+    {
+        $this->ledger->open($this->key, ['status' => 'settling', 'opened' => 1], 60);
+        $this->ledger->open($this->key, ['status' => 'pending'], 60);
+        self::assertSame(['status' => 'pending', 'opened' => 1], $this->ledger->openKeys(1000)[$this->key] ?? null, 'the first opened time is kept');
+
+        $this->ledger->close($this->key);
+        self::assertArrayNotHasKey($this->key, $this->ledger->openKeys(1000));
+    }
+
+    public function testReleaseClosesTheEntryAndAnExpiredRefLeavesTheSet(): void
+    {
+        $this->ledger->put($this->key, ['status' => 'pending'], 60);
+        $this->ledger->open($this->key, [], 60);
+        $this->ledger->release($this->key);
+        self::assertArrayNotHasKey($this->key, $this->ledger->openKeys(1000));
+
+        $this->ledger->open($this->key, [], 1);
+        sleep(2);
+        self::assertArrayNotHasKey($this->key, $this->ledger->openKeys(1000));
+        $raw = new \Redis();
+        $raw->connect(...$this->hostAndPort());
+        self::assertFalse($raw->sIsMember('x402:open', $this->key), 'removed from the set');
+    }
+
+    public function testOpenKeysHonoursTheLimit(): void
+    {
+        $other = $this->key.'-b';
+        try {
+            $this->ledger->open($this->key, [], 60);
+            $this->ledger->open($other, [], 60);
+            self::assertCount(1, $this->ledger->openKeys(1));
+        } finally {
+            $this->ledger->close($other);
+        }
+    }
+
     public function testAMissingDatabaseIsLedgerUnavailableNotADuplicate(): void
     {
         // Redis answers "ERR DB index is out of range" to SELECT: the claim must not run on db 0 instead.

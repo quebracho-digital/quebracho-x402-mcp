@@ -361,6 +361,27 @@ free tools pass through. The tool runs only after the payment verifies, and
 each payment is claimed once before the tool runs (concurrent replays get `duplicate_settlement`), settlement happens only if the tool succeeded; if settlement fails, the tool
 output is withheld. Paid tools cannot be called inside a JSON-RPC batch.
 
+### Reconciling payments stuck in `settling` or `pending`
+
+A process that dies after the settle went out leaves the payment's state in
+`settling` or `pending`: the buyer may have paid and got nothing. Each of those
+states is listed in the ledger's open index, and `app:x402:reconcile` corrects
+them with what the chain says (the token's `authorizationState`, the
+transaction's receipt, or its `AuthorizationUsed` event):
+
+```bash
+bin/console app:x402:reconcile            # up to 100 open payments; --limit=N for another number
+```
+
+Run it from cron every 5 minutes (it is not set up for you), e.g.
+`*/5 * * * * cd /path/to/app && bin/console app:x402:reconcile --limit=100`.
+It never charges nor delivers: it marks a charged payment `settled` or frees one
+that was never charged, and the buyer's retry then gets the usual answer (an
+upfront tool runs once; a default-flow call without a kept answer gets
+`already_settled`). Rows marked `needs_review` (a reverted transaction, a used
+authorization whose transaction it cannot find, a payment open for more than
+24 h) are also logged and need a person. It always exits 0. See DECISIONS.md, D20.
+
 ### Address screening
 
 Both sides screen addresses with `App\X402\Screening`: the server checks the

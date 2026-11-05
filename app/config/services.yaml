@@ -127,6 +127,15 @@ services:
             $requests: '@mcp.psr17_factory'
             $streams: '@mcp.psr17_factory'
 
+    # app:x402:reconcile: the open payments against each network's RPC, with the lookup's 10 s client.
+    App\X402\Reconciler:
+        arguments:
+            $http: !service
+                class: Symfony\Component\HttpClient\Psr18Client
+                arguments: ['@app.receipt_http_client']
+            $requests: '@mcp.psr17_factory'
+            $streams: '@mcp.psr17_factory'
+
     # Frozen in the USDC contract itself (not only OFAC): asked after Screening's
     # lists (lower priority). An RPC that cannot answer follows the same policy
     # as the screening API: X402_SCREENING_UNAVAILABLE, "reject" by default.

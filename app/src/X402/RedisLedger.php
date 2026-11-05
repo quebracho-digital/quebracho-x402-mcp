@@ -17,6 +17,8 @@ use Quebracho\X402\PaymentLedger;
 final class RedisLedger implements PaymentLedger
 {
     private const PREFIX = 'x402:';
+    /** The set of open keys (PaymentLedger::open); each one's ref is under OPEN.':'.$key. */
+    private const OPEN = 'x402:open';
 
     private ?\Redis $redis = null;
 
@@ -48,6 +50,50 @@ final class RedisLedger implements PaymentLedger
     public function release(string $key): void
     {
         $this->call(fn (\Redis $r) => $r->del(self::PREFIX.$key));
+        $this->close($key);
+    }
+
+    /**
+     * The ref is a JSON value under 'x402:open:<key>' with its own TTL; the key is a member of the set 'x402:open'.
+     */
+    public function open(string $key, array $ref, int $ttl): void
+    {
+        $before = $this->call(fn (\Redis $r) => $r->get(self::OPEN.':'.$key));
+        $before = is_string($before) ? json_decode($before, true) : null;
+        $ref['opened'] = is_int($before['opened'] ?? null) ? $before['opened'] : (is_int($ref['opened'] ?? null) ? $ref['opened'] : time());
+        $this->call(fn (\Redis $r) => $r->set(self::OPEN.':'.$key, self::encode($ref), ['ex' => $ttl]));
+        $this->call(fn (\Redis $r) => $r->sAdd(self::OPEN, $key));
+    }
+
+    /**
+     * A random sample of the set (SRANDMEMBER), so the same $limit entries cannot hide the rest run after run.
+     * A member whose ref expired is removed from the set.
+     */
+    public function openKeys(int $limit): array
+    {
+        $keys = $this->call(fn (\Redis $r) => $r->sRandMember(self::OPEN, $limit));
+        $keys = is_array($keys) ? array_values(array_filter($keys, 'is_string')) : [];
+        if ([] === $keys) {
+            return [];
+        }
+        $refs = $this->call(fn (\Redis $r) => $r->mGet(array_map(static fn (string $k) => self::OPEN.':'.$k, $keys)));
+        $out = [];
+        foreach ($keys as $i => $key) {
+            $ref = is_array($refs) && is_string($refs[$i] ?? null) ? json_decode($refs[$i], true) : null;
+            if (is_array($ref)) {
+                $out[$key] = $ref;
+            } else {
+                $this->call(fn (\Redis $r) => $r->sRem(self::OPEN, $key));
+            }
+        }
+
+        return $out;
+    }
+
+    public function close(string $key): void
+    {
+        $this->call(fn (\Redis $r) => $r->del(self::OPEN.':'.$key));
+        $this->call(fn (\Redis $r) => $r->sRem(self::OPEN, $key));
     }
 
     /**
