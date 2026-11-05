@@ -6,6 +6,7 @@ namespace Quebracho\X402\Tests;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use Quebracho\X402\Authorization;
 use Quebracho\X402\EvmExact;
 use Quebracho\X402\Networks;
 use Quebracho\X402\Settlement;
@@ -42,6 +43,8 @@ final class EvmExactTest extends TestCase
         yield 'array nonce' => [fn (array $p) => ['payload' => ['authorization' => ['nonce' => ['x']]]], 'invalid_payload'];
         yield 'echoed payTo' => [fn (array $p) => ['accepted' => ['payTo' => '0x0000000000000000000000000000000000000001']], 'invalid_payload'];
         yield 'version' => [fn (array $p) => ['x402Version' => 1], 'invalid_x402_version'];
+        yield 'version as a string' => [fn (array $p) => ['x402Version' => '2'], 'invalid_x402_version'];
+        yield 'scheme' => [fn (array $p) => ['accepted' => ['scheme' => 'upto']], 'invalid_scheme'];
         yield 'nonce without 0x' => [fn (array $p) => ['payload' => ['authorization' => ['nonce' => substr($p['payload']['authorization']['nonce'], 2)]]], 'invalid_payload'];
         yield 'nonce not hex' => [fn (array $p) => ['payload' => ['authorization' => ['nonce' => 'zz']]], 'invalid_payload'];
         yield 'validAfter not decimal' => [fn (array $p) => ['payload' => ['authorization' => ['validAfter' => '0abc']]], 'invalid_payload'];
@@ -54,6 +57,47 @@ final class EvmExactTest extends TestCase
     {
         $payment = array_replace_recursive(self::payment(), $patch(self::payment()));
         self::assertSame($reason, (new EvmExact(clock: fn () => self::NOW))->verify($payment, self::req()));
+    }
+
+    /**
+     * The payment, its authorization changed and signed again by $signer (the buyer by default).
+     */
+    private static function signed(array $auth, ?Signer $signer = null): array
+    {
+        $payment = self::payment();
+        $payment['payload']['authorization'] = $auth + $payment['payload']['authorization'];
+        $signer ??= new Signer('0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318');
+        $payment['payload']['signature'] = $signer->sign(Authorization::digest(self::req(), $payment['payload']['authorization']));
+
+        return $payment;
+    }
+
+    public function testRejectsAValidAfterInTheFuture(): void
+    {
+        $scheme = new EvmExact(clock: fn () => self::NOW);
+        self::assertSame('invalid_exact_evm_payload_authorization_valid_after', $scheme->verify(self::signed(['validAfter' => (string) (self::NOW + 1)]), self::req()));
+        // Valid from this second on, as the reference facilitator reads it (validAfter > now is refused).
+        self::assertNull($scheme->verify(self::signed(['validAfter' => (string) self::NOW]), self::req()));
+    }
+
+    public function testValidBeforeMustOutliveTheSlack(): void
+    {
+        // EIP-3009 needs now < validBefore at settle; verify asks for SLACK seconds more so it survives the trip to a block.
+        $scheme = new EvmExact(clock: fn () => self::NOW);
+        foreach ([0, 1, EvmExact::SLACK - 1] as $after) {
+            self::assertSame('invalid_exact_evm_payload_authorization_valid_before', $scheme->verify(self::signed(['validBefore' => (string) (self::NOW + $after)]), self::req()), "now + $after");
+        }
+        self::assertNull($scheme->verify(self::signed(['validBefore' => (string) (self::NOW + EvmExact::SLACK)]), self::req()));
+    }
+
+    public function testRejectsAValidSignatureFromAnotherAddress(): void
+    {
+        $other = new Signer('0x'.str_repeat('42', 32));
+        $scheme = new EvmExact(clock: fn () => self::NOW);
+        // A good signature by $other, claiming to come from the buyer.
+        self::assertSame('invalid_exact_evm_payload_signature', $scheme->verify(self::signed([], $other), self::req()));
+        // The same key signing as itself passes: what is refused is the claimed payer, not the signature.
+        self::assertNull($scheme->verify(self::signed(['from' => $other->address()], $other), self::req()));
     }
 
     public function testRejectsExpiredPayments(): void
