@@ -48,13 +48,48 @@ final class ReceiptLookupTest extends TestCase
         return ['status' => 'pending', 'receipt' => ['success' => false, 'errorReason' => 'settlement_pending', 'network' => self::NET] + $receipt];
     }
 
+    private const NONCE = '0x7a1c0ef4f6b6d8c2a0b9e3d5c7f1a2b4c6d8e0f2a4b6c8d0e2f4a6b8c0d2e4f6';
+    private const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
+
+    /** The buyer's payment and the requirements it paid, as the middleware hands them to the lookup. */
+    private const PAYMENT = ['payload' => ['authorization' => ['from' => '0x2C7536E3605D9C16a7a3D7b1898e529396a65c23', 'nonce' => self::NONCE]]];
+    private const REQ = ['asset' => self::USDC];
+
+    /** A mined success whose logs hold the asset's AuthorizationUsed for $from and $nonce. */
+    private static function mined(string $from = self::PAYER, string $nonce = self::NONCE, string $asset = self::USDC): array
+    {
+        $authorizer = '0x'.str_pad(substr($from, 2), 64, '0', \STR_PAD_LEFT);
+
+        return ['status' => '0x1', 'logs' => [
+            ['address' => $asset, 'topics' => ['0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef', $authorizer, $authorizer]],
+            ['address' => strtolower($asset), 'topics' => [ReceiptLookup::AUTHORIZATION_USED, $authorizer, $nonce]],
+        ]];
+    }
+
     public function testAConfirmedEvmTransactionSettles(): void
     {
         $url = null;
-        $out = $this->lookup($this->node(['status' => '0x1'], $url))($this->pending(['transaction' => self::TX]));
+        $out = $this->lookup($this->node(self::mined(), $url))($this->pending(['transaction' => self::TX]), self::PAYMENT, self::REQ);
 
         $this->assertSame(['success' => true, 'transaction' => self::TX, 'network' => self::NET, 'payer' => null], $out);
         $this->assertSame('https://sepolia.base.org', rtrim((string) $url, '/'), 'asks the network\'s own RPC');
+    }
+
+    public function testTheTopicIsKeccakOfTheEventSignature(): void
+    {
+        $this->assertSame(\Quebracho\X402\Eip712::keccak('AuthorizationUsed(address,bytes32)'), ReceiptLookup::AUTHORIZATION_USED);
+    }
+
+    public function testAMinedSuccessThatDidNotSpendThisAuthorizationIsUnknown(): void
+    {
+        $state = $this->pending(['transaction' => self::TX]);
+        $other = '0x'.str_repeat('1', 64);
+
+        $this->assertNull($this->lookup($this->node(self::mined(nonce: $other)))($state, self::PAYMENT, self::REQ), 'another nonce');
+        $this->assertNull($this->lookup($this->node(self::mined(from: '0x'.str_repeat('2', 40))))($state, self::PAYMENT, self::REQ), 'another authorizer');
+        $this->assertNull($this->lookup($this->node(self::mined(asset: '0x'.str_repeat('3', 40))))($state, self::PAYMENT, self::REQ), 'emitted by another contract');
+        $this->assertNull($this->lookup($this->node(['status' => '0x1']))($state, self::PAYMENT, self::REQ), 'no logs');
+        $this->assertNull($this->lookup($this->node(self::mined()))($state), 'no payment to compare: unknown, fail-closed');
     }
 
     public function testARevertedEvmTransactionIsRefuted(): void
