@@ -132,7 +132,7 @@ final class X402McpMiddleware implements MiddlewareInterface
         // Before the buyer signs or the payment is looked at: bad params cost nothing.
         $invalid = null !== $this->validate ? ($this->validate)($params) : null;
         if (null !== $invalid) {
-            return $this->json(['jsonrpc' => '2.0', 'id' => $id, 'error' => ['code' => -32602, 'message' => $invalid]]);
+            return $this->json(['jsonrpc' => '2.0', 'id' => $id, 'error' => ['code' => -32602, 'message' => $invalid, 'data' => ['reason' => 'invalid_params']]]);
         }
         $resource = null !== $this->resource ? ($this->resource)($message['params']) : ['url' => 'mcp://tool/'.$message['params']['name']];
 

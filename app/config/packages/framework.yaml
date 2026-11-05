@@ -15,8 +15,8 @@ framework:
     # A testnet payment costs the caller nothing: POST /mcp is limited per client before any
     # signature check (App\EventListener\McpRateLimit, MCP_LIMIT_IP per client and MCP_LIMIT_GLOBAL for
     # everybody, per minute), and analyze_terms,
-    # which spends our Hugging Face credit, per client per hour (TERMS_LIMIT_IP) and for the whole
-    # server per day (TERMS_LIMIT_DAY).
+    # which spends our Hugging Face credit, per client per hour (TERMS_LIMIT_IP, a paid call, in the same
+    # listener) and for the whole server per day (TERMS_LIMIT_DAY, in the tool, once the payment is verified).
     rate_limiter:
         mcp_ip:
             policy: sliding_window

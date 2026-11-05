@@ -69,11 +69,12 @@ final class TermsAnalyzer
     }
 
     /**
-     * The trimmed text, or why it is refused. Free: no model call, so the rate limit comes after it.
+     * The trimmed text, or why it is refused. Free: no model call, so the rate limits come after it
+     * (static: McpRateLimit asks it before the payment is read).
      *
      * @throws \InvalidArgumentException The text is empty or longer than MAX_WORDS
      */
-    public function check(string $text): string
+    public static function check(string $text): string
     {
         $text = trim($text);
         $words = '' === $text ? 0 : \count(preg_split('/\s+/u', $text) ?: []);
@@ -97,7 +98,7 @@ final class TermsAnalyzer
      */
     public function analyze(string $text, bool $sensitive = false): array
     {
-        $text = $this->check($text);
+        $text = self::check($text);
         if ($sensitive) {
             return $this->ask($text);
         }

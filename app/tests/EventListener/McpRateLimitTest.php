@@ -27,12 +27,12 @@ final class McpRateLimitTest extends TestCase
         $this->limit = self::limit(perClient: 1);
     }
 
-    private static function limit(int $perClient = 1, int $global = 100, ?RateLimiterFactoryInterface $client = null): McpRateLimit
+    private static function limit(int $perClient = 1, int $global = 100, ?RateLimiterFactoryInterface $client = null, int $terms = 100): McpRateLimit
     {
         $factory = static fn (string $id, int $n) => new RateLimiterFactory(['id' => $id, 'policy' => 'fixed_window', 'limit' => $n, 'interval' => '1 minute'], new InMemoryStorage());
         $psr17 = new Psr17Factory();
 
-        return new McpRateLimit($client ?? $factory('mcp', $perClient), $factory('all', $global), new MiddlewareFactory(['localhost'], []), new PsrHttpFactory($psr17, $psr17, $psr17, $psr17), $psr17);
+        return new McpRateLimit($client ?? $factory('mcp', $perClient), $factory('all', $global), new MiddlewareFactory(['localhost'], []), new PsrHttpFactory($psr17, $psr17, $psr17, $psr17), $psr17, $factory('terms', $terms));
     }
 
     /** What the router leaves on a request to the MCP endpoint (or $route for any other). */
@@ -151,5 +151,66 @@ final class McpRateLimitTest extends TestCase
     {
         $this->send('203.0.113.1');
         self::assertSame('Retry-After', $this->event('203.0.113.1')->getResponse()?->headers->get('Access-Control-Expose-Headers'));
+    }
+
+    /** A tools/call body; $payment adds params._meta["x402/payment"], as a paying buyer sends it. */
+    private static function toolCall(string $tool, ?string $text = 'We may suspend your account.', bool $payment = true): string
+    {
+        $params = ['name' => $tool, 'arguments' => null === $text ? [] : ['text' => $text]];
+        if ($payment) {
+            $params['_meta']['x402/payment'] = ['x402Version' => 2, 'payload' => []];
+        }
+
+        return json_encode(['jsonrpc' => '2.0', 'id' => 3, 'method' => 'tools/call', 'params' => $params], \JSON_THROW_ON_ERROR);
+    }
+
+    public function testAPaidAnalyzeTermsOverItsClientLimitIsRefusedBeforeThePaymentIsRead(): void
+    {
+        $this->limit = self::limit(perClient: 100, terms: 1);
+        self::assertNull($this->event('203.0.113.1', body: self::toolCall('analyze_terms'))->getResponse());
+        // The response set here ends the request: the controller (x402 middleware, then the tool) never runs.
+        $refused = $this->event('203.0.113.1', body: self::toolCall('analyze_terms'))->getResponse();
+        self::assertSame(429, $refused?->getStatusCode());
+        $error = json_decode((string) $refused?->getContent(), true);
+        self::assertSame([3, 'Rate limit reached for analyze_terms. Nothing was charged; try later.'], [$error['id'], $error['error']['message']]);
+        self::assertGreaterThanOrEqual(1, (int) $refused?->headers->get('Retry-After'));
+        self::assertNull($this->event('203.0.113.2', body: self::toolCall('analyze_terms'))->getResponse(), 'another client has its own bucket');
+    }
+
+    public function testOnlyAPaidAnalyzeTermsCallWithATextTheToolTakesSpendsItsLimit(): void
+    {
+        $this->limit = self::limit(perClient: 100, terms: 1);
+        foreach ([
+            self::toolCall('analyze_terms', payment: false), // unpaid: only the price comes back
+            self::toolCall('analyze_terms', ''), // a text the tool refuses, charging nothing
+            self::toolCall('analyze_terms', null),
+            self::toolCall('wisdom'), // another paid tool
+            '['.self::toolCall('analyze_terms').']', // a batch: the middleware refuses paid calls in one
+        ] as $body) {
+            self::assertNull($this->event('203.0.113.1', body: $body)->getResponse(), $body);
+        }
+        self::assertNull($this->event('203.0.113.1', body: self::toolCall('analyze_terms'))->getResponse(), 'none of those used the only call');
+        self::assertSame(429, $this->event('203.0.113.1', body: self::toolCall('analyze_terms'))->getResponse()?->getStatusCode());
+    }
+
+    public function testAnalyzeTermsCountsAnIpv6ClientByIts64(): void
+    {
+        $this->limit = self::limit(perClient: 100, terms: 1);
+        self::assertNull($this->event('2001:db8:1:2::1', body: self::toolCall('analyze_terms'))->getResponse());
+        self::assertSame(429, $this->event('2001:db8:1:2::2', body: self::toolCall('analyze_terms'))->getResponse()?->getStatusCode(), 'same /64');
+        self::assertNull($this->event('2001:db8:1:3::1', body: self::toolCall('analyze_terms'))->getResponse(), 'another /64');
+    }
+
+    public function testACallTheMcpLimitRefusesSpendsNoAnalyzeTermsCall(): void
+    {
+        // The client's /mcp bucket refuses the first call and takes the second.
+        $limiter = $this->createStub(LimiterInterface::class);
+        $limiter->method('consume')->willReturn(new RateLimit(0, new \DateTimeImmutable('+1 minute'), false, 1), new RateLimit(1, new \DateTimeImmutable(), true, 1));
+        $factory = $this->createStub(RateLimiterFactoryInterface::class);
+        $factory->method('create')->willReturn($limiter);
+        $this->limit = self::limit(client: $factory, terms: 1);
+
+        self::assertSame('Rate limit reached for /mcp. Nothing was charged; try later.', json_decode((string) $this->event('203.0.113.1', body: self::toolCall('analyze_terms'))->getResponse()?->getContent(), true)['error']['message']);
+        self::assertNull($this->event('203.0.113.1', body: self::toolCall('analyze_terms'))->getResponse(), 'the only analyze_terms call is still there');
     }
 }

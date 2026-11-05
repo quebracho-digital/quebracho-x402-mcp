@@ -67,6 +67,28 @@ final class PricingTest extends TestCase
         }
     }
 
+    public function testEveryToolNamedLikeAJobIsPricedByItsRole(): void
+    {
+        // By name this time, over every #[McpTool] scanned: an unflagged _start or _result is refused by the catalog
+        // (testAJobToolMistakeStopsTheBuild); the rest must be priced, the deposit upfront, and _status free (decision 2).
+        $pricing = new Pricing([], 'eip155:84532', '0.01', self::PAY_TO, tools: PaidJob::catalog(self::handlers()));
+        $seen = [];
+        foreach (array_keys(PaidJob::catalog(self::handlers())) as $name) {
+            if (!preg_match('/_(start|result|status)$/', $name, $m)) {
+                continue;
+            }
+            $seen[$m[1]] = true;
+            $offer = $pricing(['name' => $name]);
+            if ('status' === $m[1]) {
+                self::assertNull($offer, "$name is a free read");
+                continue;
+            }
+            self::assertNotNull($offer, "$name must be paid");
+            self::assertSame('start' === $m[1] ? 'upfront' : null, $offer[0]['extra']['paymentFlow'] ?? null, $name);
+        }
+        self::assertSame(['start', 'result', 'status'], array_keys($seen), 'the scan reached one tool of each kind');
+    }
+
     /** @return iterable<string, array{list<string>, array<string, string>, array<string, int>, array<string, int>, string}> */
     public static function typos(): iterable
     {

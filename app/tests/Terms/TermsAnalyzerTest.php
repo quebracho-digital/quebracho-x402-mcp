@@ -11,8 +11,6 @@ use Mcp\Exception\ToolCallException;
 use PHPUnit\Framework\TestCase;
 use Symfony\AI\Platform\Test\MockPlatformFactory;
 use Symfony\Component\Cache\Adapter\ArrayAdapter;
-use Symfony\Component\HttpFoundation\Request;
-use Symfony\Component\HttpFoundation\RequestStack;
 use Symfony\Component\RateLimiter\RateLimiterFactory;
 use Symfony\Component\RateLimiter\Storage\InMemoryStorage;
 use Symfony\Contracts\Cache\CacheInterface;
@@ -32,11 +30,11 @@ final class TermsAnalyzerTest extends TestCase
         return new TermsAnalyzer($platform, 'some/model', new ArrayAdapter());
     }
 
-    private function tool(TermsAnalyzer $analyzer, int $perIp = 10, int $perDay = 500, ?RequestStack $requests = null): AnalyzeTermsTool
+    private function tool(TermsAnalyzer $analyzer, int $perDay = 500): AnalyzeTermsTool
     {
         $limiter = static fn (string $id, int $limit) => new RateLimiterFactory(['id' => $id, 'policy' => 'fixed_window', 'limit' => $limit, 'interval' => '1 day'], new InMemoryStorage());
 
-        return new AnalyzeTermsTool($analyzer, $limiter('ip', $perIp), $limiter('day', $perDay), $requests ?? new RequestStack(), new SensitiveRules([], []));
+        return new AnalyzeTermsTool($analyzer, $limiter('day', $perDay), new SensitiveRules([], []));
     }
 
     public function testKeepsOnlyQuotesFoundInTheTextAndCountsTheRest(): void
@@ -117,44 +115,15 @@ in Delaware'],
         $tool('');
     }
 
-    public function testAClientOverItsLimitGetsAToolErrorAndTheModelIsNotCalled(): void
+    public function testTheDayLimitIsSharedByEveryClient(): void
     {
-        $calls = 0;
-        $platform = MockPlatformFactory::createPlatform(function () use (&$calls) {
-            ++$calls;
-
-            return '{"arbitration": ["binding arbitration in Delaware"]}';
-        });
-        $tool = $this->tool(new TermsAnalyzer($platform, 'some/model', new ArrayAdapter()), perIp: 1);
+        // The tool no longer knows the client: per client is McpRateLimit's, before the payment is read.
+        $tool = $this->tool($this->analyzer('{"arbitration": ["binding arbitration in Delaware"]}'), perDay: 2);
 
         $tool(self::TEXT);
-        try {
-            $tool(self::TEXT);
-            self::fail('The second call should be refused.');
-        } catch (ToolCallException $e) {
-            self::assertStringContainsString('Rate limit', $e->getMessage());
-        }
-        self::assertSame(1, $calls);
-    }
-
-    public function testEachClientIpHasItsOwnBucketAndTheDayLimitIsShared(): void
-    {
-        $ok = $this->analyzer('{"arbitration": ["binding arbitration in Delaware"]}');
-        $requests = new RequestStack();
-        $from = static function (string $ip) use ($requests): void {
-            while (null !== $requests->pop()) {
-            }
-            $requests->push(Request::create('/mcp', 'POST', server: ['REMOTE_ADDR' => $ip]));
-        };
-        $tool = $this->tool($ok, perIp: 1, perDay: 2, requests: $requests);
-
-        $from('203.0.113.1');
-        $tool(self::TEXT);
-        $from('203.0.113.2');
         $tool(self::TEXT);
 
         $this->expectException(ToolCallException::class);
-        $from('203.0.113.3');
         $tool(self::TEXT);
     }
 
@@ -178,21 +147,9 @@ in Delaware'],
         self::assertSame(1, $calls);
     }
 
-    public function testAnIpv6ClientIsOneBucketPer64(): void
+    public function testABadTextIsRefusedBeforeItUsesTheDaysOnlyCall(): void
     {
-        $requests = new RequestStack();
-        $tool = $this->tool($this->analyzer('{"arbitration": ["binding arbitration in Delaware"]}'), perIp: 1, requests: $requests);
-
-        $requests->push(Request::create('/mcp', 'POST', server: ['REMOTE_ADDR' => '2001:db8:1:2::1']));
-        $tool(self::TEXT);
-        $requests->push(Request::create('/mcp', 'POST', server: ['REMOTE_ADDR' => '2001:db8:1:2::2']));
-        $this->expectException(ToolCallException::class);
-        $tool(self::TEXT);
-    }
-
-    public function testABadTextIsRefusedBeforeItUsesTheClientsOnlyCall(): void
-    {
-        $tool = $this->tool($this->analyzer('{"arbitration": ["binding arbitration in Delaware"]}'), perIp: 1, perDay: 1);
+        $tool = $this->tool($this->analyzer('{"arbitration": ["binding arbitration in Delaware"]}'), perDay: 1);
 
         foreach (['', str_repeat('x', TermsAnalyzer::MAX_CHARS + 1)] as $bad) {
             try {
@@ -403,7 +360,7 @@ in Delaware'],
         // X402_SENSITIVE_TOOLS=analyze_terms (a `tool` rule) keeps the ledger's copy out; it must keep the memo out too.
         [$analyzer, $calls] = $this->counting(['{}']);
         $limiter = static fn (string $id, int $limit) => new RateLimiterFactory(['id' => $id, 'policy' => 'fixed_window', 'limit' => $limit, 'interval' => '1 day'], new InMemoryStorage());
-        $tool = new AnalyzeTermsTool($analyzer, $limiter('ip', 10), $limiter('day', 500), new RequestStack(), new SensitiveRules(['analyze_terms'], []));
+        $tool = new AnalyzeTermsTool($analyzer, $limiter('day', 500), new SensitiveRules(['analyze_terms'], []));
 
         $tool(self::TEXT);
         $tool(self::TEXT);

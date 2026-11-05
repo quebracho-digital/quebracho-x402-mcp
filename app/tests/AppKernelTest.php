@@ -137,6 +137,29 @@ final class AppKernelTest extends KernelTestCase
         self::assertSame(9, json_decode((string) $refused->getContent(), true)['id']);
     }
 
+    public function testAPaidAnalyzeTermsOverTermsLimitIpThroughTheRealKernelIs429(): void
+    {
+        $kernel = self::bootKernel();
+        $pool = self::getContainer()->get('cache.rate_limiter');
+        \assert($pool instanceof CacheItemPoolInterface);
+        $pool->clear();
+        $ip = '198.18.'.random_int(0, 255).'.'.random_int(1, 254);
+        // A payment for no offer we make: the middleware refuses it in band with no verify, so nothing leaves the host.
+        $body = json_encode(['jsonrpc' => '2.0', 'id' => 4, 'method' => 'tools/call', 'params' => [
+            'name' => 'analyze_terms', 'arguments' => ['text' => 'We may suspend your account.'],
+            '_meta' => [X402McpMiddleware::PAYMENT => ['x402Version' => 2, 'accepted' => ['scheme' => 'none', 'network' => 'none']]],
+        ]], \JSON_THROW_ON_ERROR);
+        $send = static fn () => $kernel->handle(Request::create('http://localhost/mcp', 'POST', server: ['REMOTE_ADDR' => $ip, 'CONTENT_TYPE' => 'application/json'], content: $body));
+
+        $limit = (int) $_SERVER['TERMS_LIMIT_IP'];
+        for ($i = 0; $i < $limit; ++$i) {
+            self::assertNotSame(429, $send()->getStatusCode(), "call $i is within the limit");
+        }
+        $refused = $send();
+        self::assertSame(429, $refused->getStatusCode());
+        self::assertSame('Rate limit reached for analyze_terms. Nothing was charged; try later.', json_decode((string) $refused->getContent(), true)['error']['message']);
+    }
+
     public function testAnOptionalBundleIsRegisteredOnlyWhenItsClassExists(): void
     {
         // The app runs without symfony/monolog-bundle (suggested): a missing class yields nothing, no error.

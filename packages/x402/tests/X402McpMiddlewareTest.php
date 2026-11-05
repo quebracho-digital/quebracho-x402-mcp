@@ -348,13 +348,27 @@ final class X402McpMiddlewareTest extends TestCase
         $request = $this->paidCall();
 
         $out = json_decode((string) $this->middleware($settle, hooks: ['validate' => $validate])->process($request, $this->handler())->getBody(), true);
-        self::assertSame(['jsonrpc' => '2.0', 'id' => 2, 'error' => ['code' => -32602, 'message' => 'text must not be empty']], $out);
+        self::assertSame(['jsonrpc' => '2.0', 'id' => 2, 'error' => ['code' => -32602, 'message' => 'text must not be empty', 'data' => ['reason' => 'invalid_params']]], $out);
         self::assertSame(['wisdom', 0, 0], [$seen, $this->runs, $settled]);
         // Unpaid too: the buyer is not asked to sign for params we would refuse.
         self::assertArrayHasKey('error', json_decode((string) $this->middleware(hooks: ['validate' => $validate])->process(self::call('wisdom'), $this->handler())->getBody(), true));
         // Not claimed: the same payment still buys once the params are fine.
         $ok = $this->middleware(hooks: ['validate' => fn () => null])->process($request, $this->handler());
         self::assertSame('paid content', self::toolResult($ok)['content'][0]['text']);
+    }
+
+    public function testValidateNeverTouchesAFreeCall(): void
+    {
+        // price() NULL is free: a refusing validate must neither block nor price it.
+        $asked = 0;
+        $validate = function () use (&$asked): string {
+            ++$asked;
+
+            return 'invalid_params';
+        };
+        $response = $this->middleware(hooks: ['validate' => $validate])->process(self::call('echo'), $this->handler());
+        self::assertSame([0, 1], [$asked, $this->runs]);
+        self::assertSame('paid content', self::toolResult($response)['content'][0]['text']);
     }
 
     public function testAPayerTheCallIsNotForTakesNoClaim(): void
@@ -374,6 +388,25 @@ final class X402McpMiddlewareTest extends TestCase
 
         $ok = $this->middleware(hooks: ['payer' => fn () => null])->process($request, $this->handler());
         self::assertTrue(self::toolResult($ok)['_meta'][X402McpMiddleware::PAYMENT_RESPONSE]['success']);
+    }
+
+    public function testAPayerRefusalChargesNothingEvenUpfront(): void
+    {
+        $settled = 0;
+        $settle = function () use (&$settled) {
+            ++$settled;
+
+            return ['success' => true, 'transaction' => '0x'.str_repeat('ab', 32), 'network' => 'eip155:84532'];
+        };
+        $required = self::toolResult($this->middleware(upfront: true)->process(self::call('wisdom'), $this->handler()))['structuredContent'];
+        $request = self::call('wisdom', (new EvmExact(new Signer('0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318')))->pay($required, $required['accepts'][0]));
+
+        // Upfront settles before the tool runs: the predicate must refuse before that, not only before the run.
+        $result = self::toolResult($this->middleware($settle, true, ['payer' => fn () => 'not_the_jobs_payer'])->process($request, $this->handler()));
+        self::assertSame(['not_the_jobs_payer', 0, 0], [$result['structuredContent']['error'], $settled, $this->runs]);
+        // Not claimed: the same signature still buys once the payer is accepted.
+        $ok = self::toolResult($this->middleware($settle, true, ['payer' => fn () => null])->process($request, $this->handler()));
+        self::assertSame([true, 1, 1], [$ok['_meta'][X402McpMiddleware::PAYMENT_RESPONSE]['success'], $settled, $this->runs]);
     }
 
     public function testASlowToolRefusesASignatureThatWouldExpireBeforeTheSettle(): void
@@ -432,5 +465,16 @@ final class X402McpMiddlewareTest extends TestCase
             self::assertTrue($result['_meta'][X402McpMiddleware::PAYMENT_RESPONSE]['success']);
         }
         self::assertSame(2, $this->runs);
+    }
+
+    public function testAFastToolIsMeasuredByItsOwnDurationNotTheOffersTimeout(): void
+    {
+        // Signed 50 s ago with the 60 s offer: 10 s left. A 4 s tool plus EvmExact::SLACK (6) fits, so it buys;
+        // the pre-flight must not use maxTimeoutSeconds (60) as the worst case.
+        $t = time();
+        $request = $this->paidCall(clock: fn () => $t - 50);
+        $result = self::toolResult($this->middleware(hooks: ['duration' => fn () => 4], scheme: new EvmExact(clock: fn () => $t))->process($request, $this->handler()));
+        self::assertTrue($result['_meta'][X402McpMiddleware::PAYMENT_RESPONSE]['success'] ?? null, json_encode($result));
+        self::assertSame(1, $this->runs);
     }
 }
