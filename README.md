@@ -488,6 +488,13 @@ limits we know and leave in, each also said in a comment where it lives:
 
 ### Address screening
 
+> **In transition.** The library now screens every address against OFAC's
+> official SDN list by default (`Quebracho\X402\OfacSdn`, see
+> [its README](packages/x402/README.md#address-screening)), before any of the
+> app's lists below and even over the app's allowlist. The app still runs its
+> own `App\X402\Screening` too, until it is moved onto the library's listeners
+> (`AddressList`, `ChainalysisApi`, `ChainalysisOracle`, `TokenBlacklist`).
+
 Both sides screen addresses with `App\X402\Screening`: the server checks the
 payer once its signature is verified, the agent checks `payTo` before it signs.
 First match wins: **our allowlist** (passes, even over OFAC), **our denylist**,
