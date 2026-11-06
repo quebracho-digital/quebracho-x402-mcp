@@ -64,6 +64,8 @@ final class ReceiptLookup
      * @param array<string, mixed> $receipt
      * @param array<string, mixed> $payment
      * @param array<string, mixed> $req
+     *
+     * @return ?array{success: bool, transaction?: string, network?: string, payer?: ?string, errorReason?: string}
      */
     private function evm(string $network, string $transaction, array $receipt, array $payment, array $req): ?array
     {
@@ -113,6 +115,8 @@ final class ReceiptLookup
 
     /**
      * @param array<string, mixed> $receipt
+     *
+     * @return ?array{success: bool, transaction?: string, network?: string, payer?: ?string, errorReason?: string}
      */
     private function facilitator(string $paymentId, string $network, array $receipt): ?array
     {

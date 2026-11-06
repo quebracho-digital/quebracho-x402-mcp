@@ -160,7 +160,7 @@ final class TermsAnalyzer
         $messages = new MessageBag(Message::forSystem($system), Message::ofUser("<<DATA-$nonce>>\n$text\n<<END-$nonce>>"));
 
         // reasoning_effort none: Qwen3.8 otherwise spends the whole answer thinking.
-        $reply = $this->platform->invoke($this->model, $messages, ['temperature' => 0, 'max_tokens' => 1500, 'reasoning_effort' => 'none'])->asText();
+        $reply = $this->platform->invoke('' !== $this->model ? $this->model : throw new \UnexpectedValueException('TERMS_MODEL is empty; nothing was charged.'), $messages, ['temperature' => 0, 'max_tokens' => 1500, 'reasoning_effort' => 'none'])->asText();
         $got = $this->firstJsonObject($reply) ?? throw new \UnexpectedValueException('The model did not answer with a JSON object; nothing was charged.');
 
         $found = [];

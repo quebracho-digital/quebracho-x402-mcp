@@ -25,7 +25,9 @@ final class X402CheckCommand
     private const LIMITS = ['MCP_LIMIT_IP', 'MCP_LIMIT_GLOBAL', 'TERMS_LIMIT_IP', 'TERMS_LIMIT_DAY'];
 
     /**
-     * @param array<string, string> $limits raw env, by name
+     * @param array<string, string>      $limits         raw env, by name
+     * @param list<string>               $sensitive      X402_SENSITIVE_TOOLS
+     * @param list<array<string, mixed>> $sensitiveRules config/x402_sensitive.yaml
      */
     public function __construct(
         #[AutowireServiceClosure(Pricing::class)] private readonly \Closure $pricing,

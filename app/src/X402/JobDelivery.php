@@ -77,7 +77,7 @@ final class JobDelivery implements ResetInterface
         try {
             $job = null === $jobId ? null : $this->jobs->get($jobId);
             // Another payer's job, or one of another tool, is answered exactly like no job: nothing to learn here.
-            if (null === $job || !$job->paidBy($from) || $job->tool !== $this->tools[$params['name']]['job']['pairedWith']) {
+            if (null === $job || !$job->paidBy($from) || $job->tool !== ($this->tools[$params['name']]['job']['pairedWith'] ?? null)) {
                 return 'unknown_job';
             }
             $job = $this->unstick($job);

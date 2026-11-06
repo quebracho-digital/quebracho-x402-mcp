@@ -83,18 +83,18 @@ final class Job
     ];
 
     /**
-     * @param string  $payer         who paid the deposit (authorization.from); `_result` requires the same payer
-     * @param string  $settlementKey Settlement::key of the deposit: `_start` with the same payment gets this job back
-     * @param string  $tool          the `_start` tool that sold it: which work to run
-     * @param ?array  $params        that tool's arguments, kept only until the work has run (buyer text: off disk after)
-     * @param ?array  $result        the work's output, from ready until it is delivered
-     * @param ?string $reason        why it failed (failed_ours), one of FAILURES
-     * @param bool    $sensitive     the buyer asked that its answer not be kept: `_result`'s answer stays out of the
-     *                               payment ledger too (kept here, as the input that said so is gone by then)
-     * @param ?array  $depositRef    what the reconciler needs to ask the chain about the deposit: network, nonce,
-     *                               validBefore (App\X402\JobPayments::ref), never the signature
-     * @param ?array  $resultRef     the same for the `_result` payment being settled, plus its Settlement::key:
-     *                               set on ready > delivering, kept once delivered, gone when the job is ready again
+     * @param string                                                                      $payer         who paid the deposit (authorization.from); `_result` requires the same payer
+     * @param string                                                                      $settlementKey Settlement::key of the deposit: `_start` with the same payment gets this job back
+     * @param string                                                                      $tool          the `_start` tool that sold it: which work to run
+     * @param ?array                                                                      $params        that tool's arguments, kept only until the work has run (buyer text: off disk after)
+     * @param ?array                                                                      $result        the work's output, from ready until it is delivered
+     * @param ?string                                                                     $reason        why it failed (failed_ours), one of FAILURES
+     * @param bool                                                                        $sensitive     the buyer asked that its answer not be kept: `_result`'s answer stays out of the
+     *                                                                                                   payment ledger too (kept here, as the input that said so is gone by then)
+     * @param ?array{key: string, network?: ?string, nonce?: ?string, validBefore?: ?int} $depositRef    what the reconciler needs to ask the chain about the deposit: network, nonce,
+     *                                                                                                   validBefore (App\X402\JobPayments::ref), never the signature
+     * @param ?array{key: string, network?: ?string, nonce?: ?string, validBefore?: ?int} $resultRef     the same for the `_result` payment being settled, plus its Settlement::key:
+     *                                                                                                   set on ready > delivering, kept once delivered, gone when the job is ready again
      */
     public function __construct(
         public readonly string $id,
@@ -119,6 +119,8 @@ final class Job
     /**
      * A new job, before its deposit is settled. The id is 128 random bits: it is what the buyer holds
      * to ask for the job, so it must not be guessable.
+     *
+     * @param ?array{key: string, network?: ?string, nonce?: ?string, validBefore?: ?int} $depositRef App\X402\JobPayments::ref of the deposit
      */
     public static function settling(string $payer, string $settlementKey, string $tool, array $params, int $now, bool $sensitive = false, ?array $depositRef = null): self
     {
@@ -135,7 +137,7 @@ final class Job
     }
 
     /**
-     * @param ?array $resultRef going to delivering: the `_result` payment being settled (App\X402\JobPayments::ref)
+     * @param ?array{key: string, network?: ?string, nonce?: ?string, validBefore?: ?int} $resultRef going to delivering: the `_result` payment being settled (App\X402\JobPayments::ref)
      *
      * @throws IllegalTransition when the table does not allow it, or ready comes without a result, or
      *                           failed_ours without a reason from FAILURES

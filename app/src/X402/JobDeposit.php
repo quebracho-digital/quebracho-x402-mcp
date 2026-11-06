@@ -226,7 +226,8 @@ final class JobDeposit implements ResetInterface
         }
         try {
             $network = $payment['accepted']['network'] ?? null;
-            $req = current(array_filter(($this->pricing)($params) ?? [], static fn (array $a) => $a['network'] === $network));
+            $priced = ['name' => $name, 'arguments' => \is_array($params['arguments'] ?? null) ? $params['arguments'] : []];
+            $req = current(array_filter(($this->pricing)($priced) ?? [], static fn (array $a) => $a['network'] === $network));
             if (false === $req || !str_starts_with($req['network'], 'eip155:')
                 || 0 !== strcasecmp((string) Signer::recover(Authorization::digest($req, $auth), $signature), $auth['from'])) {
                 return null;

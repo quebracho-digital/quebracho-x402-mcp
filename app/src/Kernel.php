@@ -58,7 +58,8 @@ class Kernel extends BaseKernel implements CompilerPassInterface
     public function process(ContainerBuilder $container): void
     {
         $calls = [];
-        foreach (array_keys($container->getParameter('mcp.servers.elements')) as $server) {
+        $servers = $container->getParameter('mcp.servers.elements');
+        foreach (\is_array($servers) ? array_keys($servers) : [] as $server) {
             foreach ($container->getDefinition("mcp.server.$server.builder")->getMethodCalls() as [$call, $args]) {
                 if ('addTool' === $call) {
                     $calls[] = $args;

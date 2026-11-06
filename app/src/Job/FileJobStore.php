@@ -139,7 +139,7 @@ final class FileJobStore implements JobStore
         $out = false === $tmp ? false : @fopen($tmp, 'w');
         $ok = false !== $out && \strlen($content) === @fwrite($out, $content) && fsync($out);
         false === $out || fclose($out);
-        if (!$ok || !@rename($tmp, $file)) {
+        if (!$ok || false === $tmp || !@rename($tmp, $file)) {
             false === $tmp || @unlink($tmp);
 
             throw new \RuntimeException("Cannot write the job file $file.");
