@@ -1,0 +1,10 @@
+# An address list for Quebracho\X402\AddressList: one address per line.
+# Lines starting with # and blank lines are ignored; anything after the address
+# on a line (a space, then a note) is ignored too.
+# A 0x… address is matched in any case on every EVM network; any other form
+# (Solana, NEAR, Tron, Bitcoin…) exactly as written.
+# Served over HTTPS as text/plain, AddressList::sync() downloads it.
+
+0x000000000000000000000000000000000000dEaD  burn address, an example only
+9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin  a Solana address, an example only
+scam-example.near

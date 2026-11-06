@@ -366,6 +366,46 @@ A snapshot that cannot be read refuses every address (fails closed). This
 screens the addresses OFAC publishes, nothing more: names, countries or other
 lists you are bound by go in your own listeners, below. Not legal advice.
 
+**Turning it off** takes a name: pass `ofac: OfacSdn::off()`. Your seller then
+takes money from, and your buyer pays, addresses OFAC names; whoever turns it
+off answers for that. Leaving `ofac:` out never turns it off.
+
+**More lists.** Each is an `AddressCheck` listener (below), asked only about
+addresses OFAC's list passed:
+
+| Listener | Source | Refuses with |
+|---|---|---|
+| `AddressList([$files], $reason)` | your own files, or a list another site publishes, synced with `AddressList::sync($http, $requests, $url, $file)` | `address_denied` (or `$reason`) |
+| `TokenBlacklist` | the token contract's own blacklist (USDC, USDT), one `eth_call` | `address_blacklisted` |
+| `ChainalysisOracle` | Chainalysis' on-chain sanctions oracle, one free `eth_call` on Ethereum, EVM addresses only | `address_sanctioned` |
+| `ChainalysisApi($http, $requests, $key)` | Chainalysis' free sanctions API, any address form | `address_sanctioned` |
+
+The oracle and the API are Chainalysis' copies of the sanctions lists, a second
+opinion that may lag OFAC's either way. Each fails closed when its source does
+not answer (`failOpen: true` passes instead), and a list file never synced
+refuses everyone until it is.
+
+The list format is plain text, one address per line
+([`resources/address-list.example.txt`](resources/address-list.example.txt)):
+
+```text
+# comments and blank lines are ignored
+0x000000000000000000000000000000000000dEaD  a note after the address is ignored
+9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin
+scam-example.near
+```
+
+A `0x…` address matches in any case on every EVM network; any other form
+exactly. Serve it over HTTPS and any site can subscribe:
+
+```php
+// from a cron
+AddressList::sync($http, $requests, 'https://lists.example.org/denied.txt', '/var/lib/x402/denied.txt');
+
+$dispatcher->addListener(AddressCheck::class, new AddressList(['/var/lib/x402/mine.txt', '/var/lib/x402/denied.txt']));
+$dispatcher->addListener(AddressCheck::class, new ChainalysisOracle($http, $requests, $streams));
+```
+
 Pass any PSR-14 dispatcher (Symfony's, League's, …) as `$events` to a
 middleware or a paying client, and it dispatches an `AddressCheck`:
 

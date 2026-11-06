@@ -25,6 +25,9 @@ use Psr\Http\Message\RequestFactoryInterface;
  *
  * Fails closed: a snapshot that cannot be read throws, and AddressCheck turns that into a rejection.
  *
+ * Off only when asked, by name: pass OfacSdn::off() as `ofac:`. The seller then takes money from, and the
+ * buyer pays, addresses OFAC names; whoever turns it off answers for that.
+ *
  * Not legal advice: this screens the addresses OFAC publishes, nothing else (no names, no countries, no
  * 50 % rule). A seller with obligations of its own adds what they require as AddressCheck listeners.
  */
@@ -40,6 +43,7 @@ final class OfacSdn
     private const string BUNDLED = __DIR__.'/../resources/ofac-sdn.json';
 
     private static ?self $bundled = null;
+    private bool $off = false;
 
     /** @var ?array<string, true> normalized address => true, loaded on first use */
     private ?array $index = null;
@@ -59,6 +63,22 @@ final class OfacSdn
     }
 
     /**
+     * Screening turned off: lists nothing. The only way to turn it off; never the default.
+     */
+    public static function off(): self
+    {
+        $list = new self();
+        $list->off = true;
+
+        return $list;
+    }
+
+    public function isOff(): bool
+    {
+        return $this->off;
+    }
+
+    /**
      * The AddressCheck listener: rejects a listed address. Also callable on its own.
      */
     public function __invoke(AddressCheck $check): void
@@ -70,7 +90,7 @@ final class OfacSdn
 
     public function listed(string $address): bool
     {
-        return isset($this->index()[self::normalize($address)]);
+        return !$this->off && isset($this->index()[self::normalize($address)]);
     }
 
     /** When OFAC published the list in use (its Last-Modified, or the bundled file's date). */
