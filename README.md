@@ -370,6 +370,12 @@ free tools pass through. The tool runs only after the payment verifies, and
 each payment is claimed once before the tool runs (concurrent replays get `duplicate_settlement`), settlement happens only if the tool succeeded; if settlement fails, the tool
 output is withheld. Paid tools cannot be called inside a JSON-RPC batch.
 
+Work that takes minutes (`analyze_terms`) is sold as a job instead: a deposit
+settled before the work runs, a free status, and the result paid once it is
+ready. [docs/job-mode.md](docs/job-mode.md) has the flow, the states, the
+refusals and their cost; `bin/job-demo.sh` runs it against the mock
+facilitator.
+
 ### Reconciling payments stuck in `settling` or `pending`
 
 A process that dies after the settle went out leaves the payment's state in
