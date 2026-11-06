@@ -137,6 +137,21 @@ final class SensitiveRules
     }
 
     /**
+     * Whether these rules mark a tools/call, given its tool name and arguments. A rule that fails counts as a
+     * mark, as in the library: the safe side only drops a copy of the answer.
+     *
+     * @param array<string, mixed> $args
+     */
+    public function marks(string $name, array $args): bool
+    {
+        try {
+            return $this(['name' => $name, 'arguments' => $args]);
+        } catch (\Throwable) {
+            return true;
+        }
+    }
+
+    /**
      * @param array<string, mixed>                        $rule
      * @param ServerRequestInterface|array<string, mixed> $subject
      */

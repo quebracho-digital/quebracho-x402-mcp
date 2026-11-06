@@ -47,7 +47,7 @@ final class JobRunner
         $work = $this->work($job->tool);
         try {
             if (null === $work) {
-                // ponytail: unreachable, JobDesk refuses to sell a _start tool that has no work.
+                // ponytail: unreachable, JobDeposit::check refuses to sell a _start tool that has no work.
                 throw new JobFailed('provider_error');
             }
             $result = $work->run($job->params ?? []);

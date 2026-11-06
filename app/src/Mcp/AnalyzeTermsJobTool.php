@@ -7,7 +7,8 @@ namespace App\Mcp;
 use App\Job\IllegalTransition;
 use App\Job\Job;
 use App\Job\JobStatus;
-use App\X402\JobDesk;
+use App\X402\JobDelivery;
+use App\X402\JobDeposit;
 use App\X402\PaidJob;
 use Mcp\Capability\Attribute\McpTool;
 use Mcp\Exception\ToolCallException;
@@ -22,7 +23,7 @@ use Quebracho\X402\X402McpMiddleware;
  *   analyze_terms_result  pays the rest and answers with the analysis; free of charge if the job failed by
  *                         our fault (it is refused before any payment is claimed)
  *
- * The tools are thin: who may pay, when the money moves and the job's state are JobDesk's, the work is
+ * The tools are thin: who may pay, when the money moves and the job's state are JobDeposit's (the deposit) and JobDelivery's (the result), the work is
  * App\Terms\AnalyzeTermsWork, run after the response by App\Job\JobRunner. Prices are the #[PaidJob]
  * ones; Pricing charges every #[PaidJob] tool, listed in X402_PAID_TOOLS or not.
  */
@@ -33,7 +34,8 @@ final class AnalyzeTermsJobTool
     public const STATUS = 'analyze_terms_status';
 
     public function __construct(
-        private readonly JobDesk $desk,
+        private readonly JobDeposit $deposit,
+        private readonly JobDelivery $delivery,
     ) {
     }
 
@@ -50,7 +52,7 @@ final class AnalyzeTermsJobTool
         try {
             // The deposit settled already (upfront): a failure here is after the money moved, and is logged as
             // failed_after_settle by the middleware; the `settling` row stays for the reconciler.
-            $job = $this->desk->queue(self::START, ['text' => $text, 'sensitive' => $sensitive], \is_array($payment) ? $payment : null);
+            $job = $this->deposit->queue(self::START, ['text' => $text, 'sensitive' => $sensitive], \is_array($payment) ? $payment : null);
         } catch (\Throwable $e) {
             throw new ToolCallException('The job could not be queued; your deposit is on record for a refund by hand.', 0, $e);
         }
@@ -67,8 +69,8 @@ final class AnalyzeTermsJobTool
     {
         // ponytail: the payer is a public address, so this check only keeps a leaked jobId from being read with
         // a wrong one; the jobId (128 random bits) is the real secret. A signed challenge would prove the payer.
-        // Through JobDesk: a job nobody is moving is looked at first, so polling it ends.
-        return self::json($this->desk->status($jobId, $payer));
+        // Through JobDelivery: a job nobody is moving is looked at first, so polling it ends.
+        return self::json($this->delivery->status($jobId, $payer));
     }
 
     /**
@@ -81,7 +83,7 @@ final class AnalyzeTermsJobTool
         try {
             // ready > delivering, atomically: of two payments racing for one job, one gets it; the other's
             // isError is not charged (the default flow settles only a delivered answer).
-            $job = $this->desk->deliver($jobId);
+            $job = $this->delivery->deliver($jobId);
         } catch (IllegalTransition|\OutOfBoundsException $e) {
             throw new ToolCallException('This job is not ready for this payment. Nothing was charged; see analyze_terms_status.', 0, $e);
         }

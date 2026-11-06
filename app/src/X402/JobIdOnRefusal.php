@@ -14,7 +14,7 @@ use Psr\Http\Server\RequestHandlerInterface;
  * Right outside X402McpMiddleware (App\Controller\McpController): a `_start` call that the library refused
  * once its job row existed gets the jobId in the PaymentRequired it answers (structuredContent.jobId, and the
  * same JSON in content[0].text), so the buyer polls `_status` instead of retrying a deposit whose signature
- * may have expired. Who gets it is JobDesk::jobIdFor's call: only the deposit's payer.
+ * may have expired. Who gets it is JobDeposit::jobIdFor's call: only the deposit's payer.
  *
  * Only a JSON answer with an x402 refusal is touched: a success already carries the jobId, and anything
  * else (a stream, a JSON-RPC error) goes as it came.
@@ -22,7 +22,7 @@ use Psr\Http\Server\RequestHandlerInterface;
 final class JobIdOnRefusal implements MiddlewareInterface
 {
     public function __construct(
-        private readonly JobDesk $desk,
+        private readonly JobDeposit $deposit,
         private readonly StreamFactoryInterface $streams,
     ) {
     }
@@ -45,7 +45,7 @@ final class JobIdOnRefusal implements MiddlewareInterface
         if (true !== ($out['result']['isError'] ?? null) || !\is_array($required) || !isset($required['x402Version'], $required['error'])) {
             return $response;
         }
-        $jobId = $this->desk->jobIdFor($message['params']);
+        $jobId = $this->deposit->jobIdFor($message['params']);
         if (null === $jobId) {
             return $response;
         }

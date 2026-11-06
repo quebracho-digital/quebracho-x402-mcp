@@ -9,7 +9,7 @@ namespace App\Job;
  *
  * - sweep(): gives up on work nobody is doing. A `running` job whose runner died (a PHP-FPM worker killed,
  *   a deploy) or a `queued` one no runner took, untouched for $staleAfter seconds, becomes failed_ours /
- *   our_timeout, so its buyer stops waiting and `_result` costs nothing. JobDesk applies the same rule to
+ *   our_timeout, so its buyer stops waiting and `_result` costs nothing. JobDelivery applies the same rule to
  *   one job when its buyer asks (one()), so a buyer is not left waiting on a cron that does not run.
  * - orphans(): the `queued` jobs no request runs (the retry that queued one found no free slot, or the
  *   reconciler queued it): the cron runs them in a free slot, long before they would be stale.

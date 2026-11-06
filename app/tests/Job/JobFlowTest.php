@@ -12,6 +12,8 @@ use App\Job\JobRunner;
 use App\Job\JobWork;
 use App\Mcp\AnalyzeTermsJobTool;
 use App\Mcp\WisdomTool;
+use App\X402\JobDelivery;
+use App\X402\JobDeposit;
 use App\X402\JobDesk;
 use App\X402\JobIdOnRefusal;
 use App\X402\JobPayments;
@@ -115,7 +117,13 @@ final class JobFlowTest extends TestCase
         $tools ??= PaidJob::catalog([[AnalyzeTermsJobTool::class, 'start'], [AnalyzeTermsJobTool::class, 'result'], [AnalyzeTermsJobTool::class, 'status'], [WisdomTool::class, '__invoke']]);
         $clock = fn (): int => $this->now ?? time();
 
-        return new JobDesk($this->jobs, $this->runner(), $this->slots, $this->pricing, new SensitiveRules([], [['kind' => 'argument', 'name' => 'sensitive', 'value' => true]]), $this->facilitator, $tools, $this->reconciler(), new JobJanitor($this->jobs), $clock);
+        $rules = new SensitiveRules([], [['kind' => 'argument', 'name' => 'sensitive', 'value' => true]]);
+
+        return new JobDesk(
+            new JobDeposit($this->jobs, $this->runner(), $this->slots, $this->pricing, $rules, $tools, $clock),
+            new JobDelivery($this->jobs, $rules, $tools, $this->reconciler(), new JobJanitor($this->jobs), $clock),
+            $this->pricing, $rules, $this->facilitator, $tools,
+        );
     }
 
     private function runner(): JobRunner
@@ -194,7 +202,7 @@ final class JobFlowTest extends TestCase
     /** The MCP server: the job tools, called as the SDK calls them (a RequestContext with the call's _meta). */
     private function server(): RequestHandlerInterface
     {
-        return new class(new AnalyzeTermsJobTool($this->desk), $this->beforeTool) implements RequestHandlerInterface {
+        return new class(new AnalyzeTermsJobTool($this->desk->deposit, $this->desk->delivery), $this->beforeTool) implements RequestHandlerInterface {
             public function __construct(private readonly AnalyzeTermsJobTool $tool, private readonly ?\Closure $before)
             {
             }
@@ -241,7 +249,7 @@ final class JobFlowTest extends TestCase
                 }
             };
             $request = new ServerRequest('POST', 'https://example.test/mcp', ['Content-Type' => 'application/json'], $body);
-            $out = json_decode((string) (new JobIdOnRefusal($this->desk, new Psr17Factory()))->process($request, $x402)->getBody(), true);
+            $out = json_decode((string) (new JobIdOnRefusal($this->desk->deposit, new Psr17Factory()))->process($request, $x402)->getBody(), true);
         } finally {
             $this->desk->afterResponse();
         }
@@ -859,9 +867,9 @@ final class JobFlowTest extends TestCase
         self::assertNull($a->payer($params, self::BUYER_ADDRESS));
         self::assertNull($b->payer($params, self::BUYER_ADDRESS));
 
-        self::assertSame(Job::DELIVERING, $a->deliver($jobId)->state);
+        self::assertSame(Job::DELIVERING, $a->delivery->deliver($jobId)->state);
         $this->expectException(\App\Job\IllegalTransition::class);
-        $b->deliver($jobId);
+        $b->delivery->deliver($jobId);
     }
 
     public function testAResultHandedOverButNeverSettledIsReadyAgain(): void
@@ -869,7 +877,7 @@ final class JobFlowTest extends TestCase
         $jobId = self::answer($this->start()[0])['jobId'];
         // The tool delivered, then the middleware withheld the answer without settling (its ledger refused the write).
         self::assertNull($this->desk->payer($this->resultParams($jobId), self::BUYER_ADDRESS));
-        $this->desk->deliver($jobId);
+        $this->desk->delivery->deliver($jobId);
         $this->desk->afterResponse();
 
         self::assertSame(Job::READY, $this->jobs->get($jobId)?->state);

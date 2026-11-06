@@ -62,7 +62,7 @@ final class JobReconciler
     }
 
     /**
-     * A `delivering` job, moved on when its `_result` payment's fate is known. Also called by JobDesk when the
+     * A `delivering` job, moved on when its `_result` payment's fate is known. Also called by JobDelivery when the
      * buyer comes back to it (ledger only, $chain false: a request does not wait on an RPC node).
      *
      * @return Job the job as it is now
@@ -118,7 +118,7 @@ final class JobReconciler
     /**
      * The library leaves an upfront payment whose tool started and never finished in 'handling', and a retry of
      * it gets needs_review: the tool may have had effects, so the library never runs it twice. A `_start` tool
-     * is safe to run twice (JobDesk::queue answers the same job for the same payment), so here, and only for a
+     * is safe to run twice (JobDeposit::queue answers the same job for the same payment), so here, and only for a
      * deposit whose job exists, the state is marked as a settled payment whose tool did not run: the buyer's
      * retry of the same deposit then runs the tool and gets its jobId, with no second settle.
      *

@@ -12,7 +12,7 @@ use Symfony\Component\HttpKernel\KernelEvents;
 /**
  * The job runner's trigger (decision 3): kernel.terminate runs after Response::send, which under PHP-FPM
  * has already called fastcgi_finish_request, so the buyer has its jobId while the work runs. Only a job
- * whose row is durable (queued, written by JobDesk::queue) is ever run. Messenger can replace this later
+ * whose row is durable (queued, written by JobDeposit::queue) is ever run. Messenger can replace this later
  * behind the same JobRunner::run.
  */
 #[AsEventListener(event: KernelEvents::TERMINATE)]

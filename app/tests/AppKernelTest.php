@@ -122,6 +122,17 @@ final class AppKernelTest extends KernelTestCase
         self::assertFalse($budget->allows($offer(171)));
     }
 
+    public function testTheBuyerAndTheSellerShareOneEvmExact(): void
+    {
+        $container = self::getContainer();
+        $client = $container->get(PayingMcpClient::class);
+        $schemes = (new \ReflectionProperty(PayingMcpClient::class, 'schemes'))->getValue($client);
+        $middleware = $container->get(X402McpMiddleware::class);
+
+        self::assertSame([$container->get(\Quebracho\X402\EvmExact::class)], $schemes);
+        self::assertSame($schemes, (new \ReflectionProperty(X402McpMiddleware::class, 'schemes'))->getValue($middleware));
+    }
+
     public function testOnePostOverMcpLimitIpThroughTheRealKernelIs429(): void
     {
         $kernel = self::bootKernel();
@@ -182,6 +193,13 @@ final class AppKernelTest extends KernelTestCase
         $settle = (new \ReflectionProperty(JobDesk::class, 'settle'))->getValue($desk);
         \assert($settle instanceof \Closure);
         self::assertInstanceOf(Facilitator::class, (new \ReflectionFunction($settle))->getClosureThis());
+        // The tools and the refusal decorator see the very parts the hooks wrote this request's call into:
+        // a second JobDeposit or JobDelivery would hold an empty call, and refuse every paid job.
+        $tool = $container->get(\App\Mcp\AnalyzeTermsJobTool::class);
+        self::assertSame($desk->deposit, (new \ReflectionProperty($tool, 'deposit'))->getValue($tool));
+        self::assertSame($desk->delivery, (new \ReflectionProperty($tool, 'delivery'))->getValue($tool));
+        $refusal = $container->get(\App\X402\JobIdOnRefusal::class);
+        self::assertSame($desk->deposit, (new \ReflectionProperty($refusal, 'deposit'))->getValue($refusal));
 
         // Decision 9: jobs are files outside the cache, which cache:clear and a deploy wipe.
         $dir = (string) (new \ReflectionProperty(FileJobStore::class, 'dir'))->getValue($container->get(JobStore::class));

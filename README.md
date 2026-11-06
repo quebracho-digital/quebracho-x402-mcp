@@ -466,7 +466,7 @@ limits we know and leave in, each also said in a comment where it lives:
   `maxmemory-policy noeviction` and `appendonly yes` (AOF). The DDEV Redis in
   this repo is for development and is not set up that way.
 - **The free re-read needs a real payment signature**
-  (`App\X402\JobDesk`). To read a delivered result again within 5 minutes the
+  (`App\X402\JobDelivery`). To read a delivered result again within 5 minutes the
   payer signs a valid EIP-3009 authorization for the full price, which we never
   settle. It stays spendable (only to our `payTo`) until it expires, and the
   buyer's budget counts it until then. A stronger and cheaper proof would be an

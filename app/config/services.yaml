@@ -94,7 +94,11 @@ services:
             $authorizationUsed: !closure '@App\X402\AuthorizationState'
             $facilitator: '%env(X402_FACILITATOR)%'
 
-    Quebracho\X402\EvmExact: ~
+    # The only EvmExact: the seller verifies with it, the buyer (PayingMcpClient below) pays with it.
+    # X402_BUYER_KEY empty: it verifies and refuses to pay (App\X402\SchemeFactory).
+    Quebracho\X402\EvmExact:
+        factory: ['App\X402\SchemeFactory', 'evmExact']
+        arguments: ['%env(default::X402_BUYER_KEY)%']
 
     # Required by X402McpMiddleware's constructor ($claim), never called while the ledger below is set: the ledger claims instead.
     Quebracho\X402\FileClaims:
@@ -214,10 +218,8 @@ services:
                         class: Symfony\Contracts\HttpClient\HttpClientInterface
                         factory: ['Symfony\Component\HttpClient\HttpClient', 'create']
                         arguments: [{max_redirects: 0, timeout: 30, max_duration: 180}]
-            $schemes:
-                - !service
-                    class: Quebracho\X402\EvmExact
-                    arguments: [!service { class: Quebracho\X402\Signer, arguments: ['%env(X402_BUYER_KEY)%'] }]
+            # The same EvmExact as the seller (anchor x402_schemes), holding the buyer key.
+            $schemes: *x402_schemes
             $budget: !service
                 class: Quebracho\X402\Budget
                 factory: ['App\X402\BuyerBudget', 'create']

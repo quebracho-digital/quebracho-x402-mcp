@@ -11,7 +11,7 @@ use Quebracho\X402\Settlement;
 /**
  * How a job's payment ended, when the request that sent it is gone: settled, released (it never moved and
  * cannot any more) or unknown. Asked by JobReconciler about a `settling` job (its deposit) or a `delivering`
- * one (its `_result` payment), and by JobDesk when a buyer comes back to a `delivering` job.
+ * one (its `_result` payment), and by JobDelivery when a buyer comes back to a `delivering` job.
  *
  * Two sources, in this order:
  *
