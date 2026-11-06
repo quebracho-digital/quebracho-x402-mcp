@@ -163,6 +163,19 @@ final class OfacSdnTest extends TestCase
         self::assertTrue($list->listed(\sprintf('0x%040x', 7)));
     }
 
+    public function testTheShippedListSyncsAreListSyncs(): void
+    {
+        $file = $this->dir.'/sdn.json';
+        $sync = new \Quebracho\X402\OfacSdnSync(self::http([new Response(200, [], self::csv(150))]), new Psr17Factory());
+        self::assertInstanceOf(\Quebracho\X402\ListSync::class, $sync);
+        self::assertSame(150, $sync->sync($file));
+
+        $list = $this->dir.'/list.txt';
+        $other = new \Quebracho\X402\AddressListSync(self::http([new Response(200, [], "a.near\nb.near\n")]), new Psr17Factory(), 'https://lists.example/x.txt', min: 2);
+        self::assertSame(2, $other->sync($list));
+        self::assertTrue((new \Quebracho\X402\AddressList([$list]))->listed('b.near'));
+    }
+
     public function testSyncKeepsTheOldFileWhenTheAnswerIsNotTheList(): void
     {
         $file = $this->dir.'/sdn.json';

@@ -20,8 +20,10 @@ use Psr\Http\Message\RequestFactoryInterface;
  * Two snapshots, the newer one wins:
  * - the one shipped with this library (resources/ofac-sdn.json), so the check works offline and from the
  *   first request, as of the library's release;
- * - the site's own, written by sync() from a cron (daily is enough: OFAC publishes a few times a week).
- *   Without it the list is as old as the installed release: sync it.
+ * - the site's own, kept fresh by the site (ListSync: OfacSdnSync, or its own) from a cron; daily is enough,
+ *   OFAC publishes a few times a week. Keeping it fresh is the site's job: the library's maintainers refresh
+ *   the shipped copy now and then (bin/update-ofac.php), and without the site's own the list is as old as
+ *   the installed release.
  *
  * Fails closed: a snapshot that cannot be read throws, and AddressCheck turns that into a rejection.
  *
@@ -135,15 +137,31 @@ final class OfacSdn
                 throw new \RuntimeException('OFAC SDN: answer over '.self::MAX_BYTES.' bytes.');
             }
         }
+
+        return self::write($csv, $response->getHeaderLine('Last-Modified'), $file);
+    }
+
+    /**
+     * Parses an SDN.CSV and writes its snapshot to $file, only when the parse looks like the real list. What
+     * sync() does after the download; also for a site that downloads the file its own way, and for the
+     * maintainers' bin/update-ofac.php, which refreshes the copy shipped with the library.
+     *
+     * @param string $lastModified the download's Last-Modified header ('' for now)
+     *
+     * @return int the number of addresses written
+     *
+     * @throws \RuntimeException when the parse finds too few addresses or $file cannot be written; it is left as it was
+     */
+    public static function write(string $csv, string $lastModified, string $file): int
+    {
         $addresses = self::parse($csv);
         $count = array_sum(array_map('count', $addresses));
         if ($count < self::MIN_ADDRESSES) {
             throw new \RuntimeException("OFAC SDN: only $count addresses parsed; the file was kept.");
         }
-        $published = $response->getHeaderLine('Last-Modified');
         $json = json_encode([
             'source' => self::URL,
-            'published' => '' !== $published ? gmdate('Y-m-d\TH:i:s\Z', (int) strtotime($published)) : gmdate('Y-m-d\TH:i:s\Z'),
+            'published' => '' !== $lastModified ? gmdate('Y-m-d\\TH:i:s\\Z', (int) strtotime($lastModified)) : gmdate('Y-m-d\\TH:i:s\\Z'),
             'addresses' => $addresses,
         ], \JSON_PRETTY_PRINT | \JSON_UNESCAPED_SLASHES | \JSON_THROW_ON_ERROR);
         $tmp = $file.'.'.bin2hex(random_bytes(4)).'.tmp';

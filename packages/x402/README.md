@@ -347,14 +347,16 @@ a listed `payTo` is never signed for. The list comes from OFAC's own
 (`SDN.CSV`), every "Digital Currency Address" in it, every currency. A `0x…`
 address is matched in any case on every EVM network; other forms exactly.
 
-The library ships a copy of the list as of its release
-(`resources/ofac-sdn.json`), so the check works offline from the first
-request. OFAC updates the list a few times a week: keep your own copy fresh
-from a cron and pass it, and the newer of the two is used.
+The library ships a copy of the list (`resources/ofac-sdn.json`), so the
+check works offline from the first request. We refresh that copy now and then
+(`bin/update-ofac.php`, before each release), but **keeping the list fresh is
+your app's job**: OFAC updates it a few times a week. Run a `ListSync` from
+your own cron, with your own PSR-18 client, and pass its file; the newer of
+your copy and the shipped one is used.
 
 ```php
-// daily, from a cron: downloads SDN.CSV, replaces the file only if the parse looks right
-OfacSdn::sync($psr18Client, $requestFactory, '/var/lib/x402/ofac-sdn.json');
+// daily, from your cron: downloads SDN.CSV, replaces the file only if the parse looks right
+(new OfacSdnSync($psr18Client, $requestFactory))->sync('/var/lib/x402/ofac-sdn.json');
 
 // every middleware and paying client takes it as `ofac:`
 $ofac = new OfacSdn('/var/lib/x402/ofac-sdn.json');
@@ -396,11 +398,15 @@ scam-example.near
 ```
 
 A `0x…` address matches in any case on every EVM network; any other form
-exactly. Serve it over HTTPS and any site can subscribe:
+exactly. Serve it over HTTPS and any site can subscribe. A source of another
+kind (a vendor feed, a database) is your own `ListSync`: implement
+`sync(string $file): int`, write the format the list reads
+(`OfacSdn::write()` for OFAC's, the text format above for the others), and
+leave the old file in place when the source fails.
 
 ```php
-// from a cron
-AddressList::sync($http, $requests, 'https://lists.example.org/denied.txt', '/var/lib/x402/denied.txt');
+// from your cron
+(new AddressListSync($http, $requests, 'https://lists.example.org/denied.txt'))->sync('/var/lib/x402/denied.txt');
 
 $dispatcher->addListener(AddressCheck::class, new AddressList(['/var/lib/x402/mine.txt', '/var/lib/x402/denied.txt']));
 $dispatcher->addListener(AddressCheck::class, new ChainalysisOracle($http, $requests, $streams));
