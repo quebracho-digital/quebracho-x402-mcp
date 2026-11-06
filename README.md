@@ -598,6 +598,14 @@ installed (a `require-dev` here) it uses the `x402` Monolog channel; without
 it (`composer install --no-dev`) it writes to `php://stderr` at level `info`
 (`app.x402_stderr_logger` in `app/config/services.yaml`), prefixed `x402 `.
 
+**Payment records.** Logs can be lost (PHP-FPM may drop stderr), so
+`App\X402\PaymentRecord` also keeps the payments that moved money or should
+have: one JSON line per `settled`, `delivered`, `not_settled` or
+`failed_after_settle` outcome, appended to `app/var/x402-records/<YYYY-MM>.jsonl`
+(time, status, settlement key, network, `payTo`, amount, asset, payer,
+transaction, reason; never the signature). Refusals charged nothing and stay
+in the log only. Nothing rotates or deletes these files. A `failed_after_settle`
+line is a refund to make by hand.
 
 ## Using the library
 
