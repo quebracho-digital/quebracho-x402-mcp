@@ -34,6 +34,9 @@ final class PayingHttpClient implements ClientInterface
      *                                             fn(array $req, string $reason): void — each offer not paid, and why
      *                                             (no_scheme, not_allowed, or the screening's reason), e.g. to tell the
      *                                             user the price it refused
+     * @param ?OfacSdn                  $ofac
+     *                                             OFAC's SDN list, asked first about every address (AddressCheck), with or without $events;
+     *                                             NULL: the one shipped with the library. Pass new OfacSdn($file) with the file OfacSdn::sync() keeps fresh
      */
     public function __construct(
         private readonly ClientInterface $client,
@@ -42,6 +45,7 @@ final class PayingHttpClient implements ClientInterface
         private readonly ?\Closure $onPaid = null,
         private readonly ?EventDispatcherInterface $events = null,
         private readonly ?\Closure $onRefused = null,
+        private readonly ?OfacSdn $ofac = null,
     ) {
     }
 
@@ -63,7 +67,7 @@ final class PayingHttpClient implements ClientInterface
         $this->budget->reclaim();
         // The first offer we have a scheme for and the budget allows.
         foreach ($required['accepts'] ?? [] as $req) {
-            [$scheme, $reason] = $this->budget->choose($this->schemes, $req, $this->events);
+            [$scheme, $reason] = $this->budget->choose($this->schemes, $req, $this->events, $this->ofac);
             // Checked again and counted in one step: the screening may have yielded, and
             // payments running concurrently on this budget must not all pass the cap.
             if (null === $reason && !$this->budget->reserve($req)) {

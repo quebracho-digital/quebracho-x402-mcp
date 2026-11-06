@@ -130,6 +130,20 @@ final class X402McpMiddlewareTest extends TestCase
         self::assertTrue($result['_meta'][X402McpMiddleware::PAYMENT_RESPONSE]['success']);
     }
 
+    public function testAPayerOnTheSitesOfacListIsRefusedWithoutADispatcherAndNothingRuns(): void
+    {
+        $file = sys_get_temp_dir().'/ofac-'.bin2hex(random_bytes(4)).'.json';
+        file_put_contents($file, json_encode(['published' => '2999-01-01T00:00:00Z', 'addresses' => ['ETH' => ['0x2c7536E3605D9C16a7a3D7b1898e529396a65c23']]]));
+        try {
+            $result = self::toolResult($this->middleware(hooks: ['ofac' => new \Quebracho\X402\OfacSdn($file)])->process($this->paidCall(), $this->handler()));
+        } finally {
+            unlink($file);
+        }
+
+        self::assertSame(\Quebracho\X402\OfacSdn::REASON, $result['structuredContent']['error']);
+        self::assertSame(0, $this->runs);
+    }
+
     public function testAServerRequestWithTheCallsIdIsNotTakenForItsAnswer(): void
     {
         // The server's own requests (sampling, elicitation) have their own id space: id 2 can be one of them.

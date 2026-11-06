@@ -13,7 +13,11 @@ use Psr\EventDispatcher\StoppableEventInterface;
  * The seller asks it about the payer once the signature proved who that is,
  * before anything is claimed or run. The buyer asks it about `payTo` before
  * signing. Any listener (a sanctions list, an allowlist, an API) may reject;
- * the first rejection stops the others. Without a dispatcher nothing is asked.
+ * the first rejection stops the others.
+ *
+ * OFAC's SDN list (OfacSdn) is always asked first, with or without a
+ * dispatcher: a listed address is rejected before any listener runs. Other
+ * lists subscribe to this event.
  *
  * A slow listener (an API) defers instead: it starts its lookup and hands
  * over a closure with the answer. The seller reads it just before settling,
@@ -96,16 +100,14 @@ final class AddressCheck implements StoppableEventInterface
     }
 
     /**
-     * Dispatches the check, or NULL without a dispatcher.
+     * Asks OFAC's SDN list ($ofac, or the one shipped with the library), then
+     * dispatches the check to the listeners, if there is a dispatcher.
      *
-     * Fails closed: an address it cannot read, or a listener that throws,
-     * is a rejection, not a pass.
+     * Fails closed: an address it cannot read, a list that cannot be read, or
+     * a listener that throws, is a rejection, not a pass.
      */
-    public static function start(?EventDispatcherInterface $events, string $role, ?string $address, array $req): ?self
+    public static function start(?EventDispatcherInterface $events, string $role, ?string $address, array $req, ?OfacSdn $ofac = null): self
     {
-        if (null === $events) {
-            return null;
-        }
         $check = new self($role, (string) $req['network'], (string) $address, $req);
         if (null === $address || '' === $address) {
             $check->reject('invalid_payload');
@@ -113,7 +115,10 @@ final class AddressCheck implements StoppableEventInterface
             return $check;
         }
         try {
-            $events->dispatch($check);
+            ($ofac ?? OfacSdn::bundled())($check);
+            if (null === $check->reason) {
+                $events?->dispatch($check);
+            }
         } catch (\Throwable) {
             $check->reject('address_check_failed');
         }
@@ -125,8 +130,8 @@ final class AddressCheck implements StoppableEventInterface
      * Why this address may not take part, or NULL when it may; waits for
      * deferred lookups.
      */
-    public static function run(?EventDispatcherInterface $events, string $role, ?string $address, array $req): ?string
+    public static function run(?EventDispatcherInterface $events, string $role, ?string $address, array $req, ?OfacSdn $ofac = null): ?string
     {
-        return self::start($events, $role, $address, $req)?->verdict();
+        return self::start($events, $role, $address, $req, $ofac)->verdict();
     }
 }

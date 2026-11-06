@@ -56,6 +56,7 @@ final class Sale
         public readonly array $req,
         private readonly ?\Closure $payer = null,
         private readonly int $duration = 0,
+        private readonly ?OfacSdn $ofac = null,
     ) {
     }
 
@@ -83,7 +84,7 @@ final class Sale
         }
         // Screened once the signature proved who pays, before anything is spent;
         // a slow lookup started here is read before settling.
-        $this->check = null === $reason ? AddressCheck::start($this->events, AddressCheck::PAYER, $scheme->payer($this->payment), $this->req) : null;
+        $this->check = null === $reason ? AddressCheck::start($this->events, AddressCheck::PAYER, $scheme->payer($this->payment), $this->req, $this->ofac) : null;
         $reason ??= $this->check?->reason();
         $error = null;
         if (null === $reason && null !== $this->verify) {

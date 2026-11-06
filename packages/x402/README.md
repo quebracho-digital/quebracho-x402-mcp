@@ -339,6 +339,33 @@ network, or settle yourself with `ChainFacilitator` and pay the gas.
 
 ## Address screening
 
+**OFAC's SDN list is on by default.** Every middleware and paying client asks
+`OfacSdn` about the address first, with or without a dispatcher: a listed
+payer is refused (`address_sanctioned`) before anything is claimed or run, and
+a listed `payTo` is never signed for. The list comes from OFAC's own
+[Sanctions List Service](https://ofac.treasury.gov/sanctions-list-service)
+(`SDN.CSV`), every "Digital Currency Address" in it, every currency. A `0x…`
+address is matched in any case on every EVM network; other forms exactly.
+
+The library ships a copy of the list as of its release
+(`resources/ofac-sdn.json`), so the check works offline from the first
+request. OFAC updates the list a few times a week: keep your own copy fresh
+from a cron and pass it, and the newer of the two is used.
+
+```php
+// daily, from a cron: downloads SDN.CSV, replaces the file only if the parse looks right
+OfacSdn::sync($psr18Client, $requestFactory, '/var/lib/x402/ofac-sdn.json');
+
+// every middleware and paying client takes it as `ofac:`
+$ofac = new OfacSdn('/var/lib/x402/ofac-sdn.json');
+new X402McpMiddleware($schemes, $price, $claim, $responses, $streams, $settle, ofac: $ofac);
+new PayingMcpClient($client, $schemes, $budget, $streams, ofac: $ofac);
+```
+
+A snapshot that cannot be read refuses every address (fails closed). This
+screens the addresses OFAC publishes, nothing more: names, countries or other
+lists you are bound by go in your own listeners, below. Not legal advice.
+
 Pass any PSR-14 dispatcher (Symfony's, League's, …) as `$events` to a
 middleware or a paying client, and it dispatches an `AddressCheck`:
 
@@ -353,8 +380,9 @@ handler, and withholds the output on a late rejection.
 
 A listener calls `$check->reject('reason')` to block; the seller answers a
 PaymentRequired with that reason, the buyer skips the offer. A listener that
-throws blocks too (`address_check_failed`). No dispatcher, no screening. The
-lists themselves (OFAC, your own, an API) are the listener's business.
+throws blocks too (`address_check_failed`). Other lists (your own, an API,
+the token's blacklist with `TokenBlacklist`) subscribe as listeners; they run
+only for an address OFAC's list passed.
 
 ```php
 $dispatcher->addListener(AddressCheck::class, function (AddressCheck $check) use ($denied) {

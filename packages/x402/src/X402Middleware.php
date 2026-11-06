@@ -75,6 +75,9 @@ final class X402Middleware implements MiddlewareInterface
      *                                             request, before anything is stored; one that throws, or returns anything
      *                                             but FALSE, counts as sensitive. A retry of a sensitive payment already
      *                                             settled gets 409 already_settled, not the body. NULL: every answer is kept.
+     * @param ?OfacSdn                  $ofac
+     *                                             OFAC's SDN list, asked first about every address (AddressCheck), with or without $events;
+     *                                             NULL: the one shipped with the library. Pass new OfacSdn($file) with the file OfacSdn::sync() keeps fresh
      */
     public function __construct(
         private readonly array $schemes,
@@ -90,6 +93,7 @@ final class X402Middleware implements MiddlewareInterface
         private readonly ?PaymentLedger $ledger = null,
         private readonly ?\Closure $lookup = null,
         private readonly ?\Closure $sensitive = null,
+        private readonly ?OfacSdn $ofac = null,
     ) {
     }
 
@@ -205,12 +209,12 @@ final class X402Middleware implements MiddlewareInterface
     private function sale(array $payment, array $req): Sale
     {
         if (null === $this->ledger) {
-            return new Sale($this->schemes, $this->claim, $this->settle, $this->events, $this->verify, $this->release, $payment, $req);
+            return new Sale($this->schemes, $this->claim, $this->settle, $this->events, $this->verify, $this->release, $payment, $req, ofac: $this->ofac);
         }
         $ledger = $this->ledger;
         $ttl = Sale::ttl($payment);
 
-        return new Sale($this->schemes, fn (string $key): bool => $ledger->claim($key, $ttl), $this->settle, $this->events, $this->verify, fn (string $key) => $ledger->release($key), $payment, $req);
+        return new Sale($this->schemes, fn (string $key): bool => $ledger->claim($key, $ttl), $this->settle, $this->events, $this->verify, fn (string $key) => $ledger->release($key), $payment, $req, ofac: $this->ofac);
     }
 
     /**
