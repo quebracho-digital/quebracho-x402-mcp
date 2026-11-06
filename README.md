@@ -256,6 +256,9 @@ a limit the answer is HTTP 429 with a `Retry-After` header (seconds, at least
 1, exposed to browsers by `Access-Control-Expose-Headers`) and a JSON-RPC error,
 `{"jsonrpc":"2.0","id":<the request's id>,"error":{"code":-32000,"message":"Rate limit reached for /mcp. Nothing was charged; try later."}}`;
 the id is `null` for a batch, a notification or a body over 8 KB (not parsed).
+Before both, a body over `MCP_MAX_BODY_BYTES` (128 KiB) is refused with HTTP 413
+and a JSON-RPC error (`-32600`, id `null`) without being parsed or counted
+(`App\EventListener\McpBodyLimit`).
 `analyze_terms` then has its own limits inside the tool: `TERMS_LIMIT_IP` calls
 per client per hour (5), counted before the payment is read: a paid
 `analyze_terms` call over it gets HTTP 429 with `Retry-After`, and nothing is
@@ -573,6 +576,7 @@ with a 500.
 | `TERMS_MODEL` | `deepseek-ai/DeepSeek-V4.1-Flash` | The model behind `analyze_terms` (super beta): open weights on Inference Providers; needs `HF_TOKEN`. |
 | `MCP_LIMIT_IP` | `60` | `POST /mcp` requests per client per minute (an IPv6 client by its /64), refused with 429 before any payment is checked. |
 | `MCP_LIMIT_GLOBAL` | `600` | `POST /mcp` requests per minute for the whole server, counted only for clients within their own limit. |
+| `MCP_MAX_BODY_BYTES` | `131072` | Largest `POST /mcp` body, in bytes; a larger one gets 413 before anything parses it. Holds the longest `analyze_terms` text, fully escaped, plus its payment. |
 | `TERMS_LIMIT_IP` / `TERMS_LIMIT_DAY` | `5` / `500` | `analyze_terms` paid calls per client per hour (HTTP 429, before the payment is read) and in total per day (a tool error, after the payment is claimed); nothing is charged in either case. |
 | `HF_MODEL` | `openai/gpt-oss-20b` | The model `--hf` uses: any chat model on Inference Providers with tool calling. |
 | `X402_BUDGETS` | `{"eip155:84532":"0.05"}` | The agent's spending cap per run, in USD, JSON by network. A network not listed is never paid (Arc mainnet is left out on purpose: add it in `.env.local` with a non-public key). |
@@ -593,6 +597,7 @@ signature, the response body or a token). With `symfony/monolog-bundle`
 installed (a `require-dev` here) it uses the `x402` Monolog channel; without
 it (`composer install --no-dev`) it writes to `php://stderr` at level `info`
 (`app.x402_stderr_logger` in `app/config/services.yaml`), prefixed `x402 `.
+
 
 ## Using the library
 

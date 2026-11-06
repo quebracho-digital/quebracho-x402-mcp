@@ -153,6 +153,22 @@ final class AppKernelTest extends KernelTestCase
         self::assertSame(9, json_decode((string) $refused->getContent(), true)['id']);
     }
 
+    public function testAnOversizedPostThroughTheRealKernelIs413AndSpendsNoRateLimit(): void
+    {
+        $kernel = self::bootKernel();
+        $pool = self::getContainer()->get('cache.rate_limiter');
+        \assert($pool instanceof CacheItemPoolInterface);
+        $pool->clear();
+        $ip = '198.18.'.random_int(0, 255).'.'.random_int(1, 254);
+        $body = '{"jsonrpc":"2.0","id":9,"method":"ping","params":{"pad":"'.str_repeat('a', (int) $_SERVER['MCP_MAX_BODY_BYTES']).'"}}';
+
+        for ($i = 0; $i <= (int) $_SERVER['MCP_LIMIT_IP']; ++$i) {
+            $response = $kernel->handle(Request::create('http://localhost/mcp', 'POST', server: ['REMOTE_ADDR' => $ip, 'CONTENT_TYPE' => 'application/json'], content: $body));
+            // Refused before McpRateLimit: never a 429, however many are sent.
+            self::assertSame(413, $response->getStatusCode(), "request $i");
+        }
+    }
+
     public function testAPaidAnalyzeTermsOverTermsLimitIpThroughTheRealKernelIs429(): void
     {
         $kernel = self::bootKernel();

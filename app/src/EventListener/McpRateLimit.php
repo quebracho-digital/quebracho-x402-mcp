@@ -33,8 +33,8 @@ use Symfony\Component\RateLimiter\RateLimiterFactoryInterface;
  * A paid analyze_terms call also spends its client's hourly bucket (TERMS_LIMIT_IP) here, before
  * its payment is verified; the server's daily one stays in the tool (AnalyzeTermsTool).
  */
-// After the router (32): the endpoint is known by its route, so the path set in mcp.yaml is followed.
-#[AsEventListener(priority: 31)]
+// After the router (32) and McpBodyLimit (31): the endpoint is known by its route, so the path set in mcp.yaml is followed.
+#[AsEventListener(priority: 30)]
 final class McpRateLimit
 {
     /** symfony/mcp-bundle names each server's route _mcp_endpoint_<server> (AppKernelTest pins it). */
