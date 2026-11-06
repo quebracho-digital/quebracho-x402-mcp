@@ -388,7 +388,10 @@ final class X402McpMiddleware implements MiddlewareInterface
             }
             [$data, $rest] = $sse ? explode("\n", $chunk, 2) + [1 => ''] : [$chunk, ''];
             $out = json_decode($data, true);
-            if (!is_array($out) || !array_key_exists('id', $out) || $out['id'] !== $id) {
+            // The answer to this call: its id, and a result or an error. A message with a method is a request
+            // of the server's own (sampling, elicitation), whose ids are another space and may equal this one.
+            if (!is_array($out) || !array_key_exists('id', $out) || $out['id'] !== $id || array_key_exists('method', $out)
+                || !(array_key_exists('result', $out) || array_key_exists('error', $out))) {
                 continue;
             }
             $out = $fn($out);

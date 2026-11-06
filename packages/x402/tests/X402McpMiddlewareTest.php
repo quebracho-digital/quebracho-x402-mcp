@@ -130,6 +130,36 @@ final class X402McpMiddlewareTest extends TestCase
         self::assertTrue($result['_meta'][X402McpMiddleware::PAYMENT_RESPONSE]['success']);
     }
 
+    public function testAServerRequestWithTheCallsIdIsNotTakenForItsAnswer(): void
+    {
+        // The server's own requests (sampling, elicitation) have their own id space: id 2 can be one of them.
+        $request = '{"jsonrpc":"2.0","id":2,"method":"sampling/createMessage","params":{}}';
+        $answer = json_encode(['jsonrpc' => '2.0', 'id' => 2, 'result' => ['content' => [['type' => 'text', 'text' => 'paid content']]]]);
+        $response = new Response(200, ['Content-Type' => 'text/event-stream'], "event: message\ndata: $request\n\nevent: message\ndata: $answer\n\n");
+        $server = new class($response) implements RequestHandlerInterface {
+            public function __construct(private ResponseInterface $response)
+            {
+            }
+
+            public function handle(ServerRequestInterface $request): ResponseInterface
+            {
+                return $this->response;
+            }
+        };
+        $settled = 0;
+        $settle = function (array $payment, array $req) use (&$settled): array {
+            ++$settled;
+
+            return Settlement::mock()($payment, $req);
+        };
+
+        $body = (string) $this->middleware($settle)->process($this->paidCall(), $server)->getBody();
+
+        self::assertStringContainsString("data: $request\n", $body, 'the server request goes out untouched');
+        self::assertSame(1, $settled);
+        self::assertTrue(self::toolResult(new Response(200, ['Content-Type' => 'text/event-stream'], $body))['_meta'][X402McpMiddleware::PAYMENT_RESPONSE]['success']);
+    }
+
     public function testTamperedPaymentIsRefusedWithTheReason(): void
     {
         $request = $this->paidCall();
