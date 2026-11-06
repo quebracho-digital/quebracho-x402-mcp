@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\X402;
 
+use App\Job\Job;
 use Mcp\Capability\Discovery\SchemaValidator;
 use Quebracho\X402\Budget;
 use Quebracho\X402\EvmExact;
@@ -95,6 +96,14 @@ final class Pricing
         if ('start' === ($job['role'] ?? null)) {
             // The deposit settles before the job is queued.
             $req['extra']['paymentFlow'] = 'upfront';
+            // Said before the buyer signs (decision 1): the deposit is not refunded; what a failure of ours costs
+            // instead is nothing more, the result tool is free then. A buyer's agent can read it from the offer.
+            $req['extra']['job'] = [
+                'deposit' => 'non_refundable',
+                'refund' => 'none; if the job fails by our fault (failed_ours), '.$job['pairedWith'].' is free',
+                'result' => $job['pairedWith'],
+                'resultTtl' => Job::RESULT_TTL,
+            ];
         }
 
         return [$req];

@@ -58,7 +58,7 @@ final class FileJobStore implements JobStore
         return $this->locked(function () use ($id, $change): Job {
             $job = $this->get($id) ?? throw new \OutOfBoundsException("No job $id.");
             $next = $change($job);
-            if ([$next->id, $next->payer, $next->settlementKey, $next->tool, $next->createdAt, $next->sensitive] !== [$job->id, $job->payer, $job->settlementKey, $job->tool, $job->createdAt, $job->sensitive]) {
+            if ([$next->id, $next->payer, $next->settlementKey, $next->tool, $next->createdAt, $next->sensitive, $next->depositRef] !== [$job->id, $job->payer, $job->settlementKey, $job->tool, $job->createdAt, $job->sensitive, $job->depositRef]) {
                 throw new \LogicException("Job $id: a change may not rewrite who paid, for what, or when.");
             }
             $this->write($this->path($id), json_encode($next->toArray(), \JSON_THROW_ON_ERROR));

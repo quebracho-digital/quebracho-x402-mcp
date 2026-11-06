@@ -185,6 +185,17 @@ final class SaleTest extends TestCase
         $this->assertSame('duplicate_settlement', json_decode((string) $again->getBody(), true)['error']);
     }
 
+    public function testEveryFailureThatMayHaveMovedKeepsTheClaim(): void
+    {
+        // The public list is the one Sale follows: a seller deciding "nothing moved" with it agrees with the claim.
+        foreach (Settlement::MAY_HAVE_MOVED as $reason) {
+            $request = $this->paid();
+            $this->middleware(fn () => ['success' => false, 'errorReason' => $reason])->process($request, $this->handler());
+            $again = $this->middleware(fn () => self::tx())->process($request, $this->handler());
+            $this->assertSame('duplicate_settlement', json_decode((string) $again->getBody(), true)['error'], $reason);
+        }
+    }
+
     public function testUpfrontRecordsAHandlerThatThrowsAfterSettling(): void
     {
         $throws = new class implements RequestHandlerInterface {

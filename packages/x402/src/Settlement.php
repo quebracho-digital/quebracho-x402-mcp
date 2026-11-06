@@ -11,6 +11,14 @@ namespace Quebracho\X402;
 final class Settlement
 {
     /**
+     * Settle failures after which the money may still move: a broadcast not confirmed yet, a facilitator that
+     * went silent after it may have sent, an answer that cannot be read. Sale keeps the payment's claim for
+     * exactly these (and for any failure that carries a transaction); every other failure moved nothing.
+     * Public so a seller that wraps the settle (a job store, say) decides "nothing moved" with the same list.
+     */
+    public const MAY_HAVE_MOVED = ['settlement_pending', Sale::UNAVAILABLE, 'unexpected_settle_error', 'invalid_settle_response'];
+
+    /**
      * The payment's identity: what the chain spends once, not its signature.
      *
      * EVM: network + payer + EIP-3009 nonce (re-signing the same nonce must

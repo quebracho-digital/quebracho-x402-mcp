@@ -18,6 +18,11 @@ namespace App\Job;
  *   the next write leaves this row, keyed by the deposit's Settlement::key, for the reconciler to find.
  *   Nothing runs from here: only a confirmed settle moves it on.
  * - queued: the deposit settled. The tool name and its input are kept, so the work can be resumed.
+ * - delivering: a `_result` payment is being settled. Its Settlement::key is on the job ($resultRef), so
+ *   whoever finds the job here (the next `_result`, the reconciler) can ask the ledger or the chain how it
+ *   ended, instead of leaving the job stuck when the settle's answer was lost.
+ * - delivered: paid. The result stays RESULT_TTL seconds more, for a free re-read by its payer (decision 7e:
+ *   the answer of a paid call may be lost on the way back), then the janitor drops it.
  * - failed_ours: our failure by the fixed list below; `_result` costs nothing.
  */
 final class Job
@@ -29,6 +34,27 @@ final class Job
     public const DELIVERING = 'delivering';
     public const DELIVERED = 'delivered';
     public const FAILED_OURS = 'failed_ours';
+
+    /**
+     * Seconds a delivered result stays on the job for its payer to read again for free (decision 7e): enough
+     * for a client whose answer was lost to retry, short enough that buyer-derived text does not linger.
+     */
+    public const RESULT_TTL = 300;
+
+    /**
+     * Seconds a `settling` row keeps the buyer's input while nobody can tell whether its deposit moved. A day,
+     * as long as the payment reconciler keeps an unresolved payment open before it asks for a person
+     * (App\X402\Reconciler::REVIEW_AFTER): after that the text goes, and a deposit found settled later fails the
+     * job as ours (the result is free) instead of running on nothing.
+     */
+    public const PARAMS_TTL = 86400;
+
+    /**
+     * Seconds a `ready` result waits for its `_result` payment. The result quotes the buyer's text, so a job
+     * that is never bought must not keep it forever: after a day the janitor drops it (JobJanitor::forget), the
+     * job answers `expired` and `_result` refuses it without charging. Like every TTL here, it needs the cron.
+     */
+    public const READY_TTL = 86400;
 
     /**
      * From each state, where it may go. delivered and failed_ours are final. There is no way back to
@@ -65,6 +91,10 @@ final class Job
      * @param ?string $reason        why it failed (failed_ours), one of FAILURES
      * @param bool    $sensitive     the buyer asked that its answer not be kept: `_result`'s answer stays out of the
      *                               payment ledger too (kept here, as the input that said so is gone by then)
+     * @param ?array  $depositRef    what the reconciler needs to ask the chain about the deposit: network, nonce,
+     *                               validBefore (App\X402\JobPayments::ref), never the signature
+     * @param ?array  $resultRef     the same for the `_result` payment being settled, plus its Settlement::key:
+     *                               set on ready > delivering, kept once delivered, gone when the job is ready again
      */
     public function __construct(
         public readonly string $id,
@@ -78,6 +108,8 @@ final class Job
         public readonly ?array $result = null,
         public readonly ?string $reason = null,
         public readonly bool $sensitive = false,
+        public readonly ?array $depositRef = null,
+        public readonly ?array $resultRef = null,
     ) {
         if (!isset(self::TRANSITIONS[$state])) {
             throw new \InvalidArgumentException("Unknown job state $state.");
@@ -88,9 +120,9 @@ final class Job
      * A new job, before its deposit is settled. The id is 128 random bits: it is what the buyer holds
      * to ask for the job, so it must not be guessable.
      */
-    public static function settling(string $payer, string $settlementKey, string $tool, array $params, int $now, bool $sensitive = false): self
+    public static function settling(string $payer, string $settlementKey, string $tool, array $params, int $now, bool $sensitive = false, ?array $depositRef = null): self
     {
-        return new self(bin2hex(random_bytes(16)), self::normalize($payer), $settlementKey, $tool, self::SETTLING, $now, $now, $params, sensitive: $sensitive);
+        return new self(bin2hex(random_bytes(16)), self::normalize($payer), $settlementKey, $tool, self::SETTLING, $now, $now, $params, sensitive: $sensitive, depositRef: $depositRef);
     }
 
     /**
@@ -103,10 +135,12 @@ final class Job
     }
 
     /**
+     * @param ?array $resultRef going to delivering: the `_result` payment being settled (App\X402\JobPayments::ref)
+     *
      * @throws IllegalTransition when the table does not allow it, or ready comes without a result, or
      *                           failed_ours without a reason from FAILURES
      */
-    public function to(string $state, int $now, ?array $result = null, ?string $reason = null): self
+    public function to(string $state, int $now, ?array $result = null, ?string $reason = null, ?array $resultRef = null): self
     {
         if (!\in_array($state, self::TRANSITIONS[$this->state], true)) {
             throw new IllegalTransition("Job {$this->id}: {$this->state} cannot go to $state.");
@@ -118,13 +152,46 @@ final class Job
         if (self::FAILED_OURS === $state && !\in_array($reason, self::FAILURES, true)) {
             throw new IllegalTransition("Job {$this->id}: failed_ours needs a reason from Job::FAILURES.");
         }
-        // The buyer's input is needed only to run (or resume) the work: once it ran, it goes. The result
-        // goes once delivered: the payment ledger keeps the copy a retry replays (unless sensitive).
+        // The buyer's input is needed only to run (or resume) the work: once it ran, it goes. The result is
+        // kept past delivered for the re-read (RESULT_TTL, then JobJanitor::forget), dropped on a failure.
         // Done here, in the one place every transition passes, so no caller can forget it.
         $params = \in_array($state, [self::SETTLING, self::QUEUED, self::RUNNING], true) ? $this->params : null;
-        $result = self::DELIVERED === $state || self::FAILED_OURS === $state ? null : $result;
+        $result = self::FAILED_OURS === $state ? null : $result;
+        // Back to ready, the payment that was settling is out of the picture: the next one brings its own.
+        $resultRef = match ($state) {
+            self::DELIVERING => $resultRef ?? $this->resultRef,
+            self::READY => null,
+            default => $this->resultRef,
+        };
 
-        return new self($this->id, $this->payer, $this->settlementKey, $this->tool, $state, $this->createdAt, $now, $params, $result, self::FAILED_OURS === $state ? $reason : null, $this->sensitive);
+        return new self($this->id, $this->payer, $this->settlementKey, $this->tool, $state, $this->createdAt, $now, $params, $result, self::FAILED_OURS === $state ? $reason : null, $this->sensitive, $this->depositRef, $resultRef);
+    }
+
+    /**
+     * The same job without the buyer's input or the result: what the janitor leaves once their TTL is over
+     * (PARAMS_TTL on an unresolved `settling` row, READY_TTL on a ready one, RESULT_TTL on a delivered one).
+     * Not a transition: the
+     * state and its time stay, so nothing else (the janitor's staleness, the TTLs) is reset by it.
+     */
+    public function forget(): self
+    {
+        return new self($this->id, $this->payer, $this->settlementKey, $this->tool, $this->state, $this->createdAt, $this->updatedAt, null, null, $this->reason, $this->sensitive, $this->depositRef, $this->resultRef);
+    }
+
+    /**
+     * Whether its payer may read the result again without paying: delivered, and still within RESULT_TTL.
+     */
+    public function rereadable(int $now): bool
+    {
+        return self::DELIVERED === $this->state && null !== $this->result && $now < $this->updatedAt + self::RESULT_TTL;
+    }
+
+    /**
+     * Whether it is ready but its result is gone (READY_TTL): nothing left to sell.
+     */
+    public function expired(): bool
+    {
+        return self::READY === $this->state && null === $this->result;
     }
 
     public function toArray(): array
@@ -134,7 +201,7 @@ final class Job
 
     public static function fromArray(array $row): self
     {
-        return new self($row['id'], $row['payer'], $row['settlementKey'], $row['tool'], $row['state'], $row['createdAt'], $row['updatedAt'], $row['params'] ?? null, $row['result'] ?? null, $row['reason'] ?? null, $row['sensitive'] ?? false);
+        return new self($row['id'], $row['payer'], $row['settlementKey'], $row['tool'], $row['state'], $row['createdAt'], $row['updatedAt'], $row['params'] ?? null, $row['result'] ?? null, $row['reason'] ?? null, $row['sensitive'] ?? false, $row['depositRef'] ?? null, $row['resultRef'] ?? null);
     }
 
     private static function normalize(string $payer): string

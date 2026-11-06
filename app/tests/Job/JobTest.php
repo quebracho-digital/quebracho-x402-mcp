@@ -90,12 +90,29 @@ final class JobTest extends TestCase
         self::assertNull($queued->to(Job::FAILED_OURS, 130, reason: 'our_timeout')->params);
     }
 
-    public function testTheResultLeavesTheJobOnceDelivered(): void
+    public function testADeliveredResultStaysForTheRereadThenIsForgotten(): void
     {
         $delivered = $this->in(Job::DELIVERING)->to(Job::DELIVERED, 200);
 
-        self::assertNull($delivered->result);
+        self::assertNotNull($delivered->result, 'its payer may read it again for free (7e)');
         self::assertNull($delivered->params);
+        self::assertTrue($delivered->rereadable(200 + Job::RESULT_TTL - 1));
+        self::assertFalse($delivered->rereadable(200 + Job::RESULT_TTL));
+
+        $forgotten = $delivered->forget();
+        self::assertNull($forgotten->result);
+        self::assertSame([Job::DELIVERED, 200], [$forgotten->state, $forgotten->updatedAt], 'not a transition: the state and its time stay');
+        self::assertFalse($forgotten->rereadable(201));
+    }
+
+    public function testTheResultPaymentIsKeptWhileItSettlesAndDroppedWhenTheJobIsReadyAgain(): void
+    {
+        $ref = ['key' => 'k2', 'network' => 'eip155:84532', 'nonce' => '0x01', 'validBefore' => 999];
+        $delivering = $this->in(Job::READY)->to(Job::DELIVERING, 200, resultRef: $ref);
+
+        self::assertSame($ref, $delivering->resultRef, 'what a lost settle is looked up by');
+        self::assertSame($ref, $delivering->to(Job::DELIVERED, 210)->resultRef);
+        self::assertNull($delivering->to(Job::READY, 210)->resultRef, 'the next payment brings its own');
     }
 
     public function testAReasonIsOnlyOnAFailedJob(): void

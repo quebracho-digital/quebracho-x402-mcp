@@ -16,6 +16,8 @@ namespace App\Job;
 final class JobStatus
 {
     public const UNKNOWN = 'unknown';
+    /** Ready, but nobody bought the result within Job::READY_TTL: it was deleted, there is nothing to sell. */
+    public const EXPIRED = 'expired';
 
     /** state => [reason, retryable, retryAfter seconds]. */
     private const VIEW = [
@@ -25,6 +27,7 @@ final class JobStatus
         Job::READY => ['result_ready', false, null],
         Job::DELIVERING => ['result_settling', true, 10],
         Job::DELIVERED => ['delivered', false, null],
+        self::EXPIRED => ['result_expired', false, null],
         Job::FAILED_OURS => [null, false, null],
         self::UNKNOWN => ['unknown_job', false, null],
     ];
@@ -34,7 +37,7 @@ final class JobStatus
      */
     public static function of(string $jobId, ?Job $job, string $payer): array
     {
-        $state = null !== $job && $job->paidBy($payer) ? $job->state : self::UNKNOWN;
+        $state = null !== $job && $job->paidBy($payer) ? ($job->expired() ? self::EXPIRED : $job->state) : self::UNKNOWN;
         [$reason, $retryable, $after] = self::VIEW[$state];
 
         return ['jobId' => $jobId, 'state' => $state, 'reason' => $reason ?? $job?->reason, 'retryable' => $retryable, 'retryAfter' => $after];

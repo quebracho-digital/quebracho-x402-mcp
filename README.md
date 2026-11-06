@@ -29,7 +29,7 @@ Drupal module [x402_pay](https://www.drupal.org/project/x402_pay).
 - **Why:** agents can call tools but cannot pay for them. API keys and accounts do not scale to machines.
 - **How:** the agent calls a tool, gets a price (402), signs within a budget, retries with the payment, and receives the result with an on-chain receipt.
 - **Safe by construction:** verify is not paid. One signature buys one delivery, a replay never runs the handler, smart-wallet signatures are refused, gas is bounded, and addresses are screened. Each defence has a test.
-- **Proven:** 444 library tests and 230 app tests with no network, EVM, Solana and NEAR (experimental) schemes, a real USDC settle on Base Sepolia, and a real purchase on Arc mainnet through Ombú's MCP server.
+- **Proven:** 474 library tests and 365 app tests with no network, EVM, Solana and NEAR (experimental) schemes, a real USDC settle on Base Sepolia, and a real purchase on Arc mainnet through Ombú's MCP server.
 - **Used by:** ombu.quebracho.digital, in production on mainnet, and the Drupal module [x402_pay](https://www.drupal.org/project/x402_pay): release 1.0.0-beta3 on drupal.org runs on this library (`quebracho/x402 ^0.3`). The library grew from that module, so one codebase serves Drupal and Symfony.
 - **Try it:** `bin/smoke.sh` after `ddev start` (below). Mock mode needs no wallet and no faucet.
 
@@ -318,9 +318,11 @@ with one name, and on a pair that does not point back with the other role.
 The catalog is read from the tools the MCP bundle actually registered on each
 server, so a tool served through a service id the registry (`App\Mcp\` in
 `mcp.yaml`) matches counts even when its class lives elsewhere, and the build
-fails if a served tool is missing from it. No tool in `app/` carries the flag
-yet (only test fixtures do): the job tools themselves, their job store and a
-`_status` tool are planned, not built.
+fails if a served tool is missing from it. `analyze_terms_start`,
+`analyze_terms_result` and the free `analyze_terms_status` (`App\Mcp\AnalyzeTermsJobTool`)
+carry it; their jobs live in `app/var/jobs` (`App\Job\FileJobStore`). The
+`_start` offer says in `extra.job` that the deposit is non-refundable and that
+`_result` is free when the job fails by our fault.
 
 Before any payment is read, a paid call's arguments are checked against its
 tool's input schema, the one the SDK generates and serves in `tools/list`,
@@ -388,6 +390,92 @@ upfront tool runs once; a default-flow call without a kept answer gets
 `already_settled`). Rows marked `needs_review` (a reverted transaction, a used
 authorization whose transaction it cannot find, a payment open for more than
 24 h) need a person; they and `rpc_error` rows are logged as warnings. It always exits 0. See DECISIONS.md, D20.
+
+### Jobs nobody is looking after (job mode)
+
+A job waits on a request that may be gone: its deposit settled and the process
+was killed before the job was queued (`settling`), a `_result` settle ended
+ambiguous (`delivering`), a retry queued a job but found no free slot
+(`queued`), or a runner died (`running`). `app:jobs:janitor` deals with all of
+them, in this order: it moves `settling` and `delivering` jobs on once the
+ledger or the chain (the token's `authorizationState`) knows how their payment
+ended (`App\X402\JobReconciler`), runs queued jobs no request ran in a free
+slot, fails work untouched for 5 minutes (`failed_ours`, so `_result` is free),
+and drops delivered results after their 5-minute re-read window, results nobody
+bought after a day (the job then answers `expired`), and the buyer's text on a
+`settling` row nobody could resolve for a day.
+
+A buyer never needs a second try to learn its job: every `analyze_terms_start`
+answer given once the job row exists carries the `jobId`, refusals included
+(`settlement_pending`, `needs_review`, `facilitator_unavailable`, an expired
+signature on a late retry), in `structuredContent.jobId`
+(`App\X402\JobIdOnRefusal`, only when the deposit's signature recovers to its
+payer). The deposit's signature lives 60 s and the reconciler first looks at a
+`settling` row after 60 s, so a retry would come too late; the buyer polls
+`analyze_terms_status` with the `jobId` instead.
+`app:jobs:reconcile` is its first step alone, with a table, for a person.
+
+```cron
+# every 5 minutes: the ledger's open payments first (what the job reconciler reads)
+*/5 * * * * cd /path/to/quebracho-x402-mcp/app && bin/console app:x402:reconcile --limit=100
+# every minute: a queued job waits at most ~1.5 min for a slot, a stuck one is failed after 5
+* * * * * cd /path/to/quebracho-x402-mcp/app && bin/console app:jobs:janitor
+```
+
+Without the cron, here is exactly what a request does by itself and what stays
+stuck. A buyer's `_status` or `_result` call fails its own stale `queued` or
+`running` job (`failed_ours`, so `_result` is free) and asks the ledger about
+its own `delivering` job. Nothing else moves:
+
+- a `settling` job (the deposit's settle went out and its request died) stays
+  `settling` forever, with the buyer's text on disk, even when the deposit was
+  paid: only the reconciler queues it or discards it;
+- a `delivering` job whose payment the ledger already forgot stays
+  `delivering` (a request never asks the chain), so the buyer can neither pay
+  again nor read the result;
+- a `queued` job that found no free slot is never run; its buyer's next call
+  only fails it as ours after 5 minutes, so it gets its result free but no
+  analysis;
+- nothing is deleted by time: delivered results, results never bought and the
+  text of unresolved `settling` rows stay in `app/var/jobs` until the cron runs.
+
+The janitor runs the work in the cron's own PHP process, so that process needs
+the web's environment (the model's token, `JOB_SLOTS`).
+
+### Known limits (job mode)
+
+This app is an example to read, for one host, not for production. These are
+limits we know and leave in, each also said in a comment where it lives:
+
+- **"Nonce used" is not proof that we were paid** (`App\X402\JobPayments`).
+  When the ledger has forgotten a deposit or a `_result` payment, the cron asks
+  the token's `authorizationState(from, nonce)`. An EIP-3009 nonce is the
+  payer's: the buyer can burn it with `cancelAuthorization`, or spend it on
+  another `transferWithAuthorization` to itself, and the token says "used" all
+  the same. A buyer who does that while our settle was ambiguous gets the job
+  for the price of a gas fee. The fix is to find the transaction that used the
+  nonce (its `AuthorizationUsed` event, as `app:x402:reconcile` does) and check
+  that its receipt logs a `Transfer` of the asset from the payer to our `payTo`
+  for the price. Not done: the job row keeps neither `payTo` nor the amount, and
+  it is a second RPC round trip over a bounded block range.
+- **A ledger that loses data can release a paid state.** "No state" is read as
+  "never moved" while the state would still be alive. Redis with an eviction
+  policy, or restarted without persistence, drops a paid state early: a paid
+  deposit's job is then discarded, and a paid `_result` goes back to `ready`
+  (the buyer pays twice). Run the ledger's Redis with
+  `maxmemory-policy noeviction` and `appendonly yes` (AOF). The DDEV Redis in
+  this repo is for development and is not set up that way.
+- **The free re-read needs a real payment signature**
+  (`App\X402\JobDesk`). To read a delivered result again within 5 minutes the
+  payer signs a valid EIP-3009 authorization for the full price, which we never
+  settle. It stays spendable (only to our `payTo`) until it expires, and the
+  buyer's budget counts it until then. A stronger and cheaper proof would be an
+  EIP-191 signature over the `jobId`.
+- **`_status` takes the payer's address, which is public** (`App\Job\JobStatus`):
+  the 128-bit random `jobId` is the real secret there.
+- **Buyer text goes to Hugging Face** (`analyze_terms_start` says so): the
+  analysis, quotes included, is cached 7 days unless `sensitive`, and the job's
+  copy is deleted by the cron at most a day later.
 
 ### Address screening
 

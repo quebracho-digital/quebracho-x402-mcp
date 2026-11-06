@@ -4,13 +4,23 @@ declare(strict_types=1);
 
 namespace App\Tests\Job;
 
+use App\Command\JobJanitorCommand;
 use App\Job\FileJobStore;
 use App\Job\Job;
 use App\Job\JobFailed;
 use App\Job\JobJanitor;
 use App\Job\JobRunner;
 use App\Job\JobWork;
+use App\X402\JobPayments;
+use App\X402\JobReconciler;
+use App\X402\JobSlots;
 use PHPUnit\Framework\TestCase;
+use Quebracho\X402\FileLedger;
+use Symfony\Component\Console\Input\ArrayInput;
+use Symfony\Component\Console\Output\BufferedOutput;
+use Symfony\Component\Console\Style\SymfonyStyle;
+use Symfony\Component\Lock\LockFactory;
+use Symfony\Component\Lock\Store\FlockStore;
 
 final class JobRunnerTest extends TestCase
 {
@@ -155,5 +165,25 @@ final class JobRunnerTest extends TestCase
         self::assertSame(Job::SETTLING, $this->jobs->get($settling->id)?->state, "the reconciler's");
         self::assertSame(Job::DELIVERING, $this->jobs->get($delivering->id)?->state, 'its payment may be on chain');
         self::assertSame([], (new JobJanitor($this->jobs))->sweep(1000, 300), 'a second sweep has nothing to do');
+    }
+
+    public function testTheCronRunsAQueuedJobNoRequestRanInAFreeSlotAndCleansUp(): void
+    {
+        $orphan = $this->job(at: time() - JobJanitor::ORPHAN_AFTER);
+        $fresh = $this->job(at: time());
+        $delivered = $this->jobs->update($this->job(at: 100)->id, static fn (Job $j) => $j->to(Job::RUNNING, 100)->to(Job::READY, 100, ['x' => 1])->to(Job::DELIVERING, 100)->to(Job::DELIVERED, 100));
+        $ledger = new FileLedger($this->dir.'-ledger');
+        $slots = new JobSlots(new LockFactory(new FlockStore(sys_get_temp_dir())), 1);
+        $out = new BufferedOutput();
+        try {
+            (new JobJanitorCommand(new JobJanitor($this->jobs), new JobReconciler($this->jobs, new JobPayments($ledger), $ledger), $this->runner(), $slots))(new SymfonyStyle(new ArrayInput([]), $out));
+        } finally {
+            exec('rm -rf '.escapeshellarg($this->dir.'-ledger'));
+        }
+
+        self::assertSame(Job::READY, $this->jobs->get($orphan->id)?->state, 'run by the cron, in the free slot');
+        self::assertSame(Job::QUEUED, $this->jobs->get($fresh->id)?->state, 'its own request may still run it');
+        self::assertNull($this->jobs->get($delivered->id)?->result, 'past Job::RESULT_TTL');
+        self::assertStringContainsString("1 ran: {$orphan->id} ready", $out->fetch());
     }
 }

@@ -198,7 +198,10 @@ final class AppKernelTest extends KernelTestCase
         self::assertArrayNotHasKey('context', json_decode($container->getParameter('app.mcp_tools')['analyze_terms_start']['schema'], true)['properties'], 'the RequestContext is injected, not asked of the buyer');
 
         // Registered for cron; not run here: the test env shares var/jobs with dev.
-        self::assertTrue((new Application(self::bootKernel()))->has('app:jobs:janitor'));
+        $console = new Application(self::bootKernel());
+        self::assertTrue($console->has('app:jobs:janitor'));
+        self::assertTrue($console->has('app:jobs:reconcile'));
+        self::assertNotNull(self::getContainer()->get(\App\X402\JobReconciler::class), 'wired: its ledger and the chain lookup');
     }
 
     public function testAnOptionalBundleIsRegisteredOnlyWhenItsClassExists(): void

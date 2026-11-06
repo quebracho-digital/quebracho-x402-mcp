@@ -83,6 +83,16 @@ services:
     App\X402\JobDesk:
         arguments:
             $settle: !closure '@App\X402\Facilitator'
+    # A _start refusal (settlement_pending, needs_review, an expired retry...) carries the jobId once the job exists.
+    App\X402\JobIdOnRefusal:
+        arguments:
+            $streams: '@mcp.psr17_factory'
+    # How a job's payment ended when its request is gone: the ledger, then (cron only) the token's authorizationState.
+    # In mock mode nothing moves on chain, so the chain is never asked ($facilitator "mock" drops the lookup).
+    App\X402\JobPayments:
+        arguments:
+            $authorizationUsed: !closure '@App\X402\AuthorizationState'
+            $facilitator: '%env(X402_FACILITATOR)%'
 
     Quebracho\X402\EvmExact: ~
 
@@ -189,6 +199,7 @@ services:
             - '@mcp.psr17_factory'
             - '@mcp.server.default.middleware_factory'
             - '@Quebracho\X402\X402McpMiddleware'
+            - '@App\X402\JobIdOnRefusal'
             - '@logger'
         tags: [controller.service_arguments, { name: monolog.logger, channel: mcp }]
 
