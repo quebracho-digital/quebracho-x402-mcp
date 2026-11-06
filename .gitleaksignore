@@ -1,2 +1,7 @@
 # X402_BUYER_KEY: the public web3.js docs key, on purpose (see app/.env)
 8870d8f000fcb45679db54549139964f29eae962:app/.env:generic-api-key:46
+# Public test keys in old commits (false positives, decided by Leo 2026-11-05):
+# Anvil/Hardhat default accounts #0 and #1, and the web3.js docs key used as a buyer fixture in CompatibilityTest.
+267dd364a5b4cd3cc15d5247809343aeef10b157:packages/x402/tests/CompatibilityTest.php:generic-api-key:53
+267dd364a5b4cd3cc15d5247809343aeef10b157:packages/x402/tests/CompatibilityTest.php:generic-api-key:54
+ee0f51e2ad480e11da2c35ee8c87e4eab243241f:packages/x402/tests/FacilitatorsTest.php:generic-api-key:338

@@ -24,7 +24,9 @@ $middleware = new X402Middleware([new EvmExact()], $price, $claim, $psr17, $psr1
 
 `$claim` makes each payment buy one delivery, even before it settles:
 `(new FileClaims('/var/x402-claims'))(...)` on one host, or any atomic
-`fn(string $key): bool` (DB unique key, Redis `SET NX`) on several.
+`fn(string $key): bool` (DB unique key, Redis `SET NX`) on several. To keep
+more than the claim (the stored response, pending settles), pass a ledger: see
+[Payment ledger](#payment-ledger).
 
 Unpaid → `402` with `PAYMENT-REQUIRED`. Paid → verify offline, claim, run the
 handler, settle only on 2xx, answer with `PAYMENT-RESPONSE`. `$settle` is a
@@ -34,7 +36,10 @@ verification, nothing moves on chain, the receipt says `extensions.mock`.
 Optional, by name, on both middlewares:
 
 - `verify:` `fn($payment, $req): ?string`, an online check (`$facilitator->verify`)
-  before the claim: an empty wallet runs nothing and takes no claim.
+  before the claim: an empty wallet runs nothing and takes no claim. Return
+  `NULL` when the payment is good, or a non-empty reason string. Any other
+  return (`''`, `false`, an array) or any exception refuses as
+  `unexpected_verify_error`; a `FacilitatorException` stays `facilitator_unavailable` (502).
 - `release:` `$claims->release(...)`: a payment that charged nothing (handler
   failed, settle failed with no transaction) is good again. A pending settle
   keeps its claim. `FileClaims::prune($seconds)` clears old claims.
@@ -52,20 +57,116 @@ Optional, by name, on both middlewares:
 - A tool result with `isError` is not charged and goes out as it is: a paid
   tool must not put what it sells in its errors.
 - `$events` also receives a `PaymentOutcome` (settled, not_settled, failed,
-  rejected) per paid request; a listener that throws cannot undo a sale.
+  rejected, failed_after_settle) per paid request; its `error` holds the
+  exception behind a reason (verify that threw, facilitator down), for logs
+  only. A listener that throws cannot undo a sale.
+
+### Payment ledger
+
+`PaymentLedger` keeps each payment's state across requests and processes, by
+name on both middlewares. It replaces `$claim` and `$release` (the signature
+still takes `$claim`; it is not used then):
+
+```php
+use Quebracho\X402\{EvmExact, FileLedger, X402Middleware};
+
+$middleware = new X402Middleware([new EvmExact()], $price, $claim, $psr17, $psr17, $settle,
+    ledger: new FileLedger('/var/x402-ledger'),   // one host; several hosts need a shared store
+    lookup: $lookup,                              // optional, see "pending" below
+    sensitive: $sensitive,                        // optional: fn(request|params): bool, keep the state, never the body
+);
+```
+
+A request `sensitive` marks (or one whose check throws) is delivered, but its
+body is never stored: a retry after it settled gets `already_settled`, not a
+replay.
+
+`claim($key, $ttl)` must be atomic (of N concurrent calls exactly one returns
+TRUE); `get`, `put` and `release` complete the state part of the interface.
+`open`, `openKeys` and `close` keep an index of open payments: every
+`settling` or `pending` state is opened (with the network, payer, nonce, payTo,
+amount, validBefore and any transaction or `paymentId`, never a signature or a
+body) for three days, and `settled` or `delivered` closes it, so a reconciler
+can walk them (`openKeys($limit)`) and ask the chain. `FileLedger` is one
+host: one JSON file per key, plus one `.open` file per open entry. A store that cannot answer throws
+`LedgerUnavailableException`, and nothing is charged: before the handler runs,
+HTTP answers `503 ledger_unavailable` and MCP answers the PaymentRequired with
+`error: ledger_unavailable` in-band.
+
+- **States.** `claimed` (in progress: a retry gets `409 in_progress`);
+  `settled` (charged, no response kept: `409 already_settled`); `delivered`
+  (charged, the 2xx response kept: a retry gets it again, not run again, with
+  the receipt); `pending` (may have charged, not confirmed: see below).
+- **Written before the money or the handler moves (write-ahead).**
+  `settling` is stored before a settle is sent. `handling` is stored before an
+  upfront handler runs, and it is closed by `delivered`, or by `settled` with
+  `handler_ran: false` when the handler answered non-2xx or threw, or on MCP
+  answered `isError` or a JSON-RPC error (a retry runs it again, as before). If the store refuses the `settling` write, nothing is
+  sent: `503 ledger_unavailable`. Refused on the `handling` write, the handler
+  does not run.
+- **A retry that finds an open intention.** `settling` without a transaction or
+  `paymentId` in its receipt: `409 settlement_unknown` (no settle, no handler).
+  With one, the lookup decides: confirmed settles it (an upfront handler then
+  runs once), refuted frees it, unknown answers `409 settlement_unknown`.
+  `handling` without a kept response: `409 needs_review` (MCP: `isError` with
+  `needs_review`). The handler is never run again by the middleware: a person
+  decides. A `handling` with a kept response is replayed.
+- **Residual window.** A crash while a settle request is in flight, or a store
+  failure when the outcome is written, leaves `settling` with no reference (the
+  transaction or `paymentId` exists only once the facilitator answers). It
+  answers `409 settlement_unknown` until its TTL frees the claim. After that the
+  retry goes through verify again: if the settle did happen, the token rejects
+  the spent nonce, so nothing is charged twice, but the buyer paid and got no
+  response, and nothing tells the seller on its own. `ChainFacilitator` closes
+  it: its transaction is stored in `settling` before it is sent (pass
+  `$chain->settle(...)` as `$settle`), and a store that refuses that write sends
+  nothing (`503 ledger_unavailable`).
+- **What is kept.** Only a 2xx response of at most 1 MiB, base64 in the state.
+  Its TTL is `min(600, validBefore − now)` (24 h for a `settling` or `pending`
+  state with a transaction); each state expires with it.
+- **The store is read only after the signature verifies offline**: the nonce
+  is public, so anyone can copy a payment, and a forged copy costs no read.
+- **Pending.** A settle that may have charged and is not confirmed (its claim
+  kept) is asked of `lookup(array $state): ?array` when the buyer retries: a
+  receipt with `success: true` settles it (the response is then replayed), one
+  with `success: false` frees it (the retry runs as new), `NULL` (or a lookup
+  that throws) keeps it pending and answers `409 settlement_pending`.
+- **A failed store after a settle does not become an error.** If a
+  `LedgerUnavailableException` comes when the outcome is stored after a
+  successful settle, the response still goes out: the money has moved. The claim
+  stays until its TTL, so the buyer cannot pay twice.
 
 ### Facilitators
 
 `$settle = fn ($payment, $req) => $facilitator->settle($payment, $req);` with
 any `Facilitator` (all PSR-18 + PSR-17):
 
-- `new HttpFacilitator($http, $psr17, $psr17, 'https://x402.org/facilitator')`:
-  any x402 facilitator by URL (`/verify`, `/settle`, `/supported`, `feePayer()`
-  for Solana). A settle counts only when consistent: 2xx, `success: true`, a
+- `new HttpFacilitator($http, $psr17, $psr17, 'https://x402.org/facilitator', $bearer)`:
+  the generic client, any x402 facilitator by URL with an optional bearer key
+  (`verify`, `settle`, `supported`, `feePayer()` for Solana). A settle counts only when consistent: 2xx, `success: true`, a
   transaction, our network, the payer who signed. Verified on Base Sepolia.
-- Circle: `HttpFacilitator::CIRCLE` with an API key (`$bearer`), or keyless
+  The crash window between the send and the answer stays open with HTTP
+  facilitators (this one and Circle's): they give no reference before they answer.
+- Circle: `new CircleFacilitator($http, $psr17, $psr17, $bearer, $seller)`
+  (URL `CircleFacilitator::URL`), with an API key (`$bearer`), or keyless
   with the payTo key (`$seller` signs the seller proof). A pending settle is
-  polled at `/status`.
+  polled at `/status` by its `paymentId`; only this one has that route
+  (`PaymentStatus`). Still pending after polling, it answers
+  `settlement_pending` with that `paymentId`, which the ledger's lookup uses.
+
+  Migrating from 0.1.x: `HttpFacilitator::CIRCLE` is a deprecated alias of
+  `CircleFacilitator::URL`, kept so old code still compiles. Through
+  `HttpFacilitator` that URL is verify and settle only: keyless Circle needs the
+  seller proof and the `/status` poll, which only `CircleFacilitator` sends.
+  Move those callers to `new CircleFacilitator(...)`.
+
+  Migrating from 0.2.x: `HttpFacilitator` keeps the v0.2.1 argument order
+  (`$bearer`, `$seller`, `$pollDelaySeconds`, `$pollAttempts`) as a shim, and the
+  seller proof headers and the `/status` poll keep working through it. The new
+  optional `$headers` hook comes last. Passing `$seller` raises
+  `E_USER_DEPRECATED`; `$seller`, `$pollDelaySeconds` and `$pollAttempts` are
+  removed in the next major version (1.0). Use `new CircleFacilitator(...)`
+  instead, which sends the same proof and polls the same way.
 - `new ChainFacilitator(new Rpc(...), $gasWallet, 'eip155:5042002', $lock)`:
   no third party; simulates with `eth_call`, sends `transferWithAuthorization`
   from a gas wallet, waits for the receipt (`settlement_pending` keeps the hash).
@@ -84,6 +185,33 @@ an unpaid `tools/call` gets `isError` + PaymentRequired, the payment comes in
 $price = fn (array $params) => $params['name'] === 'wisdom' ? [Networks::requirements(...)] : null;
 $middleware = new X402McpMiddleware([new EvmExact()], $price, $claim, $psr17, $psr17, $settle);
 ```
+
+Optional hooks, each off by default (a tool that does not use them is sold
+exactly as without them):
+
+- `validate: fn(array $params): ?string` runs before any payment is read; a
+  reason is a JSON-RPC `-32602` error and nothing is claimed, settled or run.
+  `$price` returning NULL means *free*, so it cannot be the validation.
+- `payer: fn(array $params, string $payer): ?string` runs once the signature
+  proved who pays, before the claim: the reason it returns is the
+  PaymentRequired's `error` (your own code; for example, only the payer who
+  started a job may buy its result). A scheme that cannot name the payer is
+  `invalid_payload`.
+- `duration: fn(array $params): int` is the tool's worst case in seconds from
+  the claim until the settle is sent. An EVM signature whose `validBefore`
+  leaves less than that plus `EvmExact::SLACK` (6 s), on `EvmExact`'s clock, is
+  refused right after the offline verify (no facilitator round trip) and again
+  just before the claim, once the online verify took its time
+  (`invalid_exact_evm_payload_authorization_valid_before`,
+  the spec's code: here "too short for this tool"); a scheme
+  without `validBefore` is refused (`unsupported_scheme`) when a duration is
+  declared. Give that tool a longer `maxTimeoutSeconds`
+  (`Networks::requirements(..., $timeout)`).
+
+Upfront over MCP: once the money moved the receipt always goes back, in
+`result._meta["x402/payment-response"]`, or in
+`error.data["x402/payment-response"]` when the tool answered with a JSON-RPC
+error (a scalar `data` is kept under `data.data`).
 
 ## Buyer
 
@@ -106,10 +234,19 @@ reads the receipt from `result._meta["x402/payment-response"]`.
 that does not follow redirects, or another host gets the signed payment. The budget is a per-network cap,
 in memory, spent when it signs (a signed authorization is money the seller
 can settle) and never refunded on the seller's word. Both buyers sign only
-known tokens (`Networks`), integer amounts and validities up to 10 minutes.
+known tokens (`Networks`), integer amounts and validities up to 10 minutes
+(`Budget::fromUsd(..., maxTimeout: 170)` lowers that: never sign a validity
+longer than your HTTP client waits).
 With `Budget::usd($network, $usd, $used)`, where `$used` reads the token's
 `authorizationState` on chain, a signature the seller never settled frees
 its amount once it expires unused.
+
+Concurrent payments in one process (Fibers, ReactPHP, Amp) share the same
+`Budget` object, and the cap holds across them: `reserve()` checks the offer
+and counts it in one step before signing, and `release()` gives it back if the
+payment never left (a failed signature). The budget lives in that one process
+only: separate processes, workers or hosts each have their own cap, so a
+shared limit needs the app to store the spent totals itself.
 
 `onRefused: fn(array $req, string $reason)` on both buyers says why an offer
 was not paid (`no_scheme`, `not_allowed`, or the screening's reason).
@@ -120,8 +257,8 @@ a buyer that hangs up early may be charged for an answer it never reads.
 ## Networks
 
 Built in: the demo testnets (Base Sepolia, Arc testnet, Ethereum Sepolia,
-Avalanche Fuji, Polygon Amoy) and **Ethereum mainnet**. The library only *reads*
-Ethereum: it asks the blacklist of its USDC and USDT with an `eth_call`, which
+Avalanche Fuji, Polygon Amoy, Solana devnet), **Arc mainnet** (`eip155:5042`)
+and **Ethereum mainnet**. Ethereum is there to be *read*: the library asks the blacklist of its USDC and USDT with an `eth_call`, which
 costs no gas. Settling a payment there costs real gas, often more than a small
 price, so charge on Ethereum only for amounts that justify it. Any other chain
 is yours to add.
@@ -131,7 +268,7 @@ is yours to add.
 Any EVM chain whose token implements EIP-3009 (`transferWithAuthorization`).
 Three steps; the third is what keeps a frozen address from costing you a tool run.
 
-**1. Register the network**, once, when the site boots:
+**1. Register the network**, once, when the site boots (`blacklist:` is step 2):
 
 ```php
 Networks::add(
@@ -142,12 +279,15 @@ Networks::add(
     label: 'Base (USDC)',
     rpc: 'https://mainnet.base.org',          // used for the blacklist and for sweeping
     explorer: 'https://basescan.org/tx/',
+    blacklist: 'isBlacklisted',              // the function asked about this token's holders (step 2)
 );
 ```
 
-**2. Tell the blacklist which function to ask.** Each token names its own, and
-none is assumed: an asset that is not listed is **not asked** (it passes). The
-functions the library knows, all `(address) returns (bool)`:
+**2. Name the blacklist function**, with `blacklist:` in step 1 (a key of
+`TokenBlacklist::FUNCTIONS`). Each token names its own, and none is assumed: a
+network registered with `blacklist: null` (the default) is **not asked** (it
+passes). An unknown name throws at `add()`. The functions the library knows,
+all `(address) returns (bool)`:
 
 | Token | Function | Selector |
 |---|---|---|
@@ -156,7 +296,8 @@ functions the library knows, all `(address) returns (bool)`:
 | USDT0 | `isBlocked(address)` | `0xfbac3951` (not active, see `TokenBlacklist::TOKENS`) |
 
 `TokenBlacklist::TOKENS` already lists the native USDC of these mainnets, each
-read from a public RPC on 2026-11-03 (they are asked once you register the network):
+read from a public RPC on 2026-11-03 (Ethereum and Arc are built in; the others are
+asked once you register the network):
 
 | Chain | `eip155:` id | USDC contract |
 |---|---|---|
@@ -166,9 +307,10 @@ read from a public RPC on 2026-11-03 (they are asked once you register the netwo
 | Avalanche C-Chain | 43114 | `0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E` |
 | Optimism | 10 | `0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85` |
 | Arbitrum One | 42161 | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` |
-| Arc | 5042 | `0x3600000000000000000000000000000000000000` |
+| Arc (built in) | 5042 | `0x3600000000000000000000000000000000000000` |
 
-For any other token, name its function without editing the library:
+`$tokens` is for a token that is already registered (one added before
+`blacklist:` existed), or to override the function of one:
 
 ```php
 new TokenBlacklist($client, $requests, $streams, tokens: [
@@ -256,7 +398,8 @@ who signed) is "paid"; anything else withholds the output.
   per address, nonce, number), so `0xAB…` and `0xab…` cannot make two claims.
 - **A replay never runs the handler.** The official middlewares run it and then
   find the nonce spent; here the copy is refused first, so a replay costs the
-  seller nothing.
+  seller nothing. With a ledger, a replay of a delivered payment gets its stored
+  response back (see Payment ledger), still without running anything.
 - **A claim is freed only when nothing can have been charged** (the handler
   delivered nothing, or the facilitator clearly refused). It is kept on
   `settlement_pending`, `facilitator_unavailable`, `unexpected_settle_error`
@@ -286,8 +429,8 @@ who signed) is "paid"; anything else withholds the output.
   are refused on purpose: they bring executable bytes and unbounded gas into
   verification. Solana smart wallets and lookup tables are refused likewise.
 - Simulates with `eth_call` first and estimates gas (+20 %); `maxGasCost`
-  aborts anything dearer; one lock per network serialises the gas wallet's
-  nonce; the transaction hash is known before it is sent, so a send that times
+  aborts anything dearer (`maxGasCost`, in wei: the caller sets it, `null` is
+  no cap); one lock per network serialises the gas wallet's nonce; the transaction hash is known before it is sent, so a send that times
   out still leaves something to reconcile; the receipt must have `status 0x1`.
 - Refuses what would revert anyway: a payment that is not for our payTo,
   amount or network, an expired one, a frozen payer or payTo (see Address
@@ -315,8 +458,13 @@ who signed) is "paid"; anything else withholds the output.
   legacy USDT's) on-chain blacklist before a signature is spent.
 
 *Known limits*
-- Pending or silent settles are logged, not reconciled automatically.
-- `FileClaims` is single-host; several hosts need an atomic store.
+- Inside the middlewares, pending or silent settles are reconciled only when
+  the buyer retries and a `lookup` answers; without a lookup they stay pending
+  until their TTL. The ledger's open index lists them, but the library runs
+  nothing on a timer: the sweep is the caller's (the demo app's
+  `app:x402:reconcile`, from cron).
+- `FileClaims` and `FileLedger` are single-host; several hosts need an atomic
+  store.
 - A third-party HTTP facilitator may accept at `/verify` and still fail at
   `/settle` (state changed in between); the gas is then its cost, not ours.
   Use `ChainFacilitator` to carry that yourself.

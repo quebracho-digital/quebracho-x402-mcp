@@ -6,6 +6,10 @@
 
 # Put parameters here that don't need to change on each machine where the app is deployed
 # https://symfony.com/doc/current/best_practices.html#use-parameters-for-application-configuration
+imports:
+    # app.x402_sensitive_rules: the ways to ask for no cache (App\X402\SensitiveRules).
+    - { resource: x402_sensitive.yaml }
+
 parameters:
 
 services:
@@ -13,6 +17,11 @@ services:
     _defaults:
         autowire: true      # Automatically injects dependencies in your services.
         autoconfigure: true # Automatically registers your services as commands, event subscribers, etc.
+
+    # Each job tool's work (App\Job\JobWork), for the runner: found by the _start tool it belongs to.
+    _instanceof:
+        App\Job\JobWork:
+            tags: [app.job_work]
 
     # makes classes in src/ available to be used as services
     # this creates a service per class whose id is the fully-qualified class name
@@ -22,39 +31,152 @@ services:
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
 
+    # app:x402:check verifies X402_NETWORK has a scheme here. The list is written once (anchor x402_schemes),
+    # aliased by X402McpMiddleware below, so the check and the middleware cannot drift apart.
+    App\Command\X402CheckCommand:
+        arguments:
+            $schemes: &x402_schemes ['@Quebracho\X402\EvmExact']
+
+    # The same network check as app:x402:check, at cache:warmup (cache:clear, deploy): a bad X402_NETWORK fails the deploy.
+    App\X402\NetworkWarmer:
+        arguments:
+            $schemes: *x402_schemes
+
+    # A bad config/x402_sensitive.yaml, or a sensitive tool that is not served (a typo), at cache:warmup: the deploy fails, not the ledger.
+    App\X402\SensitiveToolsWarmer: ~
+
     # Faceted on purpose: only Quebracho's Ombú listings.
     App\Mcp\OmbuSearchTool:
         arguments:
             # Quebracho's own listings: /market?seller[ours]=ours. Not an env var: nothing at runtime changes it.
             $facet: {seller: {ours: ours}}
 
-    # Hugging Face calls (analyze_terms, app:ask --hf): at most 40 s in total, under the 60 s a signed payment lives.
+    # analyze_terms memo (TermsAnalyzer, 7 days): the same text is not sent to the model twice. Redis when X402_REDIS_URL is set,
+    # else (or when Redis does not answer) this host's files, with a warning. A cache.pool, so cache:pool:list and
+    # cache:pool:prune see it: the tag fills the factory's first two arguments (namespace, default lifetime) by position.
+    terms.cache:
+        class: Symfony\Component\Cache\Adapter\AdapterInterface
+        factory: ['App\Terms\TermsCacheFactory', 'create']
+        arguments:
+            - ~ # namespace, from the tag
+            - ~ # default lifetime, from the tag
+            - '%env(default::X402_REDIS_URL)%'
+            - '%kernel.project_dir%/var/terms-cache'
+            - '@logger'
+        tags:
+            - { name: cache.pool, namespace: terms, default_lifetime: 604800, pruneable: true }
+
+    # Hugging Face calls (analyze_terms, app:ask --hf): at most 40 s in total, inside X402_DURATIONS for analyze_terms.
     app.hf_http_client:
         class: Symfony\Contracts\HttpClient\HttpClientInterface
         factory: ['Symfony\Component\HttpClient\HttpClient', 'create']
         arguments: [{timeout: 15, max_duration: 40}]
 
-    Quebracho\X402\EvmExact: ~
+    # Paid jobs (job mode): files under var/, never cache.app (a cache:clear would wipe a paid job).
+    App\Job\FileJobStore:
+        arguments: ['%kernel.project_dir%/var/jobs']
+    App\Job\JobStore: '@App\Job\FileJobStore'
+    App\Job\JobRunner:
+        arguments:
+            $works: !tagged_iterator app.job_work
+    # Job mode's payment hooks (validate, payer, settle, sensitive below): the settle it wraps is the facilitator's.
+    App\X402\JobDesk:
+        arguments:
+            $settle: !closure '@App\X402\Facilitator'
+    # A _start refusal (settlement_pending, needs_review, an expired retry...) carries the jobId once the job exists.
+    App\X402\JobIdOnRefusal:
+        arguments:
+            $streams: '@mcp.psr17_factory'
+    # How a job's payment ended when its request is gone: the ledger, then (cron only) the token's authorizationState.
+    # In mock mode nothing moves on chain, so the chain is never asked ($facilitator "mock" drops the lookup).
+    App\X402\JobPayments:
+        arguments:
+            $authorizationUsed: !closure '@App\X402\AuthorizationState'
+            $facilitator: '%env(X402_FACILITATOR)%'
 
-    # One claim per payment, durable across processes on this host.
+    # The only EvmExact: the seller verifies with it, the buyer (PayingMcpClient below) pays with it.
+    # X402_BUYER_KEY empty: it verifies and refuses to pay (App\X402\SchemeFactory).
+    Quebracho\X402\EvmExact:
+        factory: ['App\X402\SchemeFactory', 'evmExact']
+        arguments: ['%env(default::X402_BUYER_KEY)%']
+
+    # Required by X402McpMiddleware's constructor ($claim), never called while the ledger below is set: the ledger claims instead.
     Quebracho\X402\FileClaims:
         arguments: ['%kernel.project_dir%/var/x402-claims']
+
+    # The payment ledger (claimed, settled with its response, pending): Redis when X402_REDIS_URL is set, else this host's
+    # files. Set it on every host; with Redis down the request fails, it never falls back to files (LedgerFactory).
+    Quebracho\X402\PaymentLedger:
+        factory: ['App\X402\LedgerFactory', 'create']
+        arguments:
+            $redisUrl: '%env(default::X402_REDIS_URL)%'
+            $dir: '%kernel.project_dir%/var/x402-ledger'
 
     # Settlement goes through App\X402\Facilitator: X402_FACILITATOR is
     # "mock" or a facilitator URL, never left implicit.
     Quebracho\X402\X402McpMiddleware:
         arguments:
-            $schemes: ['@Quebracho\X402\EvmExact']
+            $schemes: *x402_schemes
             $price: !closure '@App\X402\Pricing'
             $claim: !closure '@Quebracho\X402\FileClaims'
-            $settle: !closure '@App\X402\Facilitator'
+            # Through JobDesk: a _start's job row is written before its deposit settles, a _result's after (JobDesk::settle).
+            $settle: !closure ['@App\X402\JobDesk', 'settle']
+            # Replaces $claim and $release for the payment state (see the ledger above). A claim whose payment charged nothing is freed by the ledger too.
+            $ledger: '@Quebracho\X402\PaymentLedger'
             $verify: !closure ['@App\X402\Facilitator', 'verify']
-            # A claim whose payment charged nothing is freed: the buyer may retry.
-            $release: !closure ['@Quebracho\X402\FileClaims', 'release']
+            # A slow tool (X402_DURATIONS) refuses a signature that would expire before its settle.
+            $duration: !closure ['@App\X402\Pricing', 'duration']
+            # A paid name that is no registered tool, or a _start input its work would refuse: JSON-RPC -32602 before any payment is read.
+            $validate: !closure ['@App\X402\JobDesk', 'validate']
+            # Job mode: a _start needs a free slot, a _result the deposit's payer and a ready job (JobDesk::payer). Before the claim.
+            $payer: !closure ['@App\X402\JobDesk', 'payer']
             $responses: '@mcp.psr17_factory'
             $streams: '@mcp.psr17_factory'
             # AddressCheck on the payer, answered by App\X402\Screening.
             $events: '@event_dispatcher'
+            # A 'pending' payment is settled or freed by the chain (EVM receipt) or the facilitator (paymentId), not left to 409 until its TTL.
+            $lookup: !closure ['@App\X402\ReceiptLookup', '__invoke']
+            # config/x402_sensitive.yaml plus X402_SENSITIVE_TOOLS: the ledger keeps the state, never the answer (DECISIONS.md, D17, D18).
+            # Through JobDesk: a _start's answer (a job id) is always kept, a _result's follows its job (JobDesk::sensitive).
+            $sensitive: !closure ['@App\X402\JobDesk', 'sensitive']
+
+    # The 'x402' Monolog channel exists only with symfony/monolog-bundle (optional; config/packages/x402_log.php).
+    # '@?' leaves the key out of the locator without it; PaymentLog asks at runtime with has().
+    # Without the bundle, PaymentLog logs through this logger. The framework's own 'logger' (HttpKernel's) stops at
+    # 'error' unless SHELL_VERBOSITY says otherwise, so the intent and settled lines would be dropped in production.
+    app.x402_stderr_logger:
+        class: Symfony\Component\HttpKernel\Log\Logger
+        arguments: ['info', 'php://stderr', '@App\X402\PaymentLogFormatter']
+
+    App\X402\PaymentLog:
+        arguments:
+            $logger: '@app.x402_stderr_logger'
+            $channels: !service_locator
+                x402: '@?monolog.logger.x402'
+
+    # The lookup's RPC calls: 10 s, then NULL (still pending). The framework's default client has no timeout.
+    app.receipt_http_client:
+        class: Symfony\Contracts\HttpClient\HttpClientInterface
+        factory: ['Symfony\Component\HttpClient\HttpClient', 'create']
+        arguments: [{timeout: 10, max_duration: 10}]
+
+    # The lookup's RPC and facilitator calls; any failure answers NULL (still pending).
+    App\X402\ReceiptLookup:
+        arguments:
+            $http: !service
+                class: Symfony\Component\HttpClient\Psr18Client
+                arguments: ['@app.receipt_http_client']
+            $requests: '@mcp.psr17_factory'
+            $streams: '@mcp.psr17_factory'
+
+    # app:x402:reconcile: the open payments against each network's RPC, with the lookup's 10 s client.
+    App\X402\Reconciler:
+        arguments:
+            $http: !service
+                class: Symfony\Component\HttpClient\Psr18Client
+                arguments: ['@app.receipt_http_client']
+            $requests: '@mcp.psr17_factory'
+            $streams: '@mcp.psr17_factory'
 
     # Frozen in the USDC contract itself (not only OFAC): asked after Screening's
     # lists (lower priority). An RPC that cannot answer follows the same policy
@@ -81,32 +203,43 @@ services:
             - '@mcp.psr17_factory'
             - '@mcp.server.default.middleware_factory'
             - '@Quebracho\X402\X402McpMiddleware'
+            - '@App\X402\JobIdOnRefusal'
             - '@logger'
         tags: [controller.service_arguments, { name: monolog.logger, channel: mcp }]
 
     # Buyer side, for app:ask: pays paid tools in band within X402_BUDGETS and X402_MAX_PER_PAYMENT, only to X402_PAYTO_ALLOW.
     Quebracho\X402\PayingMcpClient:
         arguments:
-            # No redirects: a 307 must never carry the signed payment to another host. Waits up to 120 s: more than the 60 s a signed payment lives plus the seller's settle (the library README says so); a buyer that hangs up early can pay for an answer it never reads.
+            # No redirects: a 307 must never carry the signed payment to another host. Waits up to 180 s: more than the longest signature we offer (X402_TIMEOUTS, 120 s for analyze_terms) plus the seller's settle (the library README says so); a buyer that hangs up early can pay for an answer it never reads.
             $client: !service
                 class: Symfony\Component\HttpClient\Psr18Client
                 arguments:
                     - !service
                         class: Symfony\Contracts\HttpClient\HttpClientInterface
                         factory: ['Symfony\Component\HttpClient\HttpClient', 'create']
-                        arguments: [{max_redirects: 0, timeout: 30, max_duration: 120}]
-            $schemes:
-                - !service
-                    class: Quebracho\X402\EvmExact
-                    arguments: [!service { class: Quebracho\X402\Signer, arguments: ['%env(X402_BUYER_KEY)%'] }]
+                        arguments: [{max_redirects: 0, timeout: 30, max_duration: 180}]
+            # The same EvmExact as the seller (anchor x402_schemes), holding the buyer key.
+            $schemes: *x402_schemes
             $budget: !service
                 class: Quebracho\X402\Budget
                 factory: ['App\X402\BuyerBudget', 'create']
                 # Caps per network and per single payment, in USD, from env (JSON). A network without a cap is never paid.
                 # Expired signatures the seller never settled are freed, once the chain says so.
-                arguments: ['%env(json:X402_BUDGETS)%', '%env(json:X402_MAX_PER_PAYMENT)%', !closure '@App\X402\AuthorizationState', '%env(X402_BUYER_KEY)%']
+                # X402_BUYER_MAX_TIMEOUT: no signature lives longer than the 180 s the client below waits.
+                arguments: ['%env(json:X402_BUDGETS)%', '%env(json:X402_MAX_PER_PAYMENT)%', !closure '@App\X402\AuthorizationState', '%env(X402_BUYER_KEY)%', '%env(int:X402_BUYER_MAX_TIMEOUT)%']
             $streams: '@mcp.psr17_factory'
             $onPaid: !closure '@App\X402\Receipts'
             $onRefused: !closure ['@App\X402\Receipts', 'refused']
             # AddressCheck on payTo before signing, answered by App\X402\Screening.
             $events: '@event_dispatcher'
+
+when@test:
+    services:
+        # Served by id: the registry (App\Mcp\) matches this id although the class is outside it.
+        # app.mcp_tools must list (and Pricing charge) its #[PaidJob] tools (AppKernelTest).
+        App\Mcp\AliasedJobs:
+            class: App\Tests\X402\JobToolsFixture
+            autoconfigure: true
+        # A tagged MCP tool outside the registry: not served, so not in app.mcp_tools.
+        App\Tests\X402\InvokableJobStartFixture:
+            autoconfigure: true

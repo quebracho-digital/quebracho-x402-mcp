@@ -27,27 +27,55 @@ final class X402McpMiddleware implements MiddlewareInterface
 
     /**
      * @param Scheme[]                  $schemes
-     *                                            The schemes this seller verifies, one per chain family
+     *                                             The schemes this seller verifies, one per chain family
      * @param \Closure                  $price
-     *                                            fn(array $params): ?array — the `accepts` list for a tools/call with
-     *                                            these params (name, arguments), or NULL when the tool is free
+     *                                             fn(array $params): ?array — the `accepts` list for a tools/call with
+     *                                             these params (name, arguments), or NULL when the tool is free
      * @param \Closure                  $claim
-     *                                            fn(string $key): bool — TRUE the first time a payment is seen, FALSE
-     *                                            after; atomic and durable (FileClaims, or a DB unique key). Runs before
-     *                                            the handler, so a payment buys one delivery even before it settles.
+     *                                             fn(string $key): bool — TRUE the first time a payment is seen, FALSE
+     *                                             after; atomic and durable (FileClaims, or a DB unique key). Runs before
+     *                                             the handler, so a payment buys one delivery even before it settles.
      * @param \Closure                  $settle
-     *                                            fn(array $payment, array $req): array — a facilitator's settle result.
-     *                                            Settlement::mock() is mock mode, never implicit: nothing moves.
+     *                                             fn(array $payment, array $req): array — a facilitator's settle result.
+     *                                             Settlement::mock() is mock mode, never implicit: nothing moves.
      * @param ?EventDispatcherInterface $events
-     *                                            Dispatches an AddressCheck on the payer and a PaymentOutcome; NULL: neither
+     *                                             Dispatches an AddressCheck on the payer and a PaymentOutcome; NULL: neither
      * @param ?\Closure                 $verify
-     *                                            fn(array $payment, array $req): ?string — online check before the claim,
-     *                                            as in X402Middleware
+     *                                             fn(array $payment, array $req): ?string — online check before the claim.
+     *                                             NULL when good, or a non-empty reason; any other return or exception
+     *                                             refuses as `unexpected_verify_error`, except a FacilitatorException
+     *                                             (`facilitator_unavailable`). Nothing is claimed on a refusal, as in X402Middleware
      * @param ?\Closure                 $release
-     *                                            fn(string $key): void — frees a claim when nothing was charged
+     *                                             fn(string $key): void — frees a claim when nothing was charged
      * @param ?\Closure                 $resource
-     *                                            fn(array $params): array — the PaymentRequired's resource (url,
-     *                                            description, mimeType); default: mcp://tool/<name>
+     *                                             fn(array $params): array — the PaymentRequired's resource (url,
+     *                                             description, mimeType); default: mcp://tool/<name>
+     * @param ?\Closure                 $validate
+     *                                             fn(array $params): ?string — why these params cannot be sold, or NULL.
+     *                                             Runs before any payment is read: a reason is a JSON-RPC -32602 error,
+     *                                             nothing is claimed, settled or run (price() returning NULL means free,
+     *                                             so it cannot refuse)
+     * @param ?\Closure                 $payer
+     *                                             fn(array $params, string $payer): ?string — once the signature proved
+     *                                             who pays, why this payer cannot buy this call, or NULL; before the claim
+     * @param ?\Closure                 $duration
+     *                                             fn(array $params): int — worst-case seconds from the claim until the
+     *                                             settle is sent; a signature that expires sooner (plus EvmExact::SLACK) is
+     *                                             refused before the claim. 0 or NULL: no check (EVM validBefore only)
+     * @param ?PaymentLedger            $ledger
+     *                                             Keeps each payment's outcome: a retry gets the stored answer (replayed with
+     *                                             its receipt, the handler not run again), or an isError result with reason
+     *                                             in_progress, settlement_pending, settlement_unknown, needs_review or
+     *                                             already_settled (HTTP stays 200, as for every MCP refusal). Replaces $claim
+     *                                             and $release.
+     * @param ?\Closure                 $lookup
+     *                                             fn(array $state, array $payment, array $req): ?array — asks the chain
+     *                                             about a 'pending' payment, as in X402Middleware
+     * @param ?\Closure                 $sensitive
+     *                                             fn(array $params): bool — TRUE when this call's answer must not be kept,
+     *                                             as in X402Middleware: the state is stored, never the tool's answer.
+     *                                             Called once per paid call; throwing or any answer but FALSE counts as
+     *                                             sensitive. A retry of a settled sensitive call gets already_settled.
      */
     public function __construct(
         private readonly array $schemes,
@@ -60,6 +88,12 @@ final class X402McpMiddleware implements MiddlewareInterface
         private readonly ?\Closure $verify = null,
         private readonly ?\Closure $release = null,
         private readonly ?\Closure $resource = null,
+        private readonly ?\Closure $validate = null,
+        private readonly ?\Closure $payer = null,
+        private readonly ?\Closure $duration = null,
+        private readonly ?PaymentLedger $ledger = null,
+        private readonly ?\Closure $lookup = null,
+        private readonly ?\Closure $sensitive = null,
     ) {
     }
 
@@ -94,6 +128,12 @@ final class X402McpMiddleware implements MiddlewareInterface
             return $this->responses->createResponse(202);
         }
         $id = $message['id'];
+        $params = $message['params'];
+        // Before the buyer signs or the payment is looked at: bad params cost nothing.
+        $invalid = null !== $this->validate ? ($this->validate)($params) : null;
+        if (null !== $invalid) {
+            return $this->json(['jsonrpc' => '2.0', 'id' => $id, 'error' => ['code' => -32602, 'message' => $invalid, 'data' => ['reason' => 'invalid_params']]]);
+        }
         $resource = null !== $this->resource ? ($this->resource)($message['params']) : ['url' => 'mcp://tool/'.$message['params']['name']];
 
         $payment = $message['params']['_meta'][self::PAYMENT] ?? null;
@@ -106,37 +146,97 @@ final class X402McpMiddleware implements MiddlewareInterface
         if (false === $req) {
             return $this->required($id, $accepts, $resource, 'invalid_payment_requirements');
         }
-        $sale = new Sale($this->schemes, $this->claim, $this->settle, $this->events, $this->verify, $this->release, $payment, $req);
-        // ponytail: verify runs before the MCP session check and costs an
-        // ecrecover; rate-limit the route where it is deployed.
-        $reason = $sale->admit();
+        $payer = null !== $this->payer ? fn (string $from): ?string => ($this->payer)($params, $from) : null;
+        $sale = $this->sale($payment, $req, $payer, null !== $this->duration ? ($this->duration)($params) : 0);
+        $keep = !X402Middleware::sensitive($this->sensitive, $params);
+        $run = null;
+        $reason = null;
+        try {
+            if (null !== $this->ledger) {
+                $stored = $sale->stored($this->ledger, $this->lookup);
+                if (null !== $stored) {
+                    if (isset($stored['refuse'])) {
+                        return $this->required($id, $accepts, $resource, $stored['refuse']);
+                    }
+                    if (!isset($stored['run'])) {
+                        return $this->replay($id, $accepts, $resource, $stored['state']);
+                    }
+                    // Paid upfront, tool never ran: run it now, no second settle (the 'handling' record comes before the tool).
+                    $run = $stored['run'];
+                }
+            }
+            // ponytail: verify runs before the MCP session check and costs an
+            // ecrecover; rate-limit the route where it is deployed.
+            $reason = null === $run ? $sale->admit() : null;
+        } catch (LedgerUnavailableException) {
+            // Before the tool: nothing charged, nothing run.
+            return $this->required($id, $accepts, $resource, 'ledger_unavailable');
+        }
         if (null !== $reason) {
             return $this->required($id, $accepts, $resource, $reason);
         }
+        try {
+            return $this->charge($request, $handler, $sale, $run, $id, $accepts, $resource, $keep);
+        } finally {
+            // After the outcome is written, whatever it was: the next retry finds it.
+            $sale->endRun();
+        }
+    }
 
-        $receipt = null;
-        if ($sale->upfront()) {
+    /**
+     * Settles and runs an admitted call, or runs an upfront one already charged ($run, its run claim held).
+     *
+     * @param ?array<string, mixed> $run
+     */
+    private function charge(ServerRequestInterface $request, RequestHandlerInterface $handler, Sale $sale, ?array $run, mixed $id, array $accepts, array $resource, bool $keep): ResponseInterface
+    {
+        $receipt = $run['receipt'] ?? null;
+        if (null === $run && $sale->upfront()) {
+            // The intention is stored before the money can move: if the store refuses it, nothing is sent.
+            if (!$sale->intend($this->ledger, ['status' => 'settling', 'id' => $id])) {
+                $sale->abandon(null);
+
+                return $this->required($id, $accepts, $resource, 'ledger_unavailable');
+            }
             // Money first; once it moved, the receipt goes with whatever the tool answers.
             $receipt = $sale->settle();
+            $this->record($sale, $receipt, null, $id, false);
             if (true !== $receipt['success']) {
                 return $this->required($id, $accepts, $resource, $receipt['errorReason']);
             }
+        }
+        if (null !== $receipt && !$sale->intend($this->ledger, ['status' => 'handling', 'receipt' => $receipt, 'handler_ran' => true, 'id' => $id])) {
+            // Charged, the tool did not run: a retry runs it (the stored state still says so).
+            $sale->ran(503);
+
+            return $this->required($id, $accepts, $resource, 'ledger_unavailable');
         }
 
         try {
             $response = $handler->handle($request);
         } catch (\Throwable $e) {
-            null === $receipt ? $sale->abandon(null) : $sale->ran(500);
+            if (null === $receipt) {
+                $sale->abandon(null);
+            } else {
+                // Paid and the tool failed: stays 'settled' with handler_ran false, so a retry runs it again.
+                $this->record($sale, $receipt, null, $id, false);
+                $sale->ran(500);
+            }
             throw $e;
         }
         if (200 !== $response->getStatusCode()) {
             // The transport refused it (session, protocol): nothing ran.
-            null === $receipt ? $sale->abandon($response->getStatusCode()) : $sale->ran($response->getStatusCode());
+            if (null === $receipt) {
+                $sale->abandon($response->getStatusCode());
+            } else {
+                $this->record($sale, $receipt, null, $id, false);
+                $sale->ran($response->getStatusCode());
+            }
 
             return $response;
         }
         $delivered = null;
-        $settled = $this->rewrite($response, $id, function (array $out) use ($sale, $receipt, &$delivered): array {
+        $settled = $this->rewrite($response, $id, function (array $out) use ($sale, $id, &$receipt, &$delivered): array {
             // A JSON-RPC error or a failed tool delivered nothing: nothing charged.
             $delivered = isset($out['result']) && empty($out['result']['isError']);
             if (null === $receipt) {
@@ -144,6 +244,12 @@ final class X402McpMiddleware implements MiddlewareInterface
                     $sale->abandon(200);
 
                     return $out;
+                }
+                if (!$sale->intend($this->ledger, ['status' => 'settling', 'id' => $id])) {
+                    // Refused before the settle: nothing charged, the tool's answer is withheld.
+                    $sale->abandon(200);
+
+                    return ['receipt' => ['success' => false, 'errorReason' => 'ledger_unavailable']];
                 }
                 $receipt = $sale->settle(200);
                 if (true !== $receipt['success']) {
@@ -154,15 +260,14 @@ final class X402McpMiddleware implements MiddlewareInterface
                 // Upfront, charged: the tool failed after the money moved.
                 $sale->ran(500);
             }
-            if (isset($out['result'])) {
-                $out['result']['_meta'][self::PAYMENT_RESPONSE] = $receipt;
-            }
 
-            return $out;
+            return $this->receipted($out, $receipt);
         });
         if (null === $delivered) {
             if (null !== $receipt) {
-                // Paid upfront: the answer goes as it is.
+                // Paid upfront: the tool ran (handler_ran stays true), its answer goes as it is.
+                $this->record($sale, $receipt, null, $id);
+
                 return $response;
             }
             // ponytail: our answer is not in the body (a live stream, e.g. a tool
@@ -171,12 +276,87 @@ final class X402McpMiddleware implements MiddlewareInterface
 
             return $this->required($id, $accepts, $resource, 'unexpected_settle_error');
         }
+        // $receipt is the failed one when the settle refused, else the one this answer carries. Upfront, a tool that
+        // did not deliver (isError, a JSON-RPC error) is X402Middleware's non-2xx: 'settled' with handler_ran false,
+        // nothing kept, so a retry runs it again with no second settle.
+        $this->record($sale, $receipt, $keep && $delivered ? $response : null, $id, $delivered);
         if (isset($settled['receipt'])) {
             // Settled nothing: the spec says return only the payment error.
             return $this->required($id, $accepts, $resource, $settled['receipt']['errorReason']);
         }
 
         return $settled['response'];
+    }
+
+    /**
+     * Puts the receipt in a JSON-RPC answer: in result._meta, or in error.data (the money moved).
+     */
+    private function receipted(array $out, array $receipt): array
+    {
+        if (isset($out['result'])) {
+            $out['result']['_meta'][self::PAYMENT_RESPONSE] = $receipt;
+        } elseif (isset($out['error'])) {
+            // Upfront and the tool answered with a JSON-RPC error: the money moved,
+            // so the buyer still gets the receipt (its transaction) in error.data.
+            // An object is extended; anything else (a list, a string) is kept under "data".
+            $data = $out['error']['data'] ?? null;
+            $data = match (true) {
+                null === $data, [] === $data => [],
+                is_array($data) && !array_is_list($data) => $data,
+                default => ['data' => $data],
+            };
+            // Ours always wins: a tool must not plant its own receipt.
+            $data[self::PAYMENT_RESPONSE] = $receipt;
+            $out['error']['data'] = $data;
+        }
+
+        return $out;
+    }
+
+    /**
+     * The stored answer, with this call's id and the stored receipt.
+     */
+    private function replay(mixed $id, array $accepts, array $resource, array $state): ResponseInterface
+    {
+        $receipt = $state['receipt'];
+        $settled = $this->rewrite(Sale::restore($state['response'], $this->responses, $this->streams), $state['id'] ?? null, fn (array $out): array => $this->receipted(array_replace($out, ['id' => $id]), $receipt));
+
+        return $settled['response'] ?? $this->required($id, $accepts, $resource, 'already_settled');
+    }
+
+    private function sale(array $payment, array $req, ?\Closure $payer, int $duration): Sale
+    {
+        if (null === $this->ledger) {
+            return new Sale($this->schemes, $this->claim, $this->settle, $this->events, $this->verify, $this->release, $payment, $req, $payer, $duration);
+        }
+        $ledger = $this->ledger;
+        $ttl = Sale::ttl($payment);
+
+        return new Sale($this->schemes, fn (string $key): bool => $ledger->claim($key, $ttl), $this->settle, $this->events, $this->verify, fn (string $key) => $ledger->release($key), $payment, $req, $payer, $duration);
+    }
+
+    /**
+     * Stores what happened, when there is a ledger: a settled payment (with the answer, if any), or a
+     * pending one whose claim was kept. $id is the call's JSON-RPC id, for a replay.
+     */
+    private function record(Sale $sale, ?array $receipt, ?ResponseInterface $response, mixed $id, bool $handlerRan = true): void
+    {
+        // A null receipt (nothing settled) is never stored: the state written before the settle stands.
+        if (null === $this->ledger || null === $receipt) {
+            return;
+        }
+        $mark = $handlerRan ? [] : ['handler_ran' => false];
+        // A failed store after a settle keeps the answer, as in X402Middleware::record (the claim holds until its TTL).
+        // Any exception, not only LedgerUnavailableException: the money already moved (see X402Middleware::record).
+        try {
+            if (true === $receipt['success']) {
+                $sale->remember($this->ledger, ['status' => 'settled', 'receipt' => $receipt, 'id' => $id] + $mark, $response);
+            } elseif ($sale->held()) {
+                $sale->remember($this->ledger, ['status' => 'pending', 'receipt' => $receipt, 'id' => $id] + $mark, $response);
+            }
+        } catch (\Throwable) {
+            // ponytail: no outcome event for a lost store; the settle's PaymentOutcome already went out.
+        }
     }
 
     private function accepts(array $message): ?array
@@ -208,7 +388,10 @@ final class X402McpMiddleware implements MiddlewareInterface
             }
             [$data, $rest] = $sse ? explode("\n", $chunk, 2) + [1 => ''] : [$chunk, ''];
             $out = json_decode($data, true);
-            if (!is_array($out) || !array_key_exists('id', $out) || $out['id'] !== $id) {
+            // The answer to this call: its id, and a result or an error. A message with a method is a request
+            // of the server's own (sampling, elicitation), whose ids are another space and may equal this one.
+            if (!is_array($out) || !array_key_exists('id', $out) || $out['id'] !== $id || array_key_exists('method', $out)
+                || !(array_key_exists('result', $out) || array_key_exists('error', $out))) {
                 continue;
             }
             $out = $fn($out);

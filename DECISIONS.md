@@ -146,7 +146,130 @@ An accepted decision is never rewritten: if it changes, a new one replaces it.
 - Consequences: a payment on `eip155:1` is no longer `invalid_network`; a seller chooses its networks, so none is charged unless offered. The library has 152 tests.
 
 
-## D15 — Long-running paid work: job mode, opt-in per tool (debate of 2026-11-03, built on feat/job-mode-foundations)
+## D15 — HttpFacilitator keeps v0.2.1's settle polling for every caller; the 0.2.x signature stays as a shim until 1.0 (2026-11-04)
+
+- Status: accepted (Leo: "vamos x la 1 con paridad exacta y dejalo documentado en decisions.")
+- Context: separating Circle into `CircleFacilitator` (commit d711bc8) left `HttpFacilitator` without the v0.2.1 behaviour for callers that pass a bearer and no seller: a pending settle with a `paymentId` came back as `settlement_pending` instead of being polled at `/status`. The v0.2.1 constructor also had a different sixth parameter (`?Signer $seller`, `pollDelaySeconds`, `pollAttempts`), which 0.2.x callers could not compile against.
+- Decision:
+  - `HttpFacilitator::settle` polls `/status` whenever `/settle` answers pending with a `paymentId`, with or without `$seller` or `$bearer`, as v0.2.1 did. The generic facilitator therefore also waits, up to `pollAttempts × pollDelaySeconds` (5 s by default), in that case only.
+  - The constructor keeps v0.2.1's positional parameters (`$seller`, `$pollDelaySeconds`, `$pollAttempts`). `$seller` raises `E_USER_DEPRECATED`; the new `$headers` closure is the last parameter.
+  - A header hook that refuses (for example a seller proof that cannot be built) answers `seller_proof_failed` and frees the claim; it no longer throws out of `settle`, which had been lost in the split.
+  - The shim and the copied poll loop are removed in 1.0, together with the rest of the 0.2.x compatibility.
+- Consequences: a caller that passes a bearer to Circle through `HttpFacilitator` gets the same answer as with 0.2.1. Callers that move to `CircleFacilitator` see no difference. Tests: `FacilitatorsTest` (bearer polling, refusal freeing the claim, the 0.2.1 call with a seller). The published 0.3.0 is checked separately by `CompatibilityTest`.
+- Timing of the poll: changed by D16 (ver D16).
+
+## D16 — The first /status query goes out at once; the poll delay sits only between queries (2026-11-04)
+
+- Date: 2026-11-04
+- Status: accepted (Leo: "corrige el orden del polling")
+- Context: the poll loop slept `pollDelaySeconds` before every `/status` query, the first included. With a facilitator that returns a `paymentId` but has no `/status` route, the first query failed with an HTTP error, `FacilitatorException` ended the loop, and the settle had already waited the delay for nothing. The v0.2.1 loop had the same order; D15 copied it.
+- Decision:
+  - `HttpFacilitator::settleWithPoll` and `CircleFacilitator::settle` query `/status` immediately; `sleep($pollDelaySeconds)` runs only before each later query.
+  - Unchanged: the `$pollAttempts` limit on queries, the stop on `FacilitatorException`, the `completed`/`failed` handling, and `settlement_pending` with the `paymentId` when it is still pending.
+  - This changes the timing only. The results are D15's.
+- Consequences:
+  - D15 is partially modified in timing: a settle waits at most `(pollAttempts − 1) × pollDelaySeconds` (4 s by default, not 5 s), and not at all before the first query. The v0.2.1 wait before the first query is not kept.
+  - Tests: `testTheFirstStatusQueryGoesOutBeforeAnyDelay` uses a 60 s delay; a leading sleep would fail its elapsed-time check after a real minute. The other polling tests run with a 0 s delay, so they do not measure timing.
+
+## D17 — Sensitive requests are not cached; the memo's membership oracle is an accepted, documented risk (2026-11-04)
+
+- Date: 2026-11-04
+- Status: accepted (Leo: "podemos definir un nuevo campo que marque la sensibilidad? agentes que manejen informacion sensible, no se cachea nada? mientras aceptamos y documentamos como riesgo conocido.")
+- Context: `analyze_terms` memoises each answer for 7 days under a hash of the text (`TermsAnalyzer`, `terms.cache`), so the same text is not sent to the model twice. A memo hit answers in milliseconds, a miss takes the model's seconds: any payer can time a call and learn whether someone sent exactly that text in the last 7 days (a membership oracle). The payment ledger also keeps each delivered answer, so a retry replays it; for a sensitive call that copy is one more trace of its content.
+- Decision:
+  - Library: `X402Middleware` and `X402McpMiddleware` take an optional last parameter `?\Closure $sensitive` (`fn(ServerRequestInterface|array $params): bool`). When it marks a paid request, the ledger keeps the payment's state (claim, settling, handling, receipt) but never the response body. It is called once per paid request, before anything is stored; one that throws, or returns anything but `false`, counts as sensitive (fail-closed toward not storing). Without it nothing changes.
+  - App: `X402_SENSITIVE_TOOLS` (comma separated, empty by default) names tools whose answers the ledger never keeps (`App\X402\SensitiveTools`). A caller can also pass `sensitive: true` to `analyze_terms`: the memo is neither read nor written, the model is called directly, and the ledger keeps no copy of the answer.
+  - Not closed: the oracle stays open for texts other callers sent unmarked. A marked call protects only the one who marks it: its timing reveals nothing about other callers and it leaves no answer behind, but an unmarked text is still in the memo and still answers fast to anyone who asks without the flag. Accepted as a known risk.
+- Consequences:
+  - A retry of a sensitive payment that already settled gets `already_settled` (409 over HTTP, an isError result over MCP) instead of the answer, and the handler does not run again: the buyer must keep the first answer.
+  - Every sensitive `analyze_terms` call costs a model call, with no saving from the memo, while the price is the same.
+  - Tests: `LedgerReplayTest` (no `response` in any ledger put, retry without body, a throwing check, default and upfront flows, HTTP and MCP), `TermsAnalyzerTest` (memo untouched, model asked), `SensitiveToolsTest` (the env reaches the middleware).
+
+## D18 — The ways to ask for no cache are a dictionary of rules in YAML, checked at deploy (2026-11-04)
+
+- Date: 2026-11-04
+- Status: accepted (Leo: "te confirmo", in reply to the proposal: Pragma only as a fallback for Cache-Control, and the rules in YAML validated at deploy.)
+- Context: D17 marked a request sensitive in two hard-coded ways, a tool named in `X402_SENSITIVE_TOOLS` or `arguments.sensitive` true (`App\X402\SensitiveTools`). HTTP already has its own ways to say "do not store this" (`Cache-Control: no-store`, the older `Pragma: no-cache`), and more may come; each one should be a line of config, not a code change.
+- Decision:
+  - `app/config/x402_sensitive.yaml` lists the rules (`app.x402_sensitive_rules`), each with `kind` (`header`, `argument`, `tool`), `name`, and `value` where the kind needs one. `App\X402\SensitiveRules` evaluates them; any rule that matches makes the request sensitive.
+  - `Cache-Control` containing the `no-store` directive is sensitive. The header is parsed into directives (comma separated, spaces trimmed, any case, `name=arg` matches `name`), never searched as a substring.
+  - `Pragma: no-cache` is sensitive only as a fallback: its rule has `unless_header: Cache-Control`, so a request that carries `Cache-Control` is judged by it alone (RFC 9111, §5.4).
+  - `arguments.sensitive === true` (strict) and `X402_SENSITIVE_TOOLS` keep working: the first is a shipped `argument` rule, the second becomes one `tool` rule per name.
+  - No rule matching means not sensitive: marking only removes the ledger's copy, so the default is not to mark.
+  - The rules are validated at deploy (`SensitiveToolsWarmer` at `cache:warmup`, and `app:x402:check`): an unknown kind, an empty name, a value missing or wrong for its kind, an unexpected key, a duplicate (header names and directives compared case-insensitively, the env and the YAML together) or a `tool` rule naming no served tool fails it.
+  - The library does not change: it still only receives the decision through `$sensitive`.
+- Consequences:
+  - `header` rules read an HTTP request (`X402Middleware`); `argument` and `tool` rules read MCP params (`X402McpMiddleware`, which passes only the params, so headers on an MCP call are not seen). The app has no paid HTTP route today, so the header rules are covered by direct tests of `SensitiveRules` only.
+  - A quoted directive argument containing commas (`no-cache="a, no-store"`) can produce a stray `no-store` token and mark the request; that errs toward not storing.
+  - Tests: `SensitiveRulesTest` (headers, precedence, arguments, tools, no rule, invalid YAML, the warmer), `SensitiveToolsTest` and `SensitiveToolsWarmerTest` (the env still works).
+
+## D19 — ChainFacilitator's transaction is stored before it is sent (2026-11-04)
+
+- Date: 2026-11-04
+- Status: accepted (Leo: "si, implementa")
+- Context: `ChainFacilitator::settle` computes the transaction hash before `eth_sendRawTransaction`, but the hash reached the ledger only with the outcome. A process that died between the send and that write left `settling` with no reference: the buyer paid, a retry got `409 settlement_unknown` until the TTL, and the payment could not be reconciled from the ledger.
+- Decision:
+  - The chain reference is written before it is sent. `ChainFacilitator::settle` takes an optional `?\Closure $reference` (`fn(string $transaction): bool`) and calls it with the hash just before the send. `Settlement::run` passes it to `$settle` as a third argument; a closure that does not take it ignores it, so `Facilitator` and the existing closures do not change.
+  - `Sale` gives that callback: it adds `receipt.transaction` to the `settling` state `intend()` already wrote, through the same `intend()`.
+  - A write that fails sends nothing: the callback returning false or throwing gives `reference_unavailable` with no transaction, the claim is freed, HTTP answers `503 ledger_unavailable` and MCP an `isError` result.
+  - A `settling` or `pending` state with a transaction lives 24 h (`Sale::REFERENCED_TTL`, 86400 s) instead of `min(600, validBefore − now)`. States without one keep that TTL.
+  - The residual window stays open, and documented, for HTTP facilitators (`HttpFacilitator`, `CircleFacilitator`): they return no reference before they answer.
+  - Reconciliation (finding and resolving the payments stuck in `settling` or `pending`) is separate work.
+- Consequences:
+  - Each chain settle writes the ledger one more time, inside the network lock, before the send.
+  - The 24 h covers the time for a buyer's retry or a person to reconcile with the hash after a crash or an unconfirmed send. The 600 s TTL let that reference go before anyone could use it. A key that lives longer also keeps the claim longer, which can only block a second charge, never allow one. The cost is ledger space for those few states.
+  - A `$settle` closure that wraps `ChainFacilitator` without passing the third argument gets the old behaviour. The README says to pass `$chain->settle(...)`.
+  - Tests: `FacilitatorsTest::testChainHandsTheReferenceOverBeforeSendingAndSendsNothingWithoutIt`, and in `LedgerReplayTest` the crash after the send, the retry asking the lookup about that transaction, a refused reference over HTTP and MCP (no send), and the TTLs.
+
+## D20 — An open index of unresolved payments, and a reconciler that corrects it with the chain (2026-11-05)
+
+- Date: 2026-11-05
+- Status: accepted. Decidido por Leo (2026-11-05 05:39): "acepto d20". Implemented on request of the working session; the real-node test against testnet is still pending Leo's go-ahead for testnet payments.
+- Context: D19 left reconciliation as separate work. A process that dies after the settle went out leaves `settling` or `pending` (with a transaction or not): the buyer may have paid and got nothing, a retry gets `settlement_unknown` or `settlement_pending` until the TTL, and nobody looks at those states.
+- Decision:
+  - `PaymentLedger` gets `open(key, ref, ttl)`, `openKeys(limit)` and `close(key)`; `release()` closes the entry too. `FileLedger` keeps one `<sha256>.open` file per key next to its state (`prune()` leaves them alone); `RedisLedger` keeps the ref under `x402:open:<key>` with its own TTL and the key in the set `x402:open` (`openKeys` samples it with SRANDMEMBER and drops members whose ref expired). The ledger stamps `opened` on the first open and keeps it on later ones.
+  - The ref is the minimum to ask the chain: network, asset, from, nonce, payTo, amount, validBefore, transaction, paymentId, the status, and `upfront`. Never a signature nor a body.
+  - `Sale` opens the key whenever it writes `settling` (with or without a transaction) or `pending`, and closes it when it writes `settled` or `delivered` (`remember()` and the lookup's `confirm()`). The entry lives `Sale::OPEN_TTL`, 3 days: 24 h to resolve it, then visible as needs_review.
+  - An open that fails throws. While writing `settling` (`intend()`) that refuses the write, so nothing is sent: 503 `ledger_unavailable` over HTTP, an `isError` over MCP, the rule for a `settling` the ledger refuses. After a settle (`pending`) the middlewares' `record()` drops the error: the index never blocks a payment whose money moved. A close that fails is dropped; the reconciler finds the state settled and closes it.
+  - `App\X402\Reconciler` (`app:x402:reconcile [--limit=100]`, cron every 5 minutes, not set up by us) never delivers nor charges. Per open key, all RPC questions first, then at most one write:
+
+    | Chain | Result |
+    |---|---|
+    | state already settled, delivered, handling or claimed | entry closed, `untouched` |
+    | `authorizationState` true, our transaction mined with status `0x1` | `settled` with that transaction, closed |
+    | true, our transaction `0x0` | `needs_review`, nothing freed |
+    | true, no transaction (or ours not mined): `AuthorizationUsed(from, nonce)` found by `eth_getLogs` | `settled` with its `transactionHash`, closed |
+    | true, no event in the window | `needs_review` |
+    | false, `validBefore + 60 s` passed | `released` (state deleted, entry closed) |
+    | false, still valid | `untouched` |
+    | any RPC call failed | `untouched`, nothing changed |
+    | network without `rpc` | `rpc_error` |
+    | not EIP-3009 (Solana, NEAR) or a ref without from/nonce/asset | `untouched` (by hand) |
+    | `untouched` or `rpc_error` and open more than 24 h | `needs_review`, logged |
+
+  - The `settled` it writes is the one `Sale::confirm()` writes: the receipt `{success, transaction, network, payer}` normalised by `Settlement::settled`, `delivered` when a response was kept, `handler_ran: false` for an upfront payment, and `Sale::ttl` (until validBefore, at most 600 s).
+  - `eth_getLogs` looks at the last 10,000 blocks (`Reconciler::LOG_BLOCKS`): the range public nodes and most providers accept in one call, about 5.5 h on Base and 33 h on Ethereum. The event is mined before validBefore, so a cron that runs every 5 minutes finds it.
+- Consequences:
+  - `PaymentLedger` has three more methods: any ledger written outside this repo must implement them (a breaking change of the library's interface).
+  - A default-flow payment the reconciler settles answers `already_settled` to a retry: it cannot reproduce an answer that was not kept. An upfront one runs its handler on a retry while the signature is valid; after `validBefore` the offline verify refuses the retry, as it does after `confirm()`.
+  - `needs_review` is not resolved by anything: a person reads the log or the table and checks the explorer. A key the cron does not reach for longer than the window above is `needs_review` too.
+  - The re-read before the write is not atomic: a retry that writes between it and ours is overwritten (a lost replay copy, never a second charge), and the next run sees the result.
+  - Each `settling` or `pending` write costs one more ledger write (two Redis calls, one more file).
+  - Tested against a scripted node only; no real RPC was asked. Tests: `FileLedgerTest` and `RedisLedgerTest` (open, openKeys, close, release, expiry), `LedgerReplayTest` (open with the transaction after a crash, closed once delivered, pending opened, an open that fails sends nothing), `ReconcilerTest` (each row of the table), `X402ReconcileCommandTest`.
+
+## D21 — The buyer's cap is reserved before signing; a payment that fails before it is sent gives its amount back (2026-11-05)
+
+- Status: accepted (Leo, through the docs session: "que Budget reserve el monto de forma atómica antes de firmar, y que libere la reserva si el pago falla")
+- Context: the buyer ran choose (allows) → sign → spend. Two payments concurrent in one process could both pass allows() before either spent, so the total could exceed the cap by up to N payments. Reachable only with a Fiber-aware PSR-18 client: Solana and NEAR make RPC calls between choose and spend, and the address screening can block on a lookup. Separately, two concurrent reclaim() calls could free the same unsettled signature twice.
+- Decision:
+  - `Budget::reserve()` checks the cap and adds the amount in one synchronous step, and returns false without changing anything when it does not fit. Nothing is signed or sent for a refused reservation.
+  - `Budget::release()` gives the amount back when signing or encoding fails before the request leaves. A payment that may have reached the seller keeps its reservation, as before (`unsettled()` and `reclaim()`).
+  - `reclaim()` removes an entry before asking the chain, skips entries another reclaim has taken, and restores the entry if the lookup throws.
+  - The budget lives in one process. Separate processes, workers or hosts each have their own cap; a shared limit needs the application to store the spent totals.
+- Consequences: no public method of the library is removed (tests/CompatibilityTest.php). Tests: `BudgetTest` (reserve, release, concurrent reclaims), `PayingHttpClientTest` (a payment that cannot be sent gives its reservation back; five concurrent payments never pass the cap).
+
+## D22 — Long-running paid work: job mode, opt-in per tool (debate of 2026-11-03, built on feat/job-mode-foundations)
+- Number: written as D15 on main while D15 to D21 were taken on feat/job-mode-foundations; numbered D22 at the merge, text unchanged. The protocol as built is in docs/job-mode.md.
 - Context: `analyze_terms` calls a model for 5 to 40 s, and the signed authorization lives 60 s. MCP progress notifications cannot ride on the paid response: the PHP SDK streams it after our middleware returned, so the middleware cannot settle what it has not seen (it fails closed, a test pins it). The official x402 specs (core v2, transports-v2/mcp.md) say nothing about progress, long-running or async paid work; `paymentFlow=upfront` and `upto`/`escrow` are the closest. Five experts (Symfony, x402, Drupal/Ombú, architect, process) debated it in two rounds and converged; Leo approved ("si, aprueba").
 - Decision:
   - Job mode is opt-in per tool, by a flag (`#[PaidJob(role: start|result)]`), never by name. A job is two ordinary paid tools: `<tool>_start` (a deposit with `paymentFlow=upfront`) and `<tool>_result(jobId)` (the rest, normal settle-after-success, signed only when the result exists). Fast tools keep the single-payment flow, untouched (a regression test pins it).

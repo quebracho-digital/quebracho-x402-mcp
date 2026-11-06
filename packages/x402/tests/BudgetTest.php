@@ -30,6 +30,17 @@ final class BudgetTest extends TestCase
         self::assertTrue(Budget::fromUsd(['eip155:5042' => '0.05'])->allows(Networks::requirements('eip155:5042', '0.01', '0x000000000000000000000000000000000000dEaD')));
     }
 
+    public function testABuyerSignsNoLongerThanItWaits(): void
+    {
+        $budget = Budget::fromUsd(['eip155:84532' => '0.05'], maxTimeout: 170);
+        self::assertTrue($budget->allows(['maxTimeoutSeconds' => 170] + self::offer()));
+        self::assertFalse($budget->allows(['maxTimeoutSeconds' => 171] + self::offer()));
+        // Never above MAX_TIMEOUT, whatever it is given.
+        self::assertFalse(Budget::fromUsd(['eip155:84532' => '0.05'], maxTimeout: 9999)->allows(['maxTimeoutSeconds' => Budget::MAX_TIMEOUT + 1] + self::offer()));
+        self::assertTrue(Budget::fromUsd(['eip155:84532' => '0.05'])->allows(['maxTimeoutSeconds' => Budget::MAX_TIMEOUT] + self::offer()));
+        self::assertTrue($budget->allows(['maxTimeoutSeconds' => 1] + self::offer()), 'one second is the shortest validity');
+    }
+
     /** What a hostile seller can put in its PaymentRequired. */
     public static function hostile(): iterable
     {
@@ -110,6 +121,60 @@ final class BudgetTest extends TestCase
         }
         $budget->reclaim();
         self::assertSame('20000', $budget->spent('eip155:84532'), 'used, freed, still valid');
+    }
+
+    public function testReserveRefusesWhatWouldPassTheCapAndChangesNothing(): void
+    {
+        $budget = Budget::usd('eip155:84532', '0.015');
+        self::assertTrue($budget->reserve(self::offer()));
+        self::assertSame('10000', $budget->spent('eip155:84532'));
+        self::assertFalse($budget->reserve(self::offer()), '0.02 would pass the 0.015 cap');
+        self::assertSame('10000', $budget->spent('eip155:84532'), 'a refused reserve counts nothing');
+        self::assertFalse($budget->reserve(['amount' => 'abc'] + self::offer()), 'whatever allows() refuses');
+        self::assertSame('10000', $budget->spent('eip155:84532'));
+    }
+
+    public function testReleaseGivesBackExactlyTheReservedAmount(): void
+    {
+        $budget = Budget::usd('eip155:84532', '0.05');
+        $budget->reserve(self::offer());
+        $small = Networks::requirements('eip155:84532', '0.003', '0x000000000000000000000000000000000000dEaD');
+        $budget->reserve($small);
+        self::assertSame('13000', $budget->spent('eip155:84532'));
+        $budget->release($small);
+        self::assertSame('10000', $budget->spent('eip155:84532'));
+        $budget->release(self::offer());
+        self::assertSame('0', $budget->spent('eip155:84532'));
+    }
+
+    public function testConcurrentReclaimsFreeASignatureOnce(): void
+    {
+        $now = 2000;
+        // The chain lookup suspends, as a Fiber-aware HTTP client would.
+        $used = function (): bool {
+            \Fiber::suspend();
+
+            return false;
+        };
+        $budget = new Budget(['eip155:84532' => '50000'], $used, function () use (&$now) { return $now; });
+        foreach (['0xaaa', '0xbbb'] as $from) {
+            $budget->spend(self::offer());
+            $budget->unsettled(self::offer(), ['payload' => ['authorization' => ['from' => $from, 'nonce' => '0x01', 'validBefore' => '1000']]]);
+        }
+        // A third, still-spent payment: a double free would hide inside a total of 0.
+        $budget->spend(self::offer());
+        $fibers = [new \Fiber($budget->reclaim(...)), new \Fiber($budget->reclaim(...))];
+        foreach ($fibers as $f) {
+            $f->start();
+        }
+        while (array_filter($fibers, fn (\Fiber $f) => !$f->isTerminated())) {
+            foreach ($fibers as $f) {
+                if ($f->isSuspended()) {
+                    $f->resume();
+                }
+            }
+        }
+        self::assertSame('10000', $budget->spent('eip155:84532'), 'two freed once each, the third still spent');
     }
 
     public function testChooseSaysWhyAnOfferIsNotPaid(): void

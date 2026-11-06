@@ -18,8 +18,9 @@ use Psr\Http\Message\StreamFactoryInterface;
  * RPC (`Networks`), about the requirement's own asset.
  *
  * Each token names its own function, and none is assumed: TOKENS lists the
- * ones checked on chain, `network|asset` => function. **An asset not in the
- * list is not asked** (it passes), so add yours with `$tokens`. Only EVM
+ * ones checked on chain, `network|asset` => function, and a network registered
+ * with Networks::add($blacklist) names its token's. **An asset in neither is
+ * not asked** (it passes); `$tokens` adds or overrides one. Only EVM
  * networks; Solana and NEAR pass untouched (their freeze state lives elsewhere).
  *
  * A node that cannot answer, or a token that lacks the function, throws, which
@@ -61,8 +62,8 @@ final class TokenBlacklist
         'eip155:1|0xdac17f958d2ee523a2206206994597c13d831ec7' => 'isBlackListed',
         // Circle's native USDC on mainnets (2026-11-03: name() "USD Coin" (Arc: "USDC"),
         // version() "2", 6 decimals; isBlacklisted answered, a made-up selector reverted).
-        // Only asked once the network is registered (Networks::add), so listing them
-        // makes no mainnet a built-in network.
+        // Listing them is what screens the token; whether its network is built in is Networks' decision
+        // (Base, Solana and Arc mainnets are; the others are registered with Networks::add).
         'eip155:1|0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48' => 'isBlacklisted',
         'eip155:8453|0x833589fcd6edb6e08f4c7c32d4f71b54bda02913' => 'isBlacklisted',
         'eip155:137|0x3c499c542cef5e3811e1192ce70d8cc03d5c3359' => 'isBlacklisted',
@@ -101,7 +102,7 @@ final class TokenBlacklist
     public function __invoke(AddressCheck $check): void
     {
         $asset = (string) ($check->req['asset'] ?? '');
-        $function = $this->tokens[strtolower($check->network.'|'.$asset)] ?? null;
+        $function = $this->tokens[strtolower($check->network.'|'.$asset)] ?? $this->declared($check->network, $asset);
         if (null === $function || !str_starts_with($check->network, 'eip155:')) {
             return;
         }
@@ -129,5 +130,16 @@ final class TokenBlacklist
         if (0 !== gmp_cmp(Rpc::number($answer), 0)) {
             $check->reject('address_blacklisted');
         }
+    }
+
+    /**
+     * The function a network declared with Networks::add($blacklist) for its own token, or NULL.
+     */
+    private function declared(string $network, string $asset): ?string
+    {
+        $registered = Networks::find($network) ?? [];
+        $function = $registered['blacklist'] ?? null;
+
+        return is_string($function) && strtolower((string) ($registered['asset'] ?? '')) === strtolower($asset) ? $function : null;
     }
 }

@@ -64,19 +64,42 @@ final class PayingHttpClient implements ClientInterface
         // The first offer we have a scheme for and the budget allows.
         foreach ($required['accepts'] ?? [] as $req) {
             [$scheme, $reason] = $this->budget->choose($this->schemes, $req, $this->events);
+            // Checked again and counted in one step: the screening may have yielded, and
+            // payments running concurrently on this budget must not all pass the cap.
+            if (null === $reason && !$this->budget->reserve($req)) {
+                $reason = 'not_allowed';
+            }
             if (null !== $reason) {
-                $this->onRefused?->__invoke(is_array($req) ? $req : [], $reason);
+                try {
+                    $this->onRefused?->__invoke(is_array($req) ? $req : [], $reason);
+                } catch (\Throwable) {
+                    // ponytail: a failing refusal callback is dropped; the 402 still goes to the caller.
+                }
                 continue;
             }
-            // Spent when signed: a signed authorization is money the seller can
-            // settle on its own, whatever it answers. Never refunded here.
-            $this->budget->spend($req);
-            $payment = $scheme->pay($required, $req);
-            // The same request, paid: the body is read again from the start.
-            if ($request->getBody()->isSeekable()) {
-                $request->getBody()->rewind();
+            // Reserved, then signed: a signed authorization is money the seller can settle
+            // on its own, whatever it answers.
+            try {
+                $payment = $scheme->pay($required, $req);
+                // The same request, paid: the body is read again from the start.
+                if ($request->getBody()->isSeekable()) {
+                    $request->getBody()->rewind();
+                }
+                $signed = $request->withHeader(PaymentHeaders::SIGNATURE, PaymentHeaders::encode($payment));
+            } catch (\Throwable $e) {
+                // Never left this process: a failed signature spends nothing.
+                $this->budget->release($req);
+
+                throw $e;
             }
-            $paid = $this->client->sendRequest($request->withHeader(PaymentHeaders::SIGNATURE, PaymentHeaders::encode($payment)));
+            try {
+                $paid = $this->client->sendRequest($signed);
+            } catch (\Throwable $e) {
+                // It may have reached the seller: kept as unsettled, to be reclaimed once expired.
+                $this->budget->unsettled($req, $payment);
+
+                throw $e;
+            }
             $receipt = $paid->getHeaderLine(PaymentHeaders::RESPONSE);
             try {
                 $receipt = '' === $receipt ? null : PaymentHeaders::decode($receipt);
@@ -84,7 +107,12 @@ final class PayingHttpClient implements ClientInterface
                 $receipt = null;
             }
             if (($receipt['success'] ?? null) === true) {
-                $this->onPaid?->__invoke($req, $receipt);
+                // The payment happened: a callback that fails must not cost the paid answer.
+                try {
+                    $this->onPaid?->__invoke($req, $receipt);
+                } catch (\Throwable) {
+                    // ponytail: errors of a logging callback are dropped, as Sale::outcome drops them.
+                }
             } else {
                 $this->budget->unsettled($req, $payment);
             }

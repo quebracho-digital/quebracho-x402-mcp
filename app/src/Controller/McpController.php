@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
+use App\X402\JobIdOnRefusal;
 use Mcp\Server;
 use Mcp\Server\Transport\StreamableHttpTransport;
 use Psr\Http\Message\ResponseFactoryInterface;
@@ -30,6 +31,7 @@ final class McpController
         private readonly StreamFactoryInterface $streamFactory,
         private readonly MiddlewareFactory $middlewareFactory,
         private readonly X402McpMiddleware $x402,
+        private readonly JobIdOnRefusal $jobIds,
         private readonly ?LoggerInterface $logger = null,
     ) {
     }
@@ -41,8 +43,9 @@ final class McpController
             $this->responseFactory,
             $this->streamFactory,
             logger: $this->logger,
-            // After CORS and DNS rebinding protection: a list replaces the SDK defaults.
-            middleware: [...($this->middlewareFactory->create() ?? StreamableHttpTransport::defaultMiddleware()), $this->x402],
+            // After CORS and DNS rebinding protection: a list replaces the SDK defaults. JobIdOnRefusal wraps the
+            // x402 middleware: it adds the jobId to a `_start` refusal once the job row exists.
+            middleware: [...($this->middlewareFactory->create() ?? StreamableHttpTransport::defaultMiddleware()), $this->jobIds, $this->x402],
         );
 
         $psrResponse = $this->server->run($transport);

@@ -7,6 +7,7 @@ namespace Quebracho\X402\Tests;
 use Nyholm\Psr7\Factory\Psr17Factory;
 use Nyholm\Psr7\Response;
 use Nyholm\Psr7\ServerRequest;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Psr\Http\Message\ResponseInterface;
@@ -28,6 +29,8 @@ use Quebracho\X402\X402Middleware;
  */
 final class SaleTest extends TestCase
 {
+    use TempClaims;
+
     private int $runs = 0;
     /** @var list<PaymentOutcome> */
     private array $outcomes = [];
@@ -36,7 +39,7 @@ final class SaleTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->claims = new FileClaims(sys_get_temp_dir().'/x402-claims-'.bin2hex(random_bytes(8)));
+        $this->claims = new FileClaims($this->claimsDir());
         $this->req = Networks::requirements('eip155:84532', '0.01', '0x000000000000000000000000000000000000dEaD');
     }
 
@@ -104,6 +107,49 @@ final class SaleTest extends TestCase
         $this->assertSame(200, $this->middleware(fn () => self::tx())->process($request, $this->handler())->getStatusCode());
     }
 
+    public function testAVerifyThatPassesWithNullTakesTheClaim(): void
+    {
+        $this->assertSame(200, $this->middleware(fn () => self::tx(), verify: fn () => null)->process($this->paid(), $this->handler())->getStatusCode());
+    }
+
+    /** @return iterable<string, array{mixed}> */
+    public static function badVerdicts(): iterable
+    {
+        yield 'an empty string' => [''];
+        yield 'false' => [false];
+        yield 'an array' => [['reason' => 'x']];
+        yield 'an int' => [0];
+    }
+
+    #[DataProvider('badVerdicts')]
+    public function testAVerdictThatIsNotNullOrAReasonRefusesAsUnexpected(mixed $verdict): void
+    {
+        $request = $this->paid();
+        $refused = $this->middleware(fn () => self::tx(), verify: fn () => $verdict)->process($request, $this->handler());
+        $this->assertSame([402, 0], [$refused->getStatusCode(), $this->runs]);
+        $this->assertSame('unexpected_verify_error', json_decode((string) $refused->getBody(), true)['error']);
+        $this->assertSame('rejected', end($this->outcomes)->status);
+        $this->assertSame(200, $this->middleware(fn () => self::tx())->process($request, $this->handler())->getStatusCode());
+    }
+
+    public function testAVerifyThatThrowsRefusesWithUnexpectedVerifyErrorNotA500(): void
+    {
+        $request = $this->paid();
+        $refused = $this->middleware(verify: fn () => throw new \RuntimeException('boom'))->process($request, $this->handler());
+        $this->assertSame([402, 0], [$refused->getStatusCode(), $this->runs]);
+        $this->assertSame('unexpected_verify_error', json_decode((string) $refused->getBody(), true)['error']);
+        $this->assertSame('rejected', end($this->outcomes)->status);
+        // The claim was never taken: the same payment, once the check passes, still buys.
+        $this->assertSame(200, $this->middleware(fn () => self::tx())->process($request, $this->handler())->getStatusCode());
+    }
+
+    public function testTheVerifyExceptionReachesTheOutcome(): void
+    {
+        $this->middleware(verify: fn () => throw new \RuntimeException('boom'))->process($this->paid(), $this->handler());
+        $outcome = end($this->outcomes);
+        $this->assertSame(['rejected', 'unexpected_verify_error', 'boom', \RuntimeException::class], [$outcome->status, $outcome->reason, $outcome->error?->getMessage(), $outcome->error::class]);
+    }
+
     public function testNothingChargedFreesTheClaim(): void
     {
         $request = $this->paid();
@@ -137,6 +183,17 @@ final class SaleTest extends TestCase
         $this->middleware(fn () => ['success' => false, 'errorReason' => 'invalid_settle_response'])->process($request, $this->handler());
         $again = $this->middleware(fn () => self::tx())->process($request, $this->handler());
         $this->assertSame('duplicate_settlement', json_decode((string) $again->getBody(), true)['error']);
+    }
+
+    public function testEveryFailureThatMayHaveMovedKeepsTheClaim(): void
+    {
+        // The public list is the one Sale follows: a seller deciding "nothing moved" with it agrees with the claim.
+        foreach (Settlement::MAY_HAVE_MOVED as $reason) {
+            $request = $this->paid();
+            $this->middleware(fn () => ['success' => false, 'errorReason' => $reason])->process($request, $this->handler());
+            $again = $this->middleware(fn () => self::tx())->process($request, $this->handler());
+            $this->assertSame('duplicate_settlement', json_decode((string) $again->getBody(), true)['error'], $reason);
+        }
     }
 
     public function testUpfrontRecordsAHandlerThatThrowsAfterSettling(): void

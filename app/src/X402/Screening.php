@@ -185,7 +185,7 @@ final class Screening
             return [];
         }
 
-        return array_flip(preg_split('/\s+/', $text, -1, \PREG_SPLIT_NO_EMPTY));
+        return array_flip(preg_split('/\s+/', $text, -1, \PREG_SPLIT_NO_EMPTY) ?: []);
     }
 
     /**

@@ -111,6 +111,52 @@ final class SolanaExactTest extends TestCase
         }
     }
 
+    public function testTheEnvelopeAndTheEchoedOfferMustBeOurs(): void
+    {
+        $req = $this->req();
+        $seller = new SolanaExact();
+        $cases = [
+            'version 1' => [['x402Version' => 1], $req, 'invalid_x402_version'],
+            'version as a string' => [['x402Version' => '2'], $req, 'invalid_x402_version'],
+            'another scheme' => [['accepted' => ['scheme' => 'upto'] + $req], $req, 'invalid_scheme'],
+            'another network' => [['accepted' => ['network' => 'solana:4uhcVJyU9pJkvQyS88uRDiswHXSCkY3z'] + $req], $req, 'invalid_network'],
+            'requirements without a fee payer' => [[], ['extra' => ['recentBlockhash' => $req['extra']['recentBlockhash']]] + $req, 'invalid_payment_requirements'],
+            'echoed asset' => [['accepted' => ['asset' => 'So11111111111111111111111111111111111111112'] + $req], $req, 'invalid_payload'],
+            'echoed payTo' => [['accepted' => ['payTo' => 'BqRWCWor1ZqdnKPzuQXB6TdqDp1bzpkEx5UDasMM2KSu'] + $req], $req, 'invalid_payload'],
+            'echoed amount' => [['accepted' => ['amount' => '1'] + $req], $req, 'invalid_payload'],
+        ];
+        foreach ($cases as $case => [$change, $wanted, $reason]) {
+            $this->assertSame($reason, $seller->verify($change + $this->pay($req), $wanted), $case);
+        }
+    }
+
+    public function testAProgramOutsideTheAllowListIsRefused(): void
+    {
+        $req = $this->req();
+        // Key 4 is the mint: called as a program, it is none of compute budget, token or memo.
+        $payment = $this->forged($req, fn (string $m) => self::appendInstructions($m, "\x04\x00\x00"));
+        $this->assertSame('invalid_exact_svm_payload_transaction_instructions', (new SolanaExact())->verify($payment, $req));
+    }
+
+    public function testSevenInstructionsAtMost(): void
+    {
+        $req = $this->req();
+        // SetComputeUnitPrice, allowed on its own: only the count is in question.
+        $price = "\x06\x00\x09\x03".pack('P', 1);
+        $seven = $this->forged($req, fn (string $m) => self::appendInstructions($m, $price, $price, $price));
+        $this->assertNull((new SolanaExact())->verify($seven, $req));
+        $eight = $this->forged($req, fn (string $m) => self::appendInstructions($m, $price, $price, $price, $price));
+        $this->assertSame('invalid_exact_svm_payload_transaction_instructions_length', (new SolanaExact())->verify($eight, $req));
+    }
+
+    public function testASecondTransferIsRefused(): void
+    {
+        $req = $this->req();
+        $transfer = "\x05\x04\x02\x04\x03\x01\x0a\x0c".pack('P', (int) $req['amount']).chr(6);
+        $payment = $this->forged($req, fn (string $m) => self::appendInstructions($m, $transfer));
+        $this->assertSame('invalid_exact_svm_payload_transaction_instructions_length', (new SolanaExact())->verify($payment, $req));
+    }
+
     public function testOnePaymentOneClaimWhateverTheFeePayerSlotHolds(): void
     {
         $payment = $this->pay($this->req());
@@ -144,5 +190,16 @@ final class SolanaExactTest extends TestCase
         $at = strpos($message, "\x05\x04\x02\x04\x03\x01");
 
         return substr_replace($message, "\x05\x04".implode('', array_map('chr', $accounts)), $at, 6);
+    }
+
+    /**
+     * Appends compiled instructions to a v0 message we built: eight keys, so the instruction count sits at byte 293
+     * and is one byte; the message ends with an empty lookup-table list.
+     */
+    private static function appendInstructions(string $message, string ...$instructions): string
+    {
+        $count = ord($message[293]) + count($instructions);
+
+        return substr($message, 0, 293).chr($count).substr($message, 294, -1).implode('', $instructions)."\x00";
     }
 }

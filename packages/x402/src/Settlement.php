@@ -11,6 +11,14 @@ namespace Quebracho\X402;
 final class Settlement
 {
     /**
+     * Settle failures after which the money may still move: a broadcast not confirmed yet, a facilitator that
+     * went silent after it may have sent, an answer that cannot be read. Sale keeps the payment's claim for
+     * exactly these (and for any failure that carries a transaction); every other failure moved nothing.
+     * Public so a seller that wraps the settle (a job store, say) decides "nothing moved" with the same list.
+     */
+    public const MAY_HAVE_MOVED = ['settlement_pending', Sale::UNAVAILABLE, 'unexpected_settle_error', 'invalid_settle_response'];
+
+    /**
      * The payment's identity: what the chain spends once, not its signature.
      *
      * EVM: network + payer + EIP-3009 nonce (re-signing the same nonce must
@@ -54,12 +62,15 @@ final class Settlement
     /**
      * A receipt; success only when the facilitator said `success: true`.
      *
-     * @param \Closure $settle fn(array $payment, array $req): array
+     * @param \Closure  $settle    fn(array $payment, array $req): array
+     * @param ?\Closure $reference fn(string $transaction): bool, given to $settle as a third argument: a closure
+     *                             that takes it (ChainFacilitator's settle(...)) stores its reference before sending;
+     *                             one that does not ignores it (PHP drops extra arguments)
      */
-    public static function run(\Closure $settle, array $payment, array $req): array
+    public static function run(\Closure $settle, array $payment, array $req, ?\Closure $reference = null): array
     {
         try {
-            $receipt = $settle($payment, $req);
+            $receipt = null === $reference ? $settle($payment, $req) : $settle($payment, $req, $reference);
         } catch (FacilitatorException) {
             // Not the buyer's fault: the HTTP transport answers 502. It may have sent the
             // transaction before going silent, so the claim is kept.
@@ -68,7 +79,7 @@ final class Settlement
             $receipt = null;
         }
         if (is_array($receipt) && ($receipt['success'] ?? null) === true) {
-            return $receipt;
+            return self::settled($receipt);
         }
         $reason = is_array($receipt) && is_string($receipt['errorReason'] ?? null) ? $receipt['errorReason'] : 'unexpected_settle_error';
         // Kept so a broadcast that has not confirmed yet (settlement_pending) can be reconciled.
@@ -77,5 +88,42 @@ final class Settlement
         $failed = ['success' => false, 'errorReason' => $reason, 'transaction' => $tx, 'network' => $req['network']];
 
         return is_array($receipt) && is_string($receipt['paymentId'] ?? null) ? $failed + ['paymentId' => $receipt['paymentId']] : $failed;
+    }
+
+    /**
+     * A settled receipt with the spec's fields, each of its type, in this order. A field of another
+     * type is dropped; so are extensions that JSON cannot encode (INF, too deep): the money moved,
+     * so success stays and the header encode must not throw later.
+     */
+    public static function settled(array $receipt): array
+    {
+        $out = ['success' => true];
+        foreach (['transaction', 'network'] as $field) {
+            if (is_string($receipt[$field] ?? null)) {
+                $out[$field] = $receipt[$field];
+            }
+        }
+        if (array_key_exists('payer', $receipt) && (is_string($receipt['payer']) || null === $receipt['payer'])) {
+            $out['payer'] = $receipt['payer'];
+        }
+        foreach (['errorReason', 'errorMessage', 'paymentId'] as $field) {
+            if (is_string($receipt[$field] ?? null)) {
+                $out[$field] = $receipt[$field];
+            }
+        }
+        // Atomic units, a non-negative integer as a string (an int could already have lost precision).
+        if (is_string($receipt['amount'] ?? null) && 1 === preg_match('/^\d+$/D', $receipt['amount'])) {
+            $out['amount'] = $receipt['amount'];
+        }
+        if (array_key_exists('extensions', $receipt)) {
+            try {
+                json_encode($receipt['extensions'], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+                $out['extensions'] = $receipt['extensions'];
+            } catch (\JsonException) {
+                // Dropped: the receipt still settles.
+            }
+        }
+
+        return $out;
     }
 }

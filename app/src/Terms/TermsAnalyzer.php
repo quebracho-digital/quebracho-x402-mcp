@@ -9,6 +9,8 @@ use Symfony\AI\Platform\Message\MessageBag;
 use Symfony\AI\Platform\PlatformInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\DependencyInjection\Attribute\Target;
+use Symfony\Contracts\Cache\CacheInterface;
+use Symfony\Contracts\Cache\ItemInterface;
 
 /**
  * SUPER BETA, an example for the hackathon demo, not legal advice.
@@ -25,6 +27,12 @@ use Symfony\Component\DependencyInjection\Attribute\Target;
  */
 final class TermsAnalyzer
 {
+    /**
+     * Bump it when the prompt or CATEGORIES change: the memo key includes it, so old answers stop matching.
+     */
+    public const PROMPT_VERSION = 1;
+    /** How long a memoised answer is kept: 7 days. It holds the quotes of the document, so not longer. */
+    public const CACHE_TTL = 604800;
     public const MAX_WORDS = 1200;
     /** A single "word" of megabytes passes a word count: cap the characters too (about 10 per word). */
     public const MAX_CHARS = 12000;
@@ -56,15 +64,17 @@ final class TermsAnalyzer
     public function __construct(
         #[Target('huggingface')] private readonly PlatformInterface $platform,
         #[Autowire(env: 'TERMS_MODEL')] private readonly string $model,
+        #[Autowire(service: 'terms.cache')] private readonly CacheInterface $cache,
     ) {
     }
 
     /**
-     * The trimmed text, or why it is refused. Free: no model call, so the rate limit comes after it.
+     * The trimmed text, or why it is refused. Free: no model call, so the rate limits come after it
+     * (static: McpRateLimit asks it before the payment is read).
      *
      * @throws \InvalidArgumentException The text is empty or longer than MAX_WORDS
      */
-    public function check(string $text): string
+    public static function check(string $text): string
     {
         $text = trim($text);
         $words = '' === $text ? 0 : \count(preg_split('/\s+/u', $text) ?: []);
@@ -76,15 +86,71 @@ final class TermsAnalyzer
     }
 
     /**
+     * @param bool $sensitive skips the memo both ways: it is not read (a hit's speed would tell the caller someone sent this
+     *                        text in the last 7 days) and not written (no trace of this text's answer). It protects only the caller who
+     *                        sets it: a text someone else sent unmarked is still in the memo, and still shows as a fast answer to anyone
+     *                        who asks without the flag (DECISIONS.md, D17).
+     *
      * @return array{model: string, categories: array<string, list<string>>, quotes_dropped: int}
      *
      * @throws \InvalidArgumentException The text is empty or longer than MAX_WORDS
      * @throws \RuntimeException         The model did not answer with a JSON object
      */
-    public function analyze(string $text): array
+    public function analyze(string $text, bool $sensitive = false): array
     {
-        $text = $this->check($text);
+        $text = self::check($text);
+        if ($sensitive) {
+            return $this->ask($text);
+        }
 
+        // The memo skips the model call only: the caller is still charged and rate limited. A throw in the
+        // callback (no JSON, a refused text) saves nothing, so only valid answers are kept.
+        // A failing memo never fails the call: a read error is a miss, a write error keeps the answer. The
+        // model's own failure is rethrown, never taken for a cache one (it would ask the model twice).
+        $run = new MemoRun();
+        try {
+            return $this->cache->get($this->cacheKey($text), function (ItemInterface $item) use ($text, $run): array {
+                $item->expiresAfter(self::CACHE_TTL);
+                try {
+                    $run->answer = $this->ask($text);
+                } catch (\Throwable $e) {
+                    $run->failure = $e;
+
+                    throw $e;
+                }
+
+                return $run->answer;
+            });
+        } catch (\Throwable) {
+            if (null !== $run->failure) {
+                throw $run->failure;
+            }
+            if (null !== $run->answer) {
+                return $run->answer;
+            }
+            // The memo could not be read: ask the model.
+        }
+
+        return $this->ask($text);
+    }
+
+    /**
+     * Prompt version, model and the checked text: a different text (even one character) is another key.
+     * The text itself is never stored, only this hash.
+     */
+    private function cacheKey(string $text): string
+    {
+        return hash('sha256', json_encode([self::PROMPT_VERSION, $this->model, $text], \JSON_THROW_ON_ERROR));
+    }
+
+    /**
+     * @return array{model: string, categories: array<string, list<string>>, quotes_dropped: int}
+     *
+     * @throws \UnexpectedValueException The model did not answer with a JSON object (a RuntimeException: job mode
+     *                                   files it as invalid_reply, apart from the provider's own failures)
+     */
+    private function ask(string $text): array
+    {
         // The text is data, never instructions: fenced with a nonce the text cannot know.
         $nonce = bin2hex(random_bytes(8));
         $categories = implode("\n", array_map(static fn (string $id, string $about) => "- $id: $about", array_keys(self::CATEGORIES), self::CATEGORIES));
@@ -94,8 +160,8 @@ final class TermsAnalyzer
         $messages = new MessageBag(Message::forSystem($system), Message::ofUser("<<DATA-$nonce>>\n$text\n<<END-$nonce>>"));
 
         // reasoning_effort none: Qwen3.8 otherwise spends the whole answer thinking.
-        $reply = $this->platform->invoke($this->model, $messages, ['temperature' => 0, 'max_tokens' => 1500, 'reasoning_effort' => 'none'])->asText();
-        $got = $this->firstJsonObject($reply) ?? throw new \RuntimeException('The model did not answer with a JSON object; nothing was charged.');
+        $reply = $this->platform->invoke('' !== $this->model ? $this->model : throw new \UnexpectedValueException('TERMS_MODEL is empty; nothing was charged.'), $messages, ['temperature' => 0, 'max_tokens' => 1500, 'reasoning_effort' => 'none'])->asText();
+        $got = $this->firstJsonObject($reply) ?? throw new \UnexpectedValueException('The model did not answer with a JSON object; nothing was charged.');
 
         $found = [];
         $dropped = 0;

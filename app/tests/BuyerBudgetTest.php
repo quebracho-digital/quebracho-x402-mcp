@@ -6,6 +6,7 @@ namespace App\Tests;
 
 use App\X402\BuyerBudget;
 use PHPUnit\Framework\TestCase;
+use Quebracho\X402\Networks;
 
 final class BuyerBudgetTest extends TestCase
 {
@@ -19,5 +20,14 @@ final class BuyerBudgetTest extends TestCase
 
         $this->expectException(\LogicException::class);
         BuyerBudget::create(['eip155:5042' => '0.05'], [], $used, self::PUBLIC_KEY);
+    }
+
+    public function testTheBuyerSignsNoLongerThanItsClientWaits(): void
+    {
+        $offer = static fn (int $timeout) => Networks::requirements('eip155:84532', '0.01', '0x000000000000000000000000000000000000dEaD', $timeout);
+        $budget = BuyerBudget::create(['eip155:84532' => '0.05'], [], static fn () => false, self::PUBLIC_KEY, 170);
+
+        self::assertTrue($budget->allows($offer(170)));
+        self::assertFalse($budget->allows($offer(171)));
     }
 }

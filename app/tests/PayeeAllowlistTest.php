@@ -11,7 +11,7 @@ use Symfony\Component\EventDispatcher\EventDispatcher;
 
 final class PayeeAllowlistTest extends TestCase
 {
-    private const OURS = '0x7e510E6B4c3E2121CB64CD0686a4f241Df326510';
+    private const OURS = '0xcb2d7f50D917FeD02b82ef08cEfBF9827463B794';
 
     private static function verdict(string $allow, string $address): ?string
     {

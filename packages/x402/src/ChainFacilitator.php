@@ -33,7 +33,8 @@ final class ChainFacilitator implements Facilitator
      *                             at a time, or parallel settles replace each other's transactions
      * @param ?string  $maxGasCost
      *                             Wei: no settle whose gas limit × max fee costs more (a buyer can make
-     *                             our transaction revert and burn gas); NULL is no cap
+     *                             our transaction revert and burn gas); NULL is no cap. The caller sets
+     *                             it (the app: from its config), no default here
      */
     public function __construct(
         private readonly Rpc $rpc,
@@ -68,7 +69,13 @@ final class ChainFacilitator implements Facilitator
         return ['invalidReason' => $reason] + $result;
     }
 
-    public function settle(array $payment, array $req): array
+    /**
+     * @param ?\Closure $reference
+     *                             fn(string $transaction): bool, called with the hash before the send (Settlement::run
+     *                             passes the one Sale gives, which stores it in the ledger). FALSE or a throw sends
+     *                             nothing: 'reference_unavailable', no transaction, the claim is freed.
+     */
+    public function settle(array $payment, array $req, ?\Closure $reference = null): array
     {
         $result = ['success' => false, 'transaction' => '', 'network' => $req['network'], 'payer' => $payment['payload']['authorization']['from'] ?? null];
         $reason = $this->mismatch($payment, $req);
@@ -80,7 +87,9 @@ final class ChainFacilitator implements Facilitator
         // Holding the lock: what to send, then sending it. The hash is known
         // before sending, so a send that times out or errors after
         // broadcasting still leaves a transaction to reconcile.
-        $send = function () use ($rpc, $call, $req): array {
+        // Set as soon as the hash exists, before the send: if the lock fails after the send, the hash is still here.
+        $transaction = '';
+        $send = function () use ($rpc, $call, $req, $reference, &$transaction): array {
             $base = Rpc::number($rpc('eth_gasPrice', []));
             $tip = Rpc::number($rpc('eth_maxPriorityFeePerGas', []));
             // Twice today's price, so a busier block still takes it.
@@ -100,6 +109,16 @@ final class ChainFacilitator implements Facilitator
                 'data' => $call['data'],
             ]);
             $hash = Eip712::keccak(Eip712::raw($raw));
+            // Stored before it can move money: a crash after the send still leaves the hash to reconcile.
+            try {
+                $kept = null === $reference || true === $reference($hash);
+            } catch (\Throwable) {
+                $kept = false;
+            }
+            if (!$kept) {
+                throw new \RuntimeException('reference_unavailable');
+            }
+            $transaction = $hash;
             try {
                 $rpc('eth_sendRawTransaction', [$raw]);
             } catch (\RuntimeException) {
@@ -112,9 +131,14 @@ final class ChainFacilitator implements Facilitator
         try {
             // ponytail: one lock per network serializes its sales; rotate gas wallets if that ever limits throughput.
             [$result['transaction'], $sent] = ($this->serialize)("x402.chain.$this->network", $send);
-        } catch (\RuntimeException $e) {
-            // Before anything was signed: nothing left the building.
-            return ['errorReason' => $e->getMessage()] + $result;
+        } catch (\Throwable $e) {
+            // The lock failed after the send (its release, say): the money moved, so the claim stays.
+            if ('' !== $transaction) {
+                return ['errorReason' => 'settlement_pending', 'transaction' => $transaction] + $result;
+            }
+
+            // Nothing was sent: a refusal frees the claim.
+            return ['errorReason' => $e instanceof \RuntimeException ? $e->getMessage() : 'settle_refused'] + $result;
         }
         if (!$sent) {
             return ['errorReason' => 'settlement_pending'] + $result;

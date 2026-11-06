@@ -7,6 +7,8 @@ namespace App\Tests\X402;
 use App\X402\Facilitator;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
+use Quebracho\X402\CircleFacilitator;
+use Quebracho\X402\HttpFacilitator;
 use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpClient\Response\JsonMockResponse;
 use Symfony\Component\HttpClient\Response\MockResponse;
@@ -75,6 +77,32 @@ final class FacilitatorTest extends TestCase
         // Unreachable: thrown, so the middleware answers facilitator_unavailable.
         $this->expectException(\Quebracho\X402\FacilitatorException::class);
         $verify(new MockResponse('', ['error' => 'timeout']));
+    }
+
+    private function remoteOf(string $mode): ?object
+    {
+        return (new \ReflectionProperty(Facilitator::class, 'remote'))->getValue(new Facilitator($mode, new NullLogger(), new MockHttpClient()));
+    }
+
+    public function testCirclesUrlIsChosenWhateverTheCaseOrQuery(): void
+    {
+        foreach (['https://API.circle.com/v1/facilitator/x402', 'https://api.circle.com/v1/facilitator/x402?x=1', 'HTTPS://api.circle.com/v1/facilitator/x402/', 'https://api.circle.com/v1/facilitator/x402#f'] as $mode) {
+            self::assertInstanceOf(CircleFacilitator::class, $this->remoteOf($mode), $mode);
+        }
+        self::assertInstanceOf(HttpFacilitator::class, $this->remoteOf('https://api.circle.com/v1/other'));
+    }
+
+    public function testTheLogicExceptionNeverEchoesTheUrlsCredentialsOrQuery(): void
+    {
+        try {
+            new Facilitator('http://user:secret@f.example/x?token=abc', new NullLogger(), new MockHttpClient());
+            self::fail('an http URL must be refused');
+        } catch (\LogicException $e) {
+            self::assertStringNotContainsString('secret', $e->getMessage());
+            self::assertStringNotContainsString('user', $e->getMessage());
+            self::assertStringNotContainsString('token', $e->getMessage());
+            self::assertStringContainsString('f.example', $e->getMessage());
+        }
     }
 
     public function testMockVerifiesOfflineOnly(): void

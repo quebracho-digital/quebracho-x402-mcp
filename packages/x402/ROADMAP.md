@@ -7,13 +7,14 @@ Developed in the hackathon repo (`packages/x402`) and published by
 ## Done
 
 - Budget release by the chain, deferred screening, and strict NEAR screening (D8).
+- Solana devnet (`SolanaExact`, offline verify; G6).
+- An index of open payments in `PaymentLedger` (`open`, `openKeys`, `close`) for a reconciler (D20).
 
 ## Open
 
 - [ ] Send the client one generic rejection code and keep the detail (which list) in the log.
 - [ ] Separate allowlists for the payer and payTo roles.
 - [ ] Verify the EIP-712 domains of USDC on Ethereum Sepolia, Avalanche Fuji and Polygon Amoy.
-- [ ] Solana devnet (`SolanaExact`).
 - [ ] NEAR out of experimental: RPC checks (`view_access_key`, nonce, balances).
 - [ ] `Scheme` stable at 1.0.
 

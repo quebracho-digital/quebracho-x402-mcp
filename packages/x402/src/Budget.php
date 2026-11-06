@@ -12,7 +12,9 @@ use Psr\EventDispatcher\EventDispatcherInterface;
  * ponytail: in memory, so it lasts one process (one agent run); persist the
  * spent totals if a cap must hold across runs.
  *
- * Spent when signed, never refunded on a seller's word. With an on-chain
+ * Reserved before signing (reserve(), check and count in one step, so
+ * concurrent payments in this process share the cap) and given back only if
+ * the payment never left (release()); never refunded on a seller's word. With an on-chain
  * check ($used), a signature the seller never settled frees its amount once
  * it has expired and the chain says its nonce is unused: then it can never
  * move money.
@@ -36,19 +38,24 @@ final class Budget
 
     /**
      * @param array<string, string> $caps
-     *                                     Network => maximum atomic units, e.g. ['eip155:84532' => '50000'] for
-     *                                     0.05 USDC. Networks without a cap get nothing.
+     *                                          Network => maximum atomic units, e.g. ['eip155:84532' => '50000'] for
+     *                                          0.05 USDC. Networks without a cap get nothing.
      * @param ?\Closure             $used
-     *                                     fn(string $network, string $from, string $nonce): bool — the token's
-     *                                     EIP-3009 authorizationState on chain. NULL never frees anything.
+     *                                          fn(string $network, string $from, string $nonce): bool — the token's
+     *                                          EIP-3009 authorizationState on chain. NULL never frees anything.
      * @param ?\Closure             $clock
-     *                                     Returns the current Unix time; tests pin it
+     *                                          Returns the current Unix time; tests pin it
+     * @param int                   $maxTimeout
+     *                                          The longest validity this buyer signs (at most MAX_TIMEOUT): no more
+     *                                          than its HTTP client waits for the answer, or it can pay for one it
+     *                                          never reads
      */
     public function __construct(
         private readonly array $caps,
         private readonly ?\Closure $used = null,
         private readonly ?\Closure $clock = null,
         private readonly array $perPayment = [],
+        private readonly int $maxTimeout = self::MAX_TIMEOUT,
     ) {
     }
 
@@ -60,11 +67,11 @@ final class Budget
      * @param array<string, string> $usd
      * @param array<string, string> $perPaymentUsd
      */
-    public static function fromUsd(array $usd, array $perPaymentUsd = [], ?\Closure $used = null): self
+    public static function fromUsd(array $usd, array $perPaymentUsd = [], ?\Closure $used = null, int $maxTimeout = self::MAX_TIMEOUT): self
     {
         $atomic = static fn (array $m): array => array_map(static fn (string $v, string $n) => Networks::atomic($v, Networks::get($n)['decimals']), $m, array_keys($m));
 
-        return new self(array_combine(array_keys($usd), $atomic($usd)), $used, null, [] === $perPaymentUsd ? [] : array_combine(array_keys($perPaymentUsd), $atomic($perPaymentUsd)));
+        return new self(array_combine(array_keys($usd), $atomic($usd)), $used, null, [] === $perPaymentUsd ? [] : array_combine(array_keys($perPaymentUsd), $atomic($perPaymentUsd)), $maxTimeout);
     }
 
     /**
@@ -87,7 +94,7 @@ final class Budget
             return false;
         }
         $timeout = $req['maxTimeoutSeconds'] ?? null;
-        if (!is_int($timeout) || $timeout < 1 || $timeout > self::MAX_TIMEOUT) {
+        if (!is_int($timeout) || $timeout < 1 || $timeout > min($this->maxTimeout, self::MAX_TIMEOUT)) {
             return false;
         }
         $token = Networks::find($network);
@@ -139,6 +146,35 @@ final class Budget
         return null === $reason ? [$scheme, null] : [null, $reason];
     }
 
+    /**
+     * Checks the offer and counts it as spent in one step, or returns false
+     * and changes nothing. Nothing in between can yield (no I/O, no Fiber
+     * suspension), so payments running concurrently on this object cannot
+     * all pass the check before any of them counts: the cap holds.
+     */
+    public function reserve(array $req): bool
+    {
+        if (!$this->allows($req)) {
+            return false;
+        }
+        $this->spend($req);
+
+        return true;
+    }
+
+    /**
+     * Gives back a reserve() whose payment never left this process (the
+     * signature failed, or the request could not be built). Never for one
+     * that may have reached the seller: that is unsettled()'s job.
+     */
+    public function release(array $req): void
+    {
+        $this->spent[$req['network']] = gmp_strval(gmp_sub($this->spent[$req['network']] ?? 0, (string) $req['amount']));
+    }
+
+    /**
+     * Counts $req as spent without checking it; reserve() checks and counts.
+     */
     public function spend(array $req): void
     {
         $this->spent[$req['network']] = gmp_strval(gmp_add($this->spent[$req['network']] ?? 0, (string) $req['amount']));
@@ -170,19 +206,24 @@ final class Budget
             // Still valid, or close enough that the chain's clock may disagree with
             // ours: the seller may settle it yet.
             // ponytail: fixed 60 s skew margin; read the latest block's timestamp if it bites.
-            if ($validBefore + 60 >= $now) {
+            // Gone already: a concurrent reclaim() took it while this one waited on the chain.
+            if (!isset($this->unsettled[$i]) || $validBefore + 60 >= $now) {
                 continue;
             }
+            // Taken out before asking the chain: the call may yield, and a concurrent
+            // reclaim() must not free the same signature a second time.
+            $entry = $this->unsettled[$i];
+            unset($this->unsettled[$i]);
             try {
                 $used = ($this->used)($network, $from, $nonce);
             } catch (\Throwable) {
                 // Unknown: stays spent, asked again next time.
+                $this->unsettled[] = $entry;
                 continue;
             }
             if (false === $used) {
                 $this->spent[$network] = gmp_strval(gmp_sub($this->spent[$network] ?? 0, $amount));
             }
-            unset($this->unsettled[$i]);
         }
     }
 

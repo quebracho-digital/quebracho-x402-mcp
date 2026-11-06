@@ -71,20 +71,46 @@ final class PayingMcpClient implements ClientInterface
         // The first offer we have a scheme for and the budget allows.
         foreach ($required['accepts'] ?? [] as $req) {
             [$scheme, $reason] = $this->budget->choose($this->schemes, $req, $this->events);
+            // Checked again and counted in one step: the screening may have yielded, and
+            // payments running concurrently on this budget must not all pass the cap.
+            if (null === $reason && !$this->budget->reserve($req)) {
+                $reason = 'not_allowed';
+            }
             if (null !== $reason) {
-                $this->onRefused?->__invoke(is_array($req) ? $req : [], $reason);
+                try {
+                    $this->onRefused?->__invoke(is_array($req) ? $req : [], $reason);
+                } catch (\Throwable) {
+                    // ponytail: a failing refusal callback is dropped; the PaymentRequired still goes to the caller.
+                }
                 continue;
             }
-            // Spent when signed: a signed authorization is money the seller can
-            // settle on its own, whatever it answers. Never refunded here.
-            $this->budget->spend($req);
-            $payment = $scheme->pay($required, $req);
-            $call['params']['_meta'][X402McpMiddleware::PAYMENT] = $payment;
-            $paid = $request->withBody($this->streams->createStream(json_encode($call, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)));
-            [$response, $result] = $this->answer($this->client->sendRequest($paid), $call['id']);
+            // Reserved, then signed: a signed authorization is money the seller can settle
+            // on its own, whatever it answers.
+            try {
+                $payment = $scheme->pay($required, $req);
+                $call['params']['_meta'][X402McpMiddleware::PAYMENT] = $payment;
+                $paid = $request->withBody($this->streams->createStream(json_encode($call, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)));
+            } catch (\Throwable $e) {
+                // Never left this process: a failed signature spends nothing.
+                $this->budget->release($req);
+
+                throw $e;
+            }
+            try {
+                [$response, $result] = $this->answer($this->client->sendRequest($paid), $call['id']);
+            } catch (\Throwable $e) {
+                // It may have reached the seller: kept as unsettled, to be reclaimed once expired.
+                $this->budget->unsettled($req, $payment);
+
+                throw $e;
+            }
             $receipt = $result['_meta'][X402McpMiddleware::PAYMENT_RESPONSE] ?? null;
             if (is_array($receipt)) {
-                $this->onPaid?->__invoke((string) $call['params']['name'], $req, $receipt);
+                try {
+                    $this->onPaid?->__invoke((string) $call['params']['name'], $req, $receipt);
+                } catch (\Throwable) {
+                    // ponytail: errors of a logging callback are dropped, as Sale::outcome drops them.
+                }
             }
             if (($receipt['success'] ?? null) !== true) {
                 $this->budget->unsettled($req, $payment);
