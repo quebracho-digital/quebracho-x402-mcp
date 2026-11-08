@@ -12,10 +12,12 @@ use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 use Quebracho\X402\AddressCheck;
+use Quebracho\X402\AddressRejected;
 use Quebracho\X402\Budget;
 use Quebracho\X402\EvmExact;
 use Quebracho\X402\Networks;
 use Quebracho\X402\OfacSdn;
+use Quebracho\X402\SyncResult;
 
 final class OfacSdnTest extends TestCase
 {
@@ -109,10 +111,16 @@ final class OfacSdnTest extends TestCase
     {
         $events = new class implements EventDispatcherInterface {
             public int $calls = 0;
+            /** @var list<object> */
+            public array $reported = [];
 
             public function dispatch(object $event): object
             {
-                ++$this->calls;
+                if ($event instanceof AddressCheck) {
+                    ++$this->calls;
+                } else {
+                    $this->reported[] = $event;
+                }
 
                 return $event;
             }
@@ -120,6 +128,10 @@ final class OfacSdnTest extends TestCase
         $req = Networks::requirements('eip155:8453', '0.01', self::CLEAN);
         self::assertSame(OfacSdn::REASON, AddressCheck::run($events, AddressCheck::PAYER, self::LISTED, $req));
         self::assertSame(0, $events->calls);
+        // The rejection is reported once, to the same dispatcher.
+        self::assertCount(1, $events->reported);
+        self::assertInstanceOf(AddressRejected::class, $events->reported[0]);
+        self::assertSame([AddressCheck::PAYER, self::LISTED, OfacSdn::REASON, null], [$events->reported[0]->role, $events->reported[0]->address, $events->reported[0]->reason, $events->reported[0]->error]);
         self::assertNull(AddressCheck::run($events, AddressCheck::PAYER, self::CLEAN, $req));
         self::assertSame(1, $events->calls, 'other lists subscribe to AddressCheck');
     }
@@ -156,7 +168,7 @@ final class OfacSdnTest extends TestCase
         ], $asked);
         $file = $this->dir.'/sdn.json';
 
-        self::assertSame(120, OfacSdn::sync($http, new Psr17Factory(), $file));
+        self::assertSame(120, OfacSdn::sync($http, new Psr17Factory(), $file)->count);
         self::assertSame([OfacSdn::URL, 'https://bucket.example/SDN.CSV?sig=1'], $asked);
         $list = new OfacSdn($file);
         self::assertSame('2026-11-06T19:33:18Z', $list->published());
@@ -168,21 +180,21 @@ final class OfacSdnTest extends TestCase
         $file = $this->dir.'/sdn.json';
         $sync = new \Quebracho\X402\OfacSdnSync(self::http([new Response(200, [], self::csv(150))]), new Psr17Factory());
         self::assertInstanceOf(\Quebracho\X402\ListSync::class, $sync);
-        self::assertSame(150, $sync->sync($file));
+        self::assertSame(150, $sync->sync($file)->count);
 
         $list = $this->dir.'/list.txt';
         $other = new \Quebracho\X402\AddressListSync(self::http([new Response(200, [], "a.near\nb.near\n")]), new Psr17Factory(), 'https://lists.example/x.txt', min: 2);
-        self::assertSame(2, $other->sync($list));
+        self::assertSame(2, $other->sync($list)->count);
         self::assertTrue((new \Quebracho\X402\AddressList([$list]))->listed('b.near'));
     }
 
     public function testAnOlderOfacListNeverReplacesAYoungerOne(): void
     {
         $file = $this->dir.'/sdn.json';
-        self::assertSame(120, OfacSdn::write(self::csv(120), 'Fri, 06 Nov 2026 19:33:18 GMT', $file));
-        self::assertSame(120, OfacSdn::write(self::csv(130), 'Thu, 05 Nov 2026 19:33:18 GMT', $file), 'the younger file is kept');
+        self::assertEquals(new SyncResult(120, '2026-11-06T19:33:18Z', true), OfacSdn::write(self::csv(120), 'Fri, 06 Nov 2026 19:33:18 GMT', $file));
+        self::assertEquals(new SyncResult(120, '2026-11-06T19:33:18Z', false), OfacSdn::write(self::csv(130), 'Thu, 05 Nov 2026 19:33:18 GMT', $file), 'the younger file is kept');
         self::assertSame('2026-11-06T19:33:18Z', (new OfacSdn($file))->published());
-        self::assertSame(140, OfacSdn::write(self::csv(140), 'Sat, 07 Nov 2026 19:33:18 GMT', $file));
+        self::assertSame(140, OfacSdn::write(self::csv(140), 'Sat, 07 Nov 2026 19:33:18 GMT', $file)->count);
         self::assertSame('2026-11-07T19:33:18Z', (new OfacSdn($file))->published());
     }
 

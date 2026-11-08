@@ -47,7 +47,19 @@ final class ChainalysisOracle
             return;
         }
         $address = $check->address;
-        $check->defer(fn (): ?string => $this->sanctioned($address) ? OfacSdn::REASON : null);
+        $check->defer(function () use ($check, $address): ?string {
+            try {
+                return $this->ask($address) ? OfacSdn::REASON : null;
+            } catch (\Throwable $e) {
+                if (!$this->failOpen) {
+                    throw $e;
+                }
+                // Passed unchecked: reported (ScreeningSkipped), so the pass leaves a trace.
+                $check->skip(self::class, $e);
+
+                return null;
+            }
+        });
     }
 
     /**
@@ -55,20 +67,28 @@ final class ChainalysisOracle
      */
     public function sanctioned(string $address): bool
     {
-        $rpc = $this->rpc ?? (string) (Networks::get('eip155:1')['rpc'] ?? '');
         try {
-            if ('' === $rpc) {
-                throw new \RuntimeException('ChainalysisOracle: no RPC endpoint.');
-            }
-            $answer = (new Rpc($this->http, $this->requests, $this->streams, $rpc))('eth_call', [['to' => self::CONTRACT, 'data' => self::SELECTOR.Rpc::word($address)], 'latest']);
-            if (!\is_string($answer) || !preg_match('/^0x[0-9a-fA-F]{64}$/', $answer)) {
-                throw new \UnexpectedValueException('isSanctioned: not a bool');
-            }
+            return $this->ask($address);
         } catch (\Throwable $e) {
             if ($this->failOpen) {
                 return false;
             }
             throw $e;
+        }
+    }
+
+    /**
+     * @throws \Throwable when the node cannot answer
+     */
+    private function ask(string $address): bool
+    {
+        $rpc = $this->rpc ?? (string) (Networks::get('eip155:1')['rpc'] ?? '');
+        if ('' === $rpc) {
+            throw new \RuntimeException('ChainalysisOracle: no RPC endpoint.');
+        }
+        $answer = (new Rpc($this->http, $this->requests, $this->streams, $rpc))('eth_call', [['to' => self::CONTRACT, 'data' => self::SELECTOR.Rpc::word($address)], 'latest']);
+        if (!\is_string($answer) || !preg_match('/^0x[0-9a-fA-F]{64}$/', $answer)) {
+            throw new \UnexpectedValueException('isSanctioned: not a bool');
         }
 
         return 0 !== gmp_cmp(Rpc::number($answer), 0);

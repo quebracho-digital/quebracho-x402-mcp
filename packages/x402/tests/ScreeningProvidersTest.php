@@ -17,6 +17,7 @@ use Quebracho\X402\ChainalysisApi;
 use Quebracho\X402\ChainalysisOracle;
 use Quebracho\X402\Networks;
 use Quebracho\X402\OfacSdn;
+use Quebracho\X402\SyncResult;
 
 /** The lists other than OFAC's own, and turning OFAC's off. */
 final class ScreeningProvidersTest extends TestCase
@@ -125,7 +126,8 @@ final class ScreeningProvidersTest extends TestCase
         $asked = [];
         $count = AddressList::sync(self::http([new Response(200, [], "0xBBBB00000000000000000000000000000000bbbb\n# c\nnear-bad.near\n")], $asked), new Psr17Factory(), 'https://lists.example/bad.txt', $file);
 
-        self::assertSame(2, $count);
+        self::assertSame(2, $count->count);
+        self::assertTrue($count->replaced);
         self::assertSame('https://lists.example/bad.txt', (string) $asked[0]->getUri());
         self::assertSame('address_denied', self::check(self::events(new AddressList([$file])), 'near-bad.near'));
 
@@ -153,12 +155,12 @@ final class ScreeningProvidersTest extends TestCase
         self::assertSame([$file => '2026-11-06T12:00:00Z'], (new AddressList([$file]))->updatedAt());
 
         // An older copy (a lagging mirror, a cache) never replaces it.
-        self::assertSame(1, AddressList::sync(self::http([new Response(200, ['Last-Modified' => 'Thu, 05 Nov 2026 10:00:00 GMT'], "old.near\nolder.near\n")]), new Psr17Factory(), $url, $file));
+        self::assertEquals(new SyncResult(1, '2026-11-06T12:00:00Z', false), AddressList::sync(self::http([new Response(200, ['Last-Modified' => 'Thu, 05 Nov 2026 10:00:00 GMT'], "old.near\nolder.near\n")]), new Psr17Factory(), $url, $file));
         self::assertTrue((new AddressList([$file]))->listed('new.near'));
         self::assertFalse((new AddressList([$file]))->listed('old.near'));
 
         // A younger one does, dated by its Last-Modified when it has no line of its own.
-        self::assertSame(2, AddressList::sync(self::http([new Response(200, ['Last-Modified' => 'Sat, 07 Nov 2026 10:00:00 GMT'], "a.near\nb.near\n")]), new Psr17Factory(), $url, $file));
+        self::assertEquals(new SyncResult(2, '2026-11-07T10:00:00Z', true), AddressList::sync(self::http([new Response(200, ['Last-Modified' => 'Sat, 07 Nov 2026 10:00:00 GMT'], "a.near\nb.near\n")]), new Psr17Factory(), $url, $file));
         self::assertSame('2026-11-07T10:00:00Z', AddressList::updated((string) file_get_contents($file)));
         self::assertNull(AddressList::updated("# updated: someday\n"));
     }

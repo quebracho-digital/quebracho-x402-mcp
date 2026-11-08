@@ -194,9 +194,10 @@ final class Budget
     }
 
     /**
-     * Frees the expired, never-used signatures; called before paying.
+     * Frees the expired, never-used signatures; called before paying. Each one asked about is a
+     * BudgetReclaim on $events (freed, used, or unknown when the chain could not answer).
      */
-    public function reclaim(): void
+    public function reclaim(?EventDispatcherInterface $events = null): void
     {
         if (null === $this->used) {
             return;
@@ -216,14 +217,16 @@ final class Budget
             unset($this->unsettled[$i]);
             try {
                 $used = ($this->used)($network, $from, $nonce);
-            } catch (\Throwable) {
+            } catch (\Throwable $e) {
                 // Unknown: stays spent, asked again next time.
                 $this->unsettled[] = $entry;
+                Events::report($events, new BudgetReclaim(BudgetReclaim::UNKNOWN, $network, $from, $nonce, $amount, $e));
                 continue;
             }
             if (false === $used) {
                 $this->spent[$network] = gmp_strval(gmp_sub($this->spent[$network] ?? 0, $amount));
             }
+            Events::report($events, new BudgetReclaim(false === $used ? BudgetReclaim::FREED : BudgetReclaim::USED, $network, $from, $nonce, $amount));
         }
     }
 

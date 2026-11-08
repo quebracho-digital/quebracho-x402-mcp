@@ -9,6 +9,8 @@ Developed in the hackathon repo (`packages/x402`) and published by
 - Budget release by the chain, deferred screening, and strict NEAR screening (D8).
 - Solana devnet (`SolanaExact`, offline verify; G6).
 - An index of open payments in `PaymentLedger` (`open`, `openKeys`, `close`) for a reconciler (D20).
+- Events for what the library carries on without (`PaymentFault`, `AddressRejected`, `ScreeningSkipped`) and for the buyer (`PurchaseIntent`, `PurchaseOutcome`, `BudgetReclaim`); `PaymentLog` and `PaymentRecord` as listeners.
+- From the demo app: `Reconciler`, `ReceiptLookup`, `AuthorizationState`, `RedisLedger`, `PayeeAllowlist`, and job mode's framework-free core (`Quebracho\X402\Job`).
 
 ## Open
 

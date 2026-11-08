@@ -127,11 +127,9 @@ final class AddressList
      * least $min addresses, and replaces $file with it. On any failure $file is left as it was. When $file holds
      * a younger list than the one downloaded (a cache or a mirror that lags), $file is kept too.
      *
-     * @return int the number of addresses written, or of the younger list kept
-     *
      * @throws \RuntimeException
      */
-    public static function sync(ClientInterface $http, RequestFactoryInterface $requests, string $url, string $file, int $min = 1): int
+    public static function sync(ClientInterface $http, RequestFactoryInterface $requests, string $url, string $file, int $min = 1): SyncResult
     {
         if (!str_starts_with($url, 'https://')) {
             throw new \RuntimeException("Address list: $url is not HTTPS.");
@@ -156,8 +154,9 @@ final class AddressList
         $updated = self::updated($text)
             ?? gmdate('Y-m-d\\TH:i:s\\Z', '' !== $lastModified && false !== strtotime($lastModified) ? (int) strtotime($lastModified) : time());
         $current = is_file($file) ? @file_get_contents($file) : false;
-        if (false !== $current && (self::updated($current) ?? '') > $updated) {
-            return \count(self::parse($current));
+        $kept = false === $current ? null : self::updated($current);
+        if (null !== $kept && $kept > $updated) {
+            return new SyncResult(\count(self::parse((string) $current)), $kept, false);
         }
         $tmp = $file.'.'.bin2hex(random_bytes(4)).'.tmp';
         if (false === @file_put_contents($tmp, "# source: $url\n# updated: $updated\n".implode("\n", $addresses)."\n") || !@rename($tmp, $file)) {
@@ -165,7 +164,7 @@ final class AddressList
             throw new \RuntimeException("Address list: cannot write $file.");
         }
 
-        return \count($addresses);
+        return new SyncResult(\count($addresses), $updated, true);
     }
 
     private static function normalize(string $address): string

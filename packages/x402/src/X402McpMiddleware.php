@@ -39,7 +39,7 @@ final class X402McpMiddleware implements MiddlewareInterface
      *                                             fn(array $payment, array $req): array — a facilitator's settle result.
      *                                             Settlement::mock() is mock mode, never implicit: nothing moves.
      * @param ?EventDispatcherInterface $events
-     *                                             Dispatches an AddressCheck on the payer and a PaymentOutcome; NULL: neither
+     *                                             Dispatches an AddressCheck on the payer, PaymentIntent, PaymentOutcome and PaymentFault; NULL: none
      * @param ?\Closure                 $verify
      *                                             fn(array $payment, array $req): ?string — online check before the claim.
      *                                             NULL when good, or a non-empty reason; any other return or exception
@@ -358,8 +358,9 @@ final class X402McpMiddleware implements MiddlewareInterface
             } elseif ($sale->held()) {
                 $sale->remember($this->ledger, ['status' => 'pending', 'receipt' => $receipt, 'id' => $id] + $mark, $response);
             }
-        } catch (\Throwable) {
-            // ponytail: no outcome event for a lost store; the settle's PaymentOutcome already went out.
+        } catch (\Throwable $e) {
+            // The settle's PaymentOutcome already went out; the lost state is a PaymentFault (record): a person looks.
+            $sale->fault(PaymentFault::RECORD, $e);
         }
     }
 

@@ -19,11 +19,10 @@ namespace Quebracho\X402;
 interface ListSync
 {
     /**
-     * Writes the newest copy of the list to $file, atomically.
-     *
-     * @return int the number of addresses written
+     * Writes the newest copy of the list to $file, atomically, unless $file already holds a younger one
+     * (SyncResult->replaced false): the youngest list wins.
      *
      * @throws \RuntimeException when the source cannot be read or does not look like the list; $file is left as it was
      */
-    public function sync(string $file): int;
+    public function sync(string $file): SyncResult;
 }

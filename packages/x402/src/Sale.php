@@ -44,6 +44,8 @@ final class Sale
      * @var ?array{0: PaymentLedger, 1: array<string, mixed>}
      */
     private ?array $settling = null;
+    /** What refused intend()'s write: the reason and error of the outcome that follows (abandon, ran). */
+    private ?\Throwable $ledgerError = null;
 
     public function __construct(
         private readonly array $schemes,
@@ -164,8 +166,9 @@ final class Sale
         }
         try {
             $this->running->release(self::RUN.Settlement::key($this->payment));
-        } catch (\Throwable) {
-            // ponytail: see the docblock; the answer already given is not changed.
+        } catch (\Throwable $e) {
+            // See the docblock; the answer already given is not changed.
+            $this->fault(PaymentFault::RELEASE_RUN, $e);
         }
         $this->running = null;
     }
@@ -221,9 +224,21 @@ final class Sale
             }
 
             return true;
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
+            $this->ledgerError = $e;
+            $this->fault(PaymentFault::INTEND, $e);
+
             return false;
         }
+    }
+
+    /**
+     * PaymentFault: a ledger operation that failed while the sale carried on (the middlewares call it for a
+     * state they could not record after a settle).
+     */
+    public function fault(string $op, \Throwable $error): void
+    {
+        Events::report($this->events, new PaymentFault($op, Settlement::key($this->payment), (string) $this->req['network'], $error));
     }
 
     /**
@@ -287,8 +302,9 @@ final class Sale
         } elseif (\in_array($status, ['settled', 'delivered'], true)) {
             try {
                 $ledger->close($key);
-            } catch (\Throwable) {
-                // ponytail: see the docblock.
+            } catch (\Throwable $e) {
+                // See the docblock.
+                $this->fault(PaymentFault::CLOSE, $e);
             }
         }
     }
@@ -393,9 +409,10 @@ final class Sale
     {
         try {
             $receipt = null === $lookup ? null : $lookup($state, $this->payment, $this->req);
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
             // The lookup goes to the facilitator: unreachable means still pending, not refused.
             $receipt = null;
+            $this->fault(PaymentFault::LOOKUP, $e);
         }
         if (false === ($receipt['success'] ?? null)) {
             $ledger->release($key);
@@ -483,8 +500,9 @@ final class Sale
 
             return true;
         };
+        $error = null;
         $receipt = null === $late
-          ? Settlement::run($this->settle, $this->payment, $this->req, $reference)
+          ? Settlement::run($this->settle, $this->payment, $this->req, $reference, $error)
           // Ran but not paid for: withheld, as when settlement fails.
           : ['success' => false, 'errorReason' => $late, 'transaction' => '', 'network' => $this->req['network']];
         if (true !== $receipt['success'] && '' !== $referenced && '' === $receipt['transaction']) {
@@ -499,19 +517,20 @@ final class Sale
             if ('' === ($receipt['transaction'] ?? '') && !\in_array($receipt['errorReason'], Settlement::MAY_HAVE_MOVED, true)) {
                 $this->free();
             }
-            $this->outcome('not_settled', $handlerStatus, $receipt, $receipt['errorReason']);
+            $this->outcome('not_settled', $handlerStatus, $receipt, $receipt['errorReason'], $error);
         }
 
         return $receipt;
     }
 
     /**
-     * The handler delivered nothing: nothing charged, the payment is good again.
+     * The handler delivered nothing, or the ledger refused intend()'s write (reason ledger_unavailable):
+     * nothing charged, the payment is good again.
      */
     public function abandon(?int $handlerStatus): void
     {
         $this->free();
-        $this->outcome('failed', $handlerStatus);
+        $this->outcome('failed', $handlerStatus, reason: null === $this->ledgerError ? null : 'ledger_unavailable', error: $this->ledgerError);
     }
 
     /**
@@ -521,7 +540,7 @@ final class Sale
     public function ran(int $handlerStatus): void
     {
         if ($handlerStatus < 200 || $handlerStatus >= 300) {
-            $this->outcome('failed_after_settle', $handlerStatus);
+            $this->outcome('failed_after_settle', $handlerStatus, reason: null === $this->ledgerError ? null : 'ledger_unavailable', error: $this->ledgerError);
         }
     }
 
@@ -552,8 +571,10 @@ final class Sale
         if ($this->claimed && null !== $this->release) {
             try {
                 ($this->release)(Settlement::key($this->payment));
-            } catch (LedgerUnavailableException) {
+            } catch (LedgerUnavailableException $e) {
                 // ponytail: the claim stays until its TTL, so the buyer waits (409 in_progress) but cannot pay twice; the answer is not changed by a failed release.
+                $this->fault(PaymentFault::RELEASE, $e);
+
                 return;
             }
             $this->claimed = false;
@@ -562,10 +583,7 @@ final class Sale
 
     private function outcome(string $status, ?int $handlerStatus = null, ?array $receipt = null, ?string $reason = null, ?\Throwable $error = null): void
     {
-        try {
-            $this->events?->dispatch(new PaymentOutcome($status, $this->payment, $this->req, $handlerStatus, $receipt, $reason, $error));
-        } catch (\Throwable) {
-            // ponytail: a broken log listener must not undo a sale (money may have moved); errors here are dropped.
-        }
+        // A broken log listener must not undo a sale (money may have moved): Events drops its errors.
+        Events::report($this->events, new PaymentOutcome($status, $this->payment, $this->req, $handlerStatus, $receipt, $reason, $error));
     }
 }

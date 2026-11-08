@@ -58,8 +58,9 @@ Optional, by name, on both middlewares:
   tool must not put what it sells in its errors.
 - `$events` also receives a `PaymentOutcome` (settled, not_settled, failed,
   rejected, failed_after_settle) per paid request; its `error` holds the
-  exception behind a reason (verify that threw, facilitator down), for logs
-  only. A listener that throws cannot undo a sale.
+  exception behind a reason (verify or settle that threw, facilitator down,
+  a ledger that refused a write), for logs only. A listener that throws cannot
+  undo a sale. The other events are in [Events and logs](#events-and-logs).
 
 ### Payment ledger
 
@@ -134,7 +135,60 @@ HTTP answers `503 ledger_unavailable` and MCP answers the PaymentRequired with
 - **A failed store after a settle does not become an error.** If a
   `LedgerUnavailableException` comes when the outcome is stored after a
   successful settle, the response still goes out: the money has moved. The claim
-  stays until its TTL, so the buyer cannot pay twice.
+  stays until its TTL, so the buyer cannot pay twice. A `PaymentFault` with op
+  `record` says so: a person (or the reconciler) looks.
+
+Ready-made pieces, all PSR-18 + PSR-17:
+
+- `RedisLedger('redis://host:6379')` (ext-redis): one ledger for several hosts.
+  Claims are `SET NX EX`, so one payment is delivered once across hosts. A Redis
+  that does not answer is `ledger_unavailable`; never fall back to `FileLedger`
+  then. Run Redis with `maxmemory-policy noeviction` and `appendonly yes`.
+- `ReceiptLookup($paymentStatus, $http, $psr17, $psr17)` is a `lookup`: an EVM
+  transaction is confirmed by its receipt and the asset's `AuthorizationUsed`
+  log for this payer and nonce; a `paymentId` by the facilitator's `/status`
+  (`PaymentStatus`: Circle's; `null` asks only the chain). Any failure is
+  `NULL`, still pending.
+- `Reconciler($ledger, $http, $psr17, $psr17)->reconcile($limit)`, from cron
+  every few minutes: walks the open entries and asks the chain
+  (`authorizationState`, then the `AuthorizationUsed` log). An authorization used
+  is written `settled`; one unused and expired is freed. It never charges nor
+  runs a handler. It returns one row per entry; log the `needs_review` and
+  `rpc_error` ones, a person resolves those. EVM (EIP-3009) only.
+
+### Events and logs
+
+Every event is PSR-14 and only reports: a listener that throws changes no
+answer. Pass the dispatcher as `$events`.
+
+| Event | Side | When |
+|---|---|---|
+| `PaymentIntent` | seller | before a settle is sent or an upfront handler runs (a crash after it still leaves a line) |
+| `PaymentOutcome` | seller | once per paid request: settled, not_settled, failed, rejected, failed_after_settle |
+| `PaymentFault` | seller | the ledger could not do something and the sale went on: `record` (the state after a settle was lost: needs a person), `intend`, `release`, `release_run`, `close`, `lookup` |
+| `AddressRejected` | both | the screening refused an address; `error` when a list threw |
+| `ScreeningSkipped` | both | a list built with `failOpen: true` could not answer, so the address passed it unchecked |
+| `PurchaseIntent` | buyer | a payment is signed and about to be sent; its `key` is the seller's ledger key |
+| `PurchaseOutcome` | buyer | per offer: paid, refused, released (the signature failed), unsettled |
+| `BudgetReclaim` | buyer | `reclaim()` asked the chain about an expired signature: freed, used, unknown |
+
+None of them holds a signature or a response body. `error` fields may hold
+internals: logs only.
+
+`PaymentLog($psr3Logger)` writes one line per event, at a level that says how
+urgent it is (`failed_after_settle` and a lost `record` are errors).
+`PaymentLog::events()` maps each event class to its method, to subscribe them
+all at once. `PaymentRecord($dir)`, a `PaymentOutcome` listener, appends one
+JSON line per sale or failed settlement to `$dir/<YYYY-MM>.jsonl`, files kept
+and never rotated: what moved money, or should have.
+
+```php
+$log = new PaymentLog($logger);
+foreach (PaymentLog::events() as $event => $method) {
+    $dispatcher->addListener($event, [$log, $method]);
+}
+$dispatcher->addListener(PaymentOutcome::class, new PaymentRecord('/var/lib/x402/records', $logger));
+```
 
 ### Facilitators
 
@@ -213,6 +267,33 @@ Upfront over MCP: once the money moved the receipt always goes back, in
 `error.data["x402/payment-response"]` when the tool answered with a JSON-RPC
 error (a scalar `data` is kept under `data.data`).
 
+### Job mode
+
+A work that takes minutes (a model, a render) is sold in two payments: a
+`<tool>_start` call takes a deposit upfront and queues the work, a free
+`<tool>_status` says when it is ready, and a `<tool>_result` call buys the
+result in the default flow (settled once it is delivered). The protocol is in
+[`docs/job-mode.md`](https://github.com/quebracho-digital/quebracho-x402-mcp/blob/main/docs/job-mode.md).
+The library holds its state machine and the pieces that do not depend on a
+framework, under `Quebracho\X402\Job`:
+
+| Piece | What it is |
+|---|---|
+| `Job` | one job, immutable: `settling > queued > running > ready > delivering > delivered`, or `failed_ours` (our fault, by a closed list: the result is then free). Each transition is checked against `Job::TRANSITIONS`; the buyer's input is dropped once the work ran |
+| `JobStore` | where jobs live: atomic, serialised writes; `create` is idempotent on the deposit's `Settlement::key`. `FileJobStore` is one host (flock, rename, files 0600) |
+| `JobWork` | the work one `_start` tool sells: `check()` before any payment is read, `refuse()` before the deposit settles, `run()` |
+| `JobRunner` | runs a queued job once the `_start` response went out (after the response, or from a queue worker) |
+| `JobStatus` | what `_status` answers, the same for a stranger's job as for none |
+| `JobPayments` | how a job's payment ended when its request is gone: the ledger first, then `authorizationState` |
+| `JobReconciler`, `JobJanitor` | from cron: move on the jobs a lost answer left waiting, give up on stale work, forget results and buyer text after their TTLs |
+
+What stays with your app: the MCP tools themselves and the middleware's hooks
+that tie them to these pieces (`validate` runs `JobWork::check`, `payer`
+refuses a `_result` from anyone but the deposit's payer, `$settle` writes the
+`settling` row before the deposit moves and queues it after), plus a
+concurrency limit. The demo app in the same repository has a complete,
+commented implementation (`app/src/X402/JobDesk.php`).
+
 ## Buyer
 
 ```php
@@ -238,8 +319,9 @@ known tokens (`Networks`), integer amounts and validities up to 10 minutes
 (`Budget::fromUsd(..., maxTimeout: 170)` lowers that: never sign a validity
 longer than your HTTP client waits).
 With `Budget::usd($network, $usd, $used)`, where `$used` reads the token's
-`authorizationState` on chain, a signature the seller never settled frees
-its amount once it expires unused.
+`authorizationState` on chain (`new AuthorizationState($http, $psr17, $psr17)`,
+with a short timeout), a signature the seller never settled frees its amount
+once it expires unused.
 
 Concurrent payments in one process (Fibers, ReactPHP, Amp) share the same
 `Budget` object, and the cap holds across them: `reserve()` checks the offer
@@ -249,7 +331,18 @@ only: separate processes, workers or hosts each have their own cap, so a
 shared limit needs the app to store the spent totals itself.
 
 `onRefused: fn(array $req, string $reason)` on both buyers says why an offer
-was not paid (`no_scheme`, `not_allowed`, or the screening's reason).
+was not paid (`no_scheme`, `not_allowed`, or the screening's reason). With
+`$events`, both also report `PurchaseIntent`, `PurchaseOutcome` and
+`BudgetReclaim` ([Events and logs](#events-and-logs)).
+
+**Pay only the sellers you know.** `PayeeAllowlist`, an `AddressCheck`
+listener, refuses every `payTo` not listed (`payto_not_allowed`); an empty list
+pays nobody. Recommended for an agent: a listing it was shown (or a prompt that
+reached it) cannot name its own wallet. OFAC still runs first.
+
+```php
+$dispatcher->addListener(AddressCheck::class, PayeeAllowlist::fromCsv(getenv('X402_PAYTO_ALLOW')));
+```
 PSR-18 has no per-request options: give the wrapped client a timeout longer
 than the offers' `maxTimeoutSeconds` plus the seller's settle (e.g. 120 s), or
 a buyer that hangs up early may be charged for an answer it never reads.
@@ -384,8 +477,9 @@ addresses OFAC's list passed:
 
 The oracle and the API are Chainalysis' copies of the sanctions lists, a second
 opinion that may lag OFAC's either way. Each fails closed when its source does
-not answer (`failOpen: true` passes instead), and a list file never synced
-refuses everyone until it is.
+not answer (`failOpen: true` passes instead, and reports `ScreeningSkipped`),
+and a list file never synced refuses everyone until it is. A 4xx from the API
+(a bad key) is never failed open.
 
 The list format is plain text, one address per line
 ([`resources/address-list.example.txt`](resources/address-list.example.txt)):
@@ -408,11 +502,13 @@ never replaces a younger copy with an older one, so a lagging mirror or cache
 cannot roll a list back, and between the copy shipped with the library and
 yours, the younger is used. `OfacSdn::published()` and
 `AddressList::updatedAt()` give the date in use, to alert on a list that
-stopped syncing.
+stopped syncing. Every sync returns a `SyncResult`: `count`, `updated` (the
+list's date) and `replaced` (false when the file held a younger list and was
+kept).
 
 Serve a list over HTTPS and any site can subscribe. A source of another
 kind (a vendor feed, a database) is your own `ListSync`: implement
-`sync(string $file): int`, write the format the list reads
+`sync(string $file): SyncResult`, write the format the list reads
 (`OfacSdn::write()` for OFAC's, the text format above for the others), and
 leave the old file in place when the source fails.
 

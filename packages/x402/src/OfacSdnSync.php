@@ -18,7 +18,7 @@ final class OfacSdnSync implements ListSync
     ) {
     }
 
-    public function sync(string $file): int
+    public function sync(string $file): SyncResult
     {
         return OfacSdn::sync($this->http, $this->requests, $file);
     }

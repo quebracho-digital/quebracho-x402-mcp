@@ -39,7 +39,19 @@ final class ChainalysisApi
     public function __invoke(AddressCheck $check): void
     {
         $address = $check->address;
-        $check->defer(fn (): ?string => $this->sanctioned($address) ? OfacSdn::REASON : null);
+        $check->defer(function () use ($check, $address): ?string {
+            try {
+                return $this->ask($address) ? OfacSdn::REASON : null;
+            } catch (\Throwable $e) {
+                if (!$this->failOpen || $e instanceof \LogicException) {
+                    throw $e;
+                }
+                // Passed unchecked: reported (ScreeningSkipped), so the pass leaves a trace.
+                $check->skip(self::class, $e);
+
+                return null;
+            }
+        });
     }
 
     /**
@@ -47,26 +59,34 @@ final class ChainalysisApi
      */
     public function sanctioned(string $address): bool
     {
+        try {
+            return $this->ask($address);
+        } catch (\Throwable $e) {
+            if (!$this->failOpen || $e instanceof \LogicException) {
+                throw $e;
+            }
+
+            return false;
+        }
+    }
+
+    /**
+     * @throws \LogicException on a 4xx (a bad key: never failed open)
+     * @throws \Throwable      when the API cannot answer
+     */
+    private function ask(string $address): bool
+    {
         $request = $this->requests->createRequest('GET', \sprintf(self::URL, rawurlencode($address)))
             ->withHeader('X-API-Key', $this->apiKey)
             ->withHeader('Accept', 'application/json');
-        try {
-            $response = $this->http->sendRequest($request);
-            $status = $response->getStatusCode();
-            if ($status >= 400 && $status < 500) {
-                throw new \LogicException("Chainalysis API: HTTP $status (check the key).");
-            }
-            $body = 200 === $status ? json_decode((string) $response->getBody(), true) : null;
-            if (!\is_array($body) || !\is_array($body['identifications'] ?? null)) {
-                throw new \UnexpectedValueException("Chainalysis API: HTTP $status without identifications.");
-            }
-        } catch (\LogicException $e) {
-            throw $e;
-        } catch (\Throwable $e) {
-            if ($this->failOpen) {
-                return false;
-            }
-            throw $e;
+        $response = $this->http->sendRequest($request);
+        $status = $response->getStatusCode();
+        if ($status >= 400 && $status < 500) {
+            throw new \LogicException("Chainalysis API: HTTP $status (check the key).");
+        }
+        $body = 200 === $status ? json_decode((string) $response->getBody(), true) : null;
+        if (!\is_array($body) || !\is_array($body['identifications'] ?? null)) {
+            throw new \UnexpectedValueException("Chainalysis API: HTTP $status without identifications.");
         }
 
         return [] !== $body['identifications'];

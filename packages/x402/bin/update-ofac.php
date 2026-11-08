@@ -23,5 +23,5 @@ foreach ($http_response_header ?? [] as $header) {
     }
 }
 $file = __DIR__.'/../resources/ofac-sdn.json';
-$count = OfacSdn::write($csv, $lastModified, $file);
-echo "$count addresses, published ".(new OfacSdn($file))->published()."\n";
+$result = OfacSdn::write($csv, $lastModified, $file);
+echo "$result->count addresses, published $result->updated".($result->replaced ? '' : ' (the file held a younger list: kept)')."\n";

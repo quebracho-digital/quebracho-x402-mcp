@@ -15,7 +15,8 @@
         "psr/http-client": "^1.0",
         "paragonie/ecc": "^2.6",
         "psr/http-message": "^2.0",
-        "psr/http-server-handler": "^1.0"
+        "psr/http-server-handler": "^1.0",
+        "psr/log": "^3"
     },
     "require-dev": {
         "phpunit/phpunit": "^12",
@@ -23,7 +24,11 @@
         "phpstan/phpstan": "*",
         "infection/infection": "*",
         "friendsofphp/php-cs-fixer": "*",
-        "shipmonk/composer-dependency-analyser": "*"
+        "shipmonk/composer-dependency-analyser": "*",
+        "symfony/http-client": "^7.3"
+    },
+    "suggest": {
+        "ext-redis": "RedisLedger: one payment ledger for several hosts"
     },
     "autoload": { "psr-4": { "Quebracho\\X402\\": "src/" } },
     "autoload-dev": { "psr-4": { "Quebracho\\X402\\Tests\\": "tests/" } },

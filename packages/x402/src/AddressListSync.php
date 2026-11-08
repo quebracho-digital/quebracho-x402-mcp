@@ -24,7 +24,7 @@ final class AddressListSync implements ListSync
     ) {
     }
 
-    public function sync(string $file): int
+    public function sync(string $file): SyncResult
     {
         return AddressList::sync($this->http, $this->requests, $this->url, $file, $this->min);
     }

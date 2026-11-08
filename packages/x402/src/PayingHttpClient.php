@@ -28,8 +28,8 @@ final class PayingHttpClient implements ClientInterface
      * @param ?\Closure                 $onPaid
      *                                             fn(array $req, array $receipt): void — e.g. to log what was spent.
      * @param ?EventDispatcherInterface $events
-     *                                             Dispatches an AddressCheck on each offer's payTo before signing it;
-     *                                             NULL screens nothing
+     *                                             Dispatches an AddressCheck on each offer's payTo before signing it, and reports
+     *                                             PurchaseIntent, PurchaseOutcome and BudgetReclaim; NULL: only OFAC screens
      * @param ?\Closure                 $onRefused
      *                                             fn(array $req, string $reason): void — each offer not paid, and why
      *                                             (no_scheme, not_allowed, or the screening's reason), e.g. to tell the
@@ -64,7 +64,7 @@ final class PayingHttpClient implements ClientInterface
         }
 
         // Expired signatures the seller never used no longer count.
-        $this->budget->reclaim();
+        $this->budget->reclaim($this->events);
         // The first offer we have a scheme for and the budget allows.
         foreach ($required['accepts'] ?? [] as $req) {
             [$scheme, $reason] = $this->budget->choose($this->schemes, $req, $this->events, $this->ofac);
@@ -74,6 +74,7 @@ final class PayingHttpClient implements ClientInterface
                 $reason = 'not_allowed';
             }
             if (null !== $reason) {
+                Events::report($this->events, new PurchaseOutcome(PurchaseOutcome::REFUSED, is_array($req) ? $req : [], $reason));
                 try {
                     $this->onRefused?->__invoke(is_array($req) ? $req : [], $reason);
                 } catch (\Throwable) {
@@ -93,14 +94,17 @@ final class PayingHttpClient implements ClientInterface
             } catch (\Throwable $e) {
                 // Never left this process: a failed signature spends nothing.
                 $this->budget->release($req);
+                Events::report($this->events, new PurchaseOutcome(PurchaseOutcome::RELEASED, $req, error: $e));
 
                 throw $e;
             }
+            Events::report($this->events, PurchaseIntent::of($scheme, $payment, $req));
             try {
                 $paid = $this->client->sendRequest($signed);
             } catch (\Throwable $e) {
                 // It may have reached the seller: kept as unsettled, to be reclaimed once expired.
                 $this->budget->unsettled($req, $payment);
+                Events::report($this->events, new PurchaseOutcome(PurchaseOutcome::UNSETTLED, $req, error: $e));
 
                 throw $e;
             }
@@ -111,6 +115,7 @@ final class PayingHttpClient implements ClientInterface
                 $receipt = null;
             }
             if (($receipt['success'] ?? null) === true) {
+                Events::report($this->events, new PurchaseOutcome(PurchaseOutcome::PAID, $req, receipt: $receipt));
                 // The payment happened: a callback that fails must not cost the paid answer.
                 try {
                     $this->onPaid?->__invoke($req, $receipt);
@@ -119,6 +124,8 @@ final class PayingHttpClient implements ClientInterface
                 }
             } else {
                 $this->budget->unsettled($req, $payment);
+                $reason = is_array($receipt) && is_string($receipt['errorReason'] ?? null) ? $receipt['errorReason'] : null;
+                Events::report($this->events, new PurchaseOutcome(PurchaseOutcome::UNSETTLED, $req, $reason, is_array($receipt) ? $receipt : null));
             }
 
             return $paid;

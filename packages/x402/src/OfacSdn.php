@@ -108,11 +108,9 @@ final class OfacSdn
      * Follows OFAC's redirects (to its signed download URL) itself, HTTPS only, so a client that does not
      * follow redirects works too.
      *
-     * @return int the number of addresses written
-     *
      * @throws \RuntimeException when the download or the parse fails; $file is left as it was
      */
-    public static function sync(ClientInterface $http, RequestFactoryInterface $requests, string $file): int
+    public static function sync(ClientInterface $http, RequestFactoryInterface $requests, string $file): SyncResult
     {
         $url = self::URL;
         for ($hops = 0;; ++$hops) {
@@ -146,16 +144,14 @@ final class OfacSdn
      * sync() does after the download; also for a site that downloads the file its own way, and for the
      * maintainers' bin/update-ofac.php, which refreshes the copy shipped with the library.
      *
-     * @param string $lastModified the download's Last-Modified header ('' for now)
-     *
-     * @return int the number of addresses written
-     *
      * When $file already holds a list OFAC published later than this one (a cache or a mirror that lags), the
-     * younger list wins: $file is kept, and its count is returned
+     * younger list wins: $file is kept (SyncResult->replaced false, with its count and date).
+     *
+     * @param string $lastModified the download's Last-Modified header ('' for now)
      *
      * @throws \RuntimeException when the parse finds too few addresses or $file cannot be written; it is left as it was
      */
-    public static function write(string $csv, string $lastModified, string $file): int
+    public static function write(string $csv, string $lastModified, string $file): SyncResult
     {
         $addresses = self::parse($csv);
         $count = array_sum(array_map('count', $addresses));
@@ -170,7 +166,7 @@ final class OfacSdn
             $current = null;
         }
         if (null !== $current && $current['published'] > $published) {
-            return array_sum(array_map('count', $current['addresses']));
+            return new SyncResult(array_sum(array_map('count', $current['addresses'])), $current['published'], false);
         }
         $json = json_encode([
             'source' => self::URL,
@@ -183,7 +179,7 @@ final class OfacSdn
             throw new \RuntimeException("OFAC SDN: cannot write $file.");
         }
 
-        return $count;
+        return new SyncResult($count, $published, true);
     }
 
     /**

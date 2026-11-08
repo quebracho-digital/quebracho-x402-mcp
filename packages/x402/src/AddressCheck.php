@@ -29,6 +29,11 @@ final class AddressCheck implements StoppableEventInterface
     public const string PAY_TO = 'payTo';
 
     private ?string $reason = null;
+    /** The exception behind address_check_failed, for AddressRejected. */
+    private ?\Throwable $error = null;
+    /** Where AddressRejected and ScreeningSkipped go: the dispatcher start() was given. */
+    private ?EventDispatcherInterface $events = null;
+    private bool $announced = false;
 
     /**
      * @var \Closure[]
@@ -54,6 +59,15 @@ final class AddressCheck implements StoppableEventInterface
     public function reject(string $reason): void
     {
         $this->reason = $reason;
+    }
+
+    /**
+     * A list that fails open could not answer and lets the address pass: reported as ScreeningSkipped, so
+     * the pass leaves a trace. $by is the list's class.
+     */
+    public function skip(string $by, \Throwable $error): void
+    {
+        Events::report($this->events, new ScreeningSkipped($this->role, $this->network, $this->address, $by, $error));
     }
 
     /**
@@ -85,13 +99,27 @@ final class AddressCheck implements StoppableEventInterface
             }
             try {
                 $this->reason = $later();
-            } catch (\Throwable) {
+            } catch (\Throwable $e) {
                 $this->reason = 'address_check_failed';
+                $this->error = $e;
             }
         }
         $this->later = [];
+        $this->announce();
 
         return $this->reason;
+    }
+
+    /**
+     * AddressRejected, once, when the check has a reason.
+     */
+    private function announce(): void
+    {
+        if (null === $this->reason || $this->announced) {
+            return;
+        }
+        $this->announced = true;
+        Events::report($this->events, new AddressRejected($this->role, $this->network, $this->address, $this->reason, $this->error));
     }
 
     public function isPropagationStopped(): bool
@@ -109,19 +137,22 @@ final class AddressCheck implements StoppableEventInterface
     public static function start(?EventDispatcherInterface $events, string $role, ?string $address, array $req, ?OfacSdn $ofac = null): self
     {
         $check = new self($role, (string) $req['network'], (string) $address, $req);
+        $check->events = $events;
         if (null === $address || '' === $address) {
             $check->reject('invalid_payload');
-
-            return $check;
-        }
-        try {
-            ($ofac ?? OfacSdn::bundled())($check);
-            if (null === $check->reason) {
-                $events?->dispatch($check);
+        } else {
+            try {
+                ($ofac ?? OfacSdn::bundled())($check);
+                if (null === $check->reason) {
+                    $events?->dispatch($check);
+                }
+            } catch (\Throwable $e) {
+                $check->reject('address_check_failed');
+                $check->error = $e;
             }
-        } catch (\Throwable) {
-            $check->reject('address_check_failed');
         }
+        // A deferred lookup's rejection is announced by verdict().
+        $check->announce();
 
         return $check;
     }
