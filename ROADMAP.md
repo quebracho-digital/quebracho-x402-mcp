@@ -27,7 +27,7 @@ The gaps x402_pay found refactoring onto the library (G1–G13) all go in before
 Tasks for the library are in [packages/x402/ROADMAP.md](packages/x402/ROADMAP.md).
 
 - [x] Settle on testnet (Base Sepolia) through a facilitator.
-- [ ] Screening in the app: warn when the OFAC list is stale (mtime older than N days).
+- [x] Screening in the app: `app:x402:check` warns when the OFAC list in use is older than 14 days.
 - [ ] Try the server with MCP Inspector.
 
 ## After the hackathon

@@ -1,5 +1,5 @@
 parameters:
-    level: 8
+    level: 9
     paths: [src]
     ignoreErrors:
         # ponytail: payloads are free-form JSON arrays; shapes are checked at runtime

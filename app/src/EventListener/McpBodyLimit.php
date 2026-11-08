@@ -30,7 +30,7 @@ final class McpBodyLimit
     public function __invoke(RequestEvent $event): void
     {
         $request = $event->getRequest();
-        if (!$event->isMainRequest() || !$request->isMethod('POST') || !str_starts_with((string) $request->attributes->get('_route'), McpRateLimit::ROUTE_PREFIX)) {
+        if (!$event->isMainRequest() || !$request->isMethod('POST') || !str_starts_with(McpRateLimit::route($request), McpRateLimit::ROUTE_PREFIX)) {
             return;
         }
         // The header first, so a declared oversize is refused without reading it; then what was really sent

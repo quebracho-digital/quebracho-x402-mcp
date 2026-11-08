@@ -8,6 +8,7 @@ use App\X402\LedgerFactory;
 use App\X402\NetworkCheck;
 use App\X402\Pricing;
 use App\X402\SensitiveRules;
+use Quebracho\X402\OfacSdn;
 use Quebracho\X402\PayingMcpClient;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -55,6 +56,11 @@ final class X402CheckCommand
         #[Autowire(env: 'csv:X402_SENSITIVE_TOOLS')] private readonly array $sensitive = [],
         #[Autowire('%app.mcp_tools%')] private readonly array $served = [],
         #[Autowire('%app.x402_sensitive_rules%')] private readonly array $sensitiveRules = [],
+        // OFAC publishes a few times a week: a list older than this means app:screening sync stopped running.
+        private readonly ?OfacSdn $ofac = null,
+        private readonly int $ofacMaxAgeDays = 14,
+        // app/.env says dev, for development: a deploy that keeps it shows stack traces to buyers.
+        #[Autowire('%kernel.debug%')] private readonly bool $debug = false,
     ) {
     }
 
@@ -63,6 +69,15 @@ final class X402CheckCommand
         $errors = [];
         if ('' === trim((string) $this->paidTools)) {
             $io->warning('X402_PAID_TOOLS is empty: every tool is free except #[PaidJob] ones.');
+        }
+        if ($this->debug) {
+            $io->warning('Debug is on (APP_ENV=dev or APP_DEBUG=1): errors show stack traces. Deploy with APP_ENV=prod.');
+        }
+        if (null !== $this->ofac && !$this->ofac->isOff()) {
+            $days = intdiv(time() - (int) strtotime($this->ofac->published()), 86400);
+            if ($days > $this->ofacMaxAgeDays) {
+                $io->warning("The OFAC list in use was published {$this->ofac->published()}, $days days ago: is app:screening sync running from cron?");
+            }
         }
         $check = static function (string $what, \Closure $build) use (&$errors, $io): void {
             try {
@@ -92,7 +107,8 @@ final class X402CheckCommand
         $check('sensitive rules (config/x402_sensitive.yaml valid, no duplicates; X402_SENSITIVE_TOOLS and tool rules served)', fn () => SensitiveRules::check($this->sensitive, $this->sensitiveRules, $this->served));
         $check('X402_TIMEOUTS within X402_BUYER_MAX_TIMEOUT', function (): void {
             foreach ((array) json_decode((string) $this->timeouts, true) as $tool => $seconds) {
-                if ((int) $seconds > (int) $this->buyerMax) {
+                // Not a number: Pricing's own check above names it.
+                if (is_numeric($seconds) && (int) $seconds > (int) $this->buyerMax) {
                     throw new \InvalidArgumentException("$tool offers $seconds s, longer than our own buyer signs ({$this->buyerMax} s): app:ask would refuse it.");
                 }
             }

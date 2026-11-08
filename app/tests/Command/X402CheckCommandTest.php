@@ -7,6 +7,7 @@ namespace App\Tests\Command;
 use App\Command\X402CheckCommand;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Quebracho\X402\EvmExact;
+use Quebracho\X402\OfacSdn;
 use Symfony\Bundle\FrameworkBundle\Console\Application;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 use Symfony\Component\Console\Input\ArrayInput;
@@ -66,6 +67,38 @@ final class X402CheckCommandTest extends KernelTestCase
         self::assertSame(0, $code);
         self::assertStringContainsString('X402_PAID_TOOLS is empty', $display);
         self::assertStringNotContainsString('X402_PAID_TOOLS is empty', $run('wisdom')[1]);
+    }
+
+    public function testAStaleOfacListIsAWarningNotAFailure(): void
+    {
+        $limiter = static fn () => new RateLimiterFactory(['id' => 'x', 'policy' => 'fixed_window', 'limit' => 1, 'interval' => '1 minute'], new InMemoryStorage());
+        $limits = ['MCP_LIMIT_IP' => '1', 'MCP_LIMIT_GLOBAL' => '1', 'TERMS_LIMIT_IP' => '1', 'TERMS_LIMIT_DAY' => '1'];
+        $run = static function (int $maxAge) use ($limiter, $limits): array {
+            $command = new X402CheckCommand(static fn () => null, static fn () => null, $limiter, $limiter, $limiter, $limiter, $limits, '{}', '170', 'eip155:84532', [new EvmExact()], 'wisdom', ofac: OfacSdn::bundled(), ofacMaxAgeDays: $maxAge);
+
+            return [$command(new SymfonyStyle(new ArrayInput([]), $out = new BufferedOutput())), $out->fetch()];
+        };
+
+        [$code, $out] = $run(-1);
+        self::assertSame(0, $code, $out);
+        self::assertStringContainsString('is app:screening sync running', $out);
+        self::assertStringNotContainsString('app:screening sync', $run(100000)[1]);
+    }
+
+    public function testDebugIsAWarningNotAFailure(): void
+    {
+        $limiter = static fn () => new RateLimiterFactory(['id' => 'x', 'policy' => 'fixed_window', 'limit' => 1, 'interval' => '1 minute'], new InMemoryStorage());
+        $limits = ['MCP_LIMIT_IP' => '1', 'MCP_LIMIT_GLOBAL' => '1', 'TERMS_LIMIT_IP' => '1', 'TERMS_LIMIT_DAY' => '1'];
+        $run = static function (bool $debug) use ($limiter, $limits): array {
+            $command = new X402CheckCommand(static fn () => null, static fn () => null, $limiter, $limiter, $limiter, $limiter, $limits, '{}', '170', 'eip155:84532', [new EvmExact()], 'wisdom', debug: $debug);
+
+            return [$command(new SymfonyStyle(new ArrayInput([]), $out = new BufferedOutput())), $out->fetch()];
+        };
+
+        [$code, $out] = $run(true);
+        self::assertSame(0, $code, $out);
+        self::assertStringContainsString('Deploy with APP_ENV=prod', $out);
+        self::assertStringNotContainsString('APP_ENV=prod', $run(false)[1]);
     }
 
     public function testAnOfferExactlyAsLongAsOurBuyerSignsPasses(): void

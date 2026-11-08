@@ -516,6 +516,9 @@ OFAC changes without a fixed schedule, so sync it **every day** from cron. The
 command replaces the file atomically, keeps it when it already holds a younger
 list, and exits non-zero if the download fails, so cron's mail shows it:
 
+`app:x402:check` warns when the list in use is older than 14 days: OFAC publishes
+a few times a week, so an older one means the cron stopped.
+
 ```cron
 # daily, 06:00: OFAC's SDN list into app/var/screening/ofac-sdn.json
 0 6 * * * cd /path/to/quebracho-x402-mcp/app && bin/console app:screening sync
@@ -554,6 +557,10 @@ ddev exec --dir /var/www/html/app bin/console app:screening check 0x…
 ## Configuration
 
 `app/.env` holds working defaults. Override them in `app/.env.local` (git-ignored).
+Deploy with `APP_ENV=prod` (set in the server's environment or `app/.env.local`):
+`app/.env` commits `dev` for development, and a deploy that keeps it shows stack
+traces on errors. `app:x402:check` warns when debug is on.
+
 On every deploy, after `composer install`, run `bin/console cache:clear` (not
 `cache:warmup`, which can keep the old container) and then
 `bin/console app:x402:check`: Pricing, the limiters and the buyer's budget are otherwise only built on the
