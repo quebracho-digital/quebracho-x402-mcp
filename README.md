@@ -3,7 +3,7 @@
 x402 payments for PHP: a framework-free library (PSR-7/14/15/18, MIT) that
 lets any PHP service sell, or any PHP agent buy, over
 [x402](https://www.x402.org/): HTTP 402 plus a signed USDC authorization. No
-API keys, no accounts. This repo holds the library (`packages/x402`) and a
+API keys, no accounts. The library is [`quebracho/x402`](https://github.com/quebracho-digital/x402) (on Packagist). This repo holds a
 Symfony MCP server with a Symfony AI agent (`app/`) that show it working.
 
 Built for the Symfony AI & MCP Hackathon (team Ombu). The version we submitted is
@@ -73,7 +73,7 @@ tools it needs.
 
 | Path | What it is |
 |---|---|
-| `packages/x402/` | `quebracho/x402`: framework-agnostic library (PSR-7/15/17/18, `ext-gmp`). Signs and verifies x402 payments. |
+| `vendor/quebracho/x402` | [`quebracho/x402`](https://github.com/quebracho-digital/x402): framework-agnostic library (PSR-7/15/17/18, `ext-gmp`), installed by Composer. Signs and verifies x402 payments. |
 | `app/` | Symfony 8.1 + `symfony/mcp-bundle`: an MCP server with a free `echo` tool, a free `ombu_search` tool (finds services on [Ombú](https://ombu.quebracho.digital), faceted by the server to Quebracho's own listings, `/market?seller[ours]=ours`; this tool's caller cannot change the facet), a paid `wisdom` tool and a paid `analyze_terms` tool (super beta example, below), and `bin/console app:ask`, a Symfony AI agent that discovers, pays and calls them. |
 | `bin/smoke.sh` | End-to-end check over real HTTP: free call, unpaid call (PaymentRequired), paid call (result + receipt). |
 | `bin/inspect.py` | Stdlib-only Python MCP client: initialize, `tools/list`, free call, unpaid call (shows the PaymentRequired). No Node needed. |
@@ -125,12 +125,7 @@ HTTP). Keep the DDEV project name: `allowed_hosts` in
 `403 Invalid Host header`. Add yours there if you rename it. You can also open it in the
 [MCP Inspector](https://github.com/modelcontextprotocol/inspector).
 
-Run the library tests (no network; the library has its own dependencies):
-
-```bash
-ddev composer install -d packages/x402
-ddev exec -d /var/www/html/packages/x402 vendor/bin/phpunit tests
-```
+The library has its own repository and tests (https://github.com/quebracho-digital/x402); the app's tests run with `ddev exec -d /var/www/html/app vendor/bin/phpunit`.
 
 ## The agent: `app:ask`
 
@@ -493,7 +488,7 @@ server checks the payer once its signature is verified, the agent checks `payTo`
 before it signs. First refusal wins:
 
 1. **OFAC's SDN list**, from OFAC's own Sanctions List Service
-   (`Quebracho\X402\OfacSdn`, see [its README](packages/x402/README.md#address-screening)).
+   (`Quebracho\X402\OfacSdn`, see [its README](https://github.com/quebracho-digital/x402/blob/main/README.md#address-screening)).
    The library asks it before any listener, so nothing in the app can let a
    sanctioned address through, our allowlist included. The app's snapshot is
    `app/var/screening/ofac-sdn.json`; until the first `app:screening sync`, the
@@ -659,7 +654,7 @@ $client = new PayingHttpClient(
 );
 ```
 
-**Networks**: built in are the demo testnets (Base Sepolia, Arc testnet, Ethereum Sepolia, Avalanche Fuji, Polygon Amoy, Solana devnet), Arc mainnet (`eip155:5042`, where Ombú sells), and Ethereum mainnet, which is there to be read (the blacklist of its USDC and USDT: an `eth_call`, no gas). Any other EVM chain, mainnets included, whose token implements EIP-3009, is added with `Networks::add()`. The steps, the contract and the blacklist function to use are in [Add a blockchain](packages/x402/README.md#add-a-blockchain):
+**Networks**: built in are the demo testnets (Base Sepolia, Arc testnet, Ethereum Sepolia, Avalanche Fuji, Polygon Amoy, Solana devnet), Arc mainnet (`eip155:5042`, where Ombú sells), and Ethereum mainnet, which is there to be read (the blacklist of its USDC and USDT: an `eth_call`, no gas). Any other EVM chain, mainnets included, whose token implements EIP-3009, is added with `Networks::add()`. The steps, the contract and the blacklist function to use are in [Add a blockchain](https://github.com/quebracho-digital/x402/blob/main/README.md#add-a-blockchain):
 
 ```php
 $network = Networks::add(chainId: 4202, asset: '0x…', name: 'USDC', version: '2');
@@ -674,7 +669,7 @@ that on settle), and it is not wired into the demo. `SolanaExact`
 
 ## Attacks it resists
 
-Each line is a test that fails if the defence breaks (`packages/x402/tests`,
+Each line is a test that fails if the defence breaks (the library's `tests`,
 `app/tests`). Most come from reviewing this code against the x402 v2 spec;
 the reasons are in [DECISIONS.md](DECISIONS.md).
 
@@ -745,4 +740,4 @@ Plan, open tasks and what comes after the hackathon: [ROADMAP.md](ROADMAP.md).
 
 MIT, see [LICENSE](LICENSE). Some library classes were first written by the
 same author for the `x402_pay` Drupal module and are relicensed here; see
-[packages/x402/NOTICE](packages/x402/NOTICE).
+[NOTICE](https://github.com/quebracho-digital/x402/blob/main/NOTICE).
