@@ -4,10 +4,11 @@ declare(strict_types=1);
 
 namespace App\X402;
 
-use App\Job\Job;
-use App\Job\JobRunner;
-use App\Job\JobStore;
 use Quebracho\X402\Authorization;
+use Quebracho\X402\Job\Job;
+use Quebracho\X402\Job\JobPayments;
+use Quebracho\X402\Job\JobRunner;
+use Quebracho\X402\Job\JobStore;
 use Quebracho\X402\Settlement;
 use Quebracho\X402\Signer;
 use Quebracho\X402\X402McpMiddleware;

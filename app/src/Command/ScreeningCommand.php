@@ -11,7 +11,7 @@ use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Style\SymfonyStyle;
 
 /**
- * The admin's side of address screening: sync OFAC, and keep our own lists.
+ * The admin's side of address screening: sync OFAC's SDN list, and keep our own lists.
  */
 #[AsCommand(name: 'app:screening', description: 'Address screening: sync | allow | deny | forget | check | list')]
 final class ScreeningCommand
@@ -33,11 +33,16 @@ final class ScreeningCommand
 
         switch ($action) {
             case 'sync':
-                $io->success(\sprintf('OFAC lists synced: %d addresses (%s).', $this->screening->sync(), implode(', ', Screening::OFAC_LISTS)));
+                $result = $this->screening->sync();
+                $io->success(\sprintf(
+                    $result->replaced ? 'OFAC SDN list synced: %d addresses, published %s.' : 'OFAC SDN list kept: the file already holds a younger list (%d addresses, published %s).',
+                    $result->count,
+                    $result->updated,
+                ));
                 break;
             case 'allow':
                 $this->screening->set($address, 'allow');
-                $io->warning("$address passes screening, even if OFAC lists it. That is now your call.");
+                $io->warning("$address skips our denylist and the screening API: that is now your call. OFAC's list and the token's own blacklist still apply.");
                 break;
             case 'deny':
             case 'forget':
@@ -48,7 +53,7 @@ final class ScreeningCommand
                 $io->writeln("$address: ".($this->screening->check($address) ?? 'passes'));
                 break;
             case 'list':
-                $io->writeln(json_encode($this->screening->own(), \JSON_PRETTY_PRINT | \JSON_THROW_ON_ERROR));
+                $io->writeln(json_encode($this->screening->own() + ['ofac_published' => $this->screening->ofac()->published()], \JSON_PRETTY_PRINT | \JSON_THROW_ON_ERROR));
                 break;
             default:
                 $io->error("Unknown action \"$action\".");

@@ -31,12 +31,15 @@ final class PayingMcpClient implements ClientInterface
      *                                             fn(string $tool, array $req, array $receipt): void — every receipt of
      *                                             a paid retry, settled or not, e.g. to show or log it.
      * @param ?EventDispatcherInterface $events
-     *                                             Dispatches an AddressCheck on each offer's payTo before signing it;
-     *                                             NULL screens nothing
+     *                                             Dispatches an AddressCheck on each offer's payTo before signing it, and reports
+     *                                             PurchaseIntent, PurchaseOutcome and BudgetReclaim; NULL: only OFAC screens
      * @param ?\Closure                 $onRefused
      *                                             fn(array $req, string $reason): void — each offer not paid, and why
      *                                             (no_scheme, not_allowed, or the screening's reason), e.g. to tell the
      *                                             user the price it refused
+     * @param ?OfacSdn                  $ofac
+     *                                             OFAC's SDN list, asked first about every address (AddressCheck), with or without $events;
+     *                                             NULL: the one shipped with the library. Pass new OfacSdn($file) with the file OfacSdn::sync() keeps fresh
      */
     public function __construct(
         private readonly ClientInterface $client,
@@ -46,6 +49,7 @@ final class PayingMcpClient implements ClientInterface
         private readonly ?\Closure $onPaid = null,
         private readonly ?EventDispatcherInterface $events = null,
         private readonly ?\Closure $onRefused = null,
+        private readonly ?OfacSdn $ofac = null,
     ) {
     }
 
@@ -67,16 +71,17 @@ final class PayingMcpClient implements ClientInterface
         }
 
         // Expired signatures the seller never used no longer count.
-        $this->budget->reclaim();
+        $this->budget->reclaim($this->events);
         // The first offer we have a scheme for and the budget allows.
         foreach ($required['accepts'] ?? [] as $req) {
-            [$scheme, $reason] = $this->budget->choose($this->schemes, $req, $this->events);
+            [$scheme, $reason] = $this->budget->choose($this->schemes, $req, $this->events, $this->ofac);
             // Checked again and counted in one step: the screening may have yielded, and
             // payments running concurrently on this budget must not all pass the cap.
             if (null === $reason && !$this->budget->reserve($req)) {
                 $reason = 'not_allowed';
             }
             if (null !== $reason) {
+                Events::report($this->events, new PurchaseOutcome(PurchaseOutcome::REFUSED, is_array($req) ? $req : [], $reason, tool: (string) $call['params']['name']));
                 try {
                     $this->onRefused?->__invoke(is_array($req) ? $req : [], $reason);
                 } catch (\Throwable) {
@@ -93,14 +98,17 @@ final class PayingMcpClient implements ClientInterface
             } catch (\Throwable $e) {
                 // Never left this process: a failed signature spends nothing.
                 $this->budget->release($req);
+                Events::report($this->events, new PurchaseOutcome(PurchaseOutcome::RELEASED, $req, error: $e, tool: (string) $call['params']['name']));
 
                 throw $e;
             }
+            Events::report($this->events, PurchaseIntent::of($scheme, $payment, $req));
             try {
                 [$response, $result] = $this->answer($this->client->sendRequest($paid), $call['id']);
             } catch (\Throwable $e) {
                 // It may have reached the seller: kept as unsettled, to be reclaimed once expired.
                 $this->budget->unsettled($req, $payment);
+                Events::report($this->events, new PurchaseOutcome(PurchaseOutcome::UNSETTLED, $req, error: $e, tool: (string) $call['params']['name']));
 
                 throw $e;
             }
@@ -112,8 +120,13 @@ final class PayingMcpClient implements ClientInterface
                     // ponytail: errors of a logging callback are dropped, as Sale::outcome drops them.
                 }
             }
+            $tool = (string) $call['params']['name'];
             if (($receipt['success'] ?? null) !== true) {
                 $this->budget->unsettled($req, $payment);
+                $reason = is_array($receipt) && is_string($receipt['errorReason'] ?? null) ? $receipt['errorReason'] : null;
+                Events::report($this->events, new PurchaseOutcome(PurchaseOutcome::UNSETTLED, $req, $reason, is_array($receipt) ? $receipt : null, tool: $tool));
+            } else {
+                Events::report($this->events, new PurchaseOutcome(PurchaseOutcome::PAID, $req, receipt: $receipt, tool: $tool));
             }
 
             return $response;

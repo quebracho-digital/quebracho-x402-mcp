@@ -323,7 +323,7 @@ server, so a tool served through a service id the registry (`App\Mcp\` in
 `mcp.yaml`) matches counts even when its class lives elsewhere, and the build
 fails if a served tool is missing from it. `analyze_terms_start`,
 `analyze_terms_result` and the free `analyze_terms_status` (`App\Mcp\AnalyzeTermsJobTool`)
-carry it; their jobs live in `app/var/jobs` (`App\Job\FileJobStore`). The
+carry it; their jobs live in `app/var/jobs` (`Quebracho\X402\Job\FileJobStore`). The
 `_start` offer says in `extra.job` that the deposit is non-refundable and that
 `_result` is free when the job fails by our fault.
 
@@ -408,7 +408,7 @@ ambiguous (`delivering`), a retry queued a job but found no free slot
 (`queued`), or a runner died (`running`). `app:jobs:janitor` deals with all of
 them, in this order: it moves `settling` and `delivering` jobs on once the
 ledger or the chain (the token's `authorizationState`) knows how their payment
-ended (`App\X402\JobReconciler`), runs queued jobs no request ran in a free
+ended (`Quebracho\X402\Job\JobReconciler`), runs queued jobs no request ran in a free
 slot, fails work untouched for 5 minutes (`failed_ours`, so `_result` is free),
 and drops delivered results after their 5-minute re-read window, results nobody
 bought after a day (the job then answers `expired`), and the buyer's text on a
@@ -456,7 +456,7 @@ the web's environment (the model's token, `JOB_SLOTS`).
 This app is an example to read, for one host, not for production. These are
 limits we know and leave in, each also said in a comment where it lives:
 
-- **"Nonce used" is not proof that we were paid** (`App\X402\JobPayments`).
+- **"Nonce used" is not proof that we were paid** (`Quebracho\X402\Job\JobPayments`).
   When the ledger has forgotten a deposit or a `_result` payment, the cron asks
   the token's `authorizationState(from, nonce)`. An EIP-3009 nonce is the
   payer's: the buyer can burn it with `cancelAuthorization`, or spend it on
@@ -480,7 +480,7 @@ limits we know and leave in, each also said in a comment where it lives:
   settle. It stays spendable (only to our `payTo`) until it expires, and the
   buyer's budget counts it until then. A stronger and cheaper proof would be an
   EIP-191 signature over the `jobId`.
-- **`_status` takes the payer's address, which is public** (`App\Job\JobStatus`):
+- **`_status` takes the payer's address, which is public** (`Quebracho\X402\Job\JobStatus`):
   the 128-bit random `jobId` is the real secret there.
 - **Buyer text goes to Hugging Face** (`analyze_terms_start` says so): the
   analysis, quotes included, is cached 7 days unless `sensitive`, and the job's
@@ -488,22 +488,36 @@ limits we know and leave in, each also said in a comment where it lives:
 
 ### Address screening
 
-Both sides screen addresses with `App\X402\Screening`: the server checks the
-payer once its signature is verified, the agent checks `payTo` before it signs.
-First match wins: **our allowlist** (passes, even over OFAC), **our denylist**,
-**OFAC's sanctioned addresses** (a local copy), and optionally **Chainalysis'
-sanctions API** (`X402_SCREENING_API_KEY`). The API lookup starts when the payment is
-checked and is read just before settling; answers are cached
-`X402_SCREENING_CACHE_TTL` seconds, and no answer in time follows
-`X402_SCREENING_UNAVAILABLE`. Until `app:screening sync` has run once, the OFAC step
-matches nothing and only logs a warning: run it before taking payments.
+Both sides screen addresses through the library's PSR-14 `AddressCheck`: the
+server checks the payer once its signature is verified, the agent checks `payTo`
+before it signs. First refusal wins:
 
-OFAC changes without a fixed schedule, so sync it **every day** from cron (the
-command replaces the file atomically, and exits non-zero if the download fails,
-so cron's mail shows it):
+1. **OFAC's SDN list**, from OFAC's own Sanctions List Service
+   (`Quebracho\X402\OfacSdn`, see [its README](packages/x402/README.md#address-screening)).
+   The library asks it before any listener, so nothing in the app can let a
+   sanctioned address through, our allowlist included. The app's snapshot is
+   `app/var/screening/ofac-sdn.json`; until the first `app:screening sync`, the
+   copy shipped with the library is used.
+2. **Our allowlist** (`app/var/screening/allow.txt`): skips 3 and 4, nothing else.
+3. **Our denylist** (`app/var/screening/deny.txt`): `address_denied`.
+4. **Chainalysis' sanctions API** (`Quebracho\X402\ChainalysisApi`), only with
+   `X402_SCREENING_API_KEY`. It is asked when the verdict is read (just before
+   settling, or signing); answers are cached `X402_SCREENING_CACHE_TTL` seconds,
+   and no answer in time follows `X402_SCREENING_UNAVAILABLE` (`allow` lets the
+   address pass and logs `ScreeningSkipped`). A 4xx (a wrong key) always rejects.
+5. **The token's own blacklist** (`TokenBlacklist`, below).
+
+`App\X402\Screening` holds 2 to 4; the lists are the library's text format
+(`AddressList`: one address per line, `#` for comments). A list file that does
+not exist is empty; one that cannot be read refuses everyone. Every refusal and
+skip is logged by the library's `AddressRejected` and `ScreeningSkipped` events.
+
+OFAC changes without a fixed schedule, so sync it **every day** from cron. The
+command replaces the file atomically, keeps it when it already holds a younger
+list, and exits non-zero if the download fails, so cron's mail shows it:
 
 ```cron
-# daily, 06:00: OFAC's lists into app/var/screening/ofac.txt
+# daily, 06:00: OFAC's SDN list into app/var/screening/ofac-sdn.json
 0 6 * * * cd /path/to/quebracho-x402-mcp/app && bin/console app:screening sync
 ```
 
@@ -531,9 +545,9 @@ in `TokenBlacklist::TOKENS` is not asked** (it passes): add yours with its
 | USDT0 on Arbitrum and Rootstock | `isBlocked` | answers, but `false` for the same 8: never seen to freeze, **not active** |
 
 ```bash
-ddev exec --dir /var/www/html/app bin/console app:screening sync          # download OFAC's lists
+ddev exec --dir /var/www/html/app bin/console app:screening sync          # download OFAC's SDN list
 ddev exec --dir /var/www/html/app bin/console app:screening deny 0x…      # our own report
-ddev exec --dir /var/www/html/app bin/console app:screening allow 0x…     # override a public list
+ddev exec --dir /var/www/html/app bin/console app:screening allow 0x…     # skip our denylist and the API (never OFAC)
 ddev exec --dir /var/www/html/app bin/console app:screening check 0x…
 ```
 
@@ -583,23 +597,26 @@ with a 500.
 | `X402_MAX_PER_PAYMENT` | `{"eip155:84532":"0.02"}` | Ceiling for one single payment, same shape. |
 | `X402_BUYER_MAX_TIMEOUT` | `170` | The longest validity (seconds) the agent signs. Under the 180 s its HTTP client waits, so it never signs a payment that can be settled after it hung up. |
 | `X402_PAYTO_ALLOW` | the demo `PAY_TO` | Wallets the agent may pay, comma separated, default deny: a seller cannot name its own wallet. |
-| `X402_SCREENING_API_KEY` | empty | Chainalysis sanctions API key. Empty: only our lists and OFAC's. |
+| `X402_SCREENING_API_KEY` | empty | Chainalysis sanctions API key. Empty: OFAC's list, ours and the token's. |
 | `X402_SCREENING_CACHE_TTL` | `86400` | Seconds an API answer (clean or sanctioned) is kept. |
 | `X402_SCREENING_TIMEOUT` | `3` | Seconds to wait for the API. |
-| `X402_SCREENING_UNAVAILABLE` | `reject` | No API answer in time (or a 5xx): `reject` or `allow`. |
+| `X402_SCREENING_UNAVAILABLE` | `reject` | No API answer in time (or a 5xx, or a reply without `identifications`): `reject` or `allow`. |
 | `MCP_URL` | the DDEV site's `/mcp` | The MCP server the agent connects to. |
 | `OMBU_MCP_URL` | `https://ombu.quebracho.digital/mcp` | Ombú's MCP server, the agent's second client (search only, see above). |
 | `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | placeholders | The agent's OpenAI-compatible LLM; set them in `.env.local`. |
 
-**Payment logs.** `App\X402\PaymentLog` logs an `intent` line before each
-settle or upfront tool run, and an `outcome` line per paid call (never the
-signature, the response body or a token). With `symfony/monolog-bundle`
+**Payment logs.** The library's `PaymentLog` logs every event it reports: an
+`intent` line before each settle or upfront tool run, an `outcome` line per
+paid call, a `fault` when the ledger failed and the sale went on (`record` is
+an error: money may have moved and its state was lost), each address the
+screening refused or could not check, and the buyer's purchases and budget
+reclaims (never the signature, the response body or a token). With `symfony/monolog-bundle`
 installed (a `require-dev` here) it uses the `x402` Monolog channel; without
 it (`composer install --no-dev`) it writes to `php://stderr` at level `info`
 (`app.x402_stderr_logger` in `app/config/services.yaml`), prefixed `x402 `.
 
 **Payment records.** Logs can be lost (PHP-FPM may drop stderr), so
-`App\X402\PaymentRecord` also keeps the payments that moved money or should
+`Quebracho\X402\PaymentRecord` also keeps the payments that moved money or should
 have: one JSON line per `settled`, `delivered`, `not_settled` or
 `failed_after_settle` outcome, appended to `app/var/x402-records/<YYYY-MM>.jsonl`
 (time, status, settlement key, network, `payTo`, amount, asset, payer,
@@ -704,7 +721,7 @@ Working and verified:
 - PSR-18 paying clients with a per-network spending cap: MCP in band (`PayingMcpClient`) and plain HTTP 402 (`PayingHttpClient`).
 - Symfony MCP server charging a tool end to end (`bin/smoke.sh`).
 - Symfony AI agent (`app:ask`) that discovers, pays and calls the tool, verified against a local llama.cpp model (mock mode).
-- Address screening on both sides (PSR-14 `AddressCheck`): our allow/deny lists, OFAC's sanctioned addresses, optional Chainalysis API.
+- Address screening on both sides (PSR-14 `AddressCheck`): OFAC's SDN list first, then our allow/deny lists, the optional Chainalysis API and the token's own blacklist.
 - Settlement on testnet through a facilitator (`X402_FACILITATOR=https://x402.org/facilitator`, verified on Base Sepolia).
 
 Not yet:

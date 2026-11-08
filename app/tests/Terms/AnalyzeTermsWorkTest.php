@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace App\Tests\Terms;
 
-use App\Job\JobFailed;
 use App\Terms\AnalyzeTermsWork;
 use App\Terms\TermsAnalyzer;
 use App\X402\SensitiveRules;
 use PHPUnit\Framework\TestCase;
+use Quebracho\X402\Job\JobFailed;
 use Symfony\AI\Platform\Test\MockPlatformFactory;
 use Symfony\Component\Cache\Adapter\ArrayAdapter;
 use Symfony\Component\RateLimiter\RateLimiterFactory;

@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace App\X402;
 
-use App\Job\IllegalTransition;
-use App\Job\Job;
-use App\Job\JobJanitor;
-use App\Job\JobStatus;
-use App\Job\JobStore;
+use Quebracho\X402\Job\IllegalTransition;
+use Quebracho\X402\Job\Job;
+use Quebracho\X402\Job\JobJanitor;
+use Quebracho\X402\Job\JobPayments;
+use Quebracho\X402\Job\JobReconciler;
+use Quebracho\X402\Job\JobStatus;
+use Quebracho\X402\Job\JobStore;
 use Quebracho\X402\X402McpMiddleware;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Contracts\Service\ResetInterface;

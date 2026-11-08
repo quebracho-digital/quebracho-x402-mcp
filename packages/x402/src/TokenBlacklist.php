@@ -123,6 +123,9 @@ final class TokenBlacklist
             }
         } catch (\Throwable $e) {
             if ($this->failOpen) {
+                // Passed unchecked: reported (ScreeningSkipped), so the pass leaves a trace.
+                $check->skip(self::class, $e);
+
                 return;
             }
             throw $e;

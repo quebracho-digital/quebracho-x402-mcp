@@ -39,7 +39,7 @@ final class X402McpMiddleware implements MiddlewareInterface
      *                                             fn(array $payment, array $req): array — a facilitator's settle result.
      *                                             Settlement::mock() is mock mode, never implicit: nothing moves.
      * @param ?EventDispatcherInterface $events
-     *                                             Dispatches an AddressCheck on the payer and a PaymentOutcome; NULL: neither
+     *                                             Dispatches an AddressCheck on the payer, PaymentIntent, PaymentOutcome and PaymentFault; NULL: none
      * @param ?\Closure                 $verify
      *                                             fn(array $payment, array $req): ?string — online check before the claim.
      *                                             NULL when good, or a non-empty reason; any other return or exception
@@ -76,6 +76,9 @@ final class X402McpMiddleware implements MiddlewareInterface
      *                                             as in X402Middleware: the state is stored, never the tool's answer.
      *                                             Called once per paid call; throwing or any answer but FALSE counts as
      *                                             sensitive. A retry of a settled sensitive call gets already_settled.
+     * @param ?OfacSdn                  $ofac
+     *                                             OFAC's SDN list, asked first about every address (AddressCheck), with or without $events;
+     *                                             NULL: the one shipped with the library. Pass new OfacSdn($file) with the file OfacSdn::sync() keeps fresh
      */
     public function __construct(
         private readonly array $schemes,
@@ -94,6 +97,7 @@ final class X402McpMiddleware implements MiddlewareInterface
         private readonly ?PaymentLedger $ledger = null,
         private readonly ?\Closure $lookup = null,
         private readonly ?\Closure $sensitive = null,
+        private readonly ?OfacSdn $ofac = null,
     ) {
     }
 
@@ -327,12 +331,12 @@ final class X402McpMiddleware implements MiddlewareInterface
     private function sale(array $payment, array $req, ?\Closure $payer, int $duration): Sale
     {
         if (null === $this->ledger) {
-            return new Sale($this->schemes, $this->claim, $this->settle, $this->events, $this->verify, $this->release, $payment, $req, $payer, $duration);
+            return new Sale($this->schemes, $this->claim, $this->settle, $this->events, $this->verify, $this->release, $payment, $req, $payer, $duration, ofac: $this->ofac);
         }
         $ledger = $this->ledger;
         $ttl = Sale::ttl($payment);
 
-        return new Sale($this->schemes, fn (string $key): bool => $ledger->claim($key, $ttl), $this->settle, $this->events, $this->verify, fn (string $key) => $ledger->release($key), $payment, $req, $payer, $duration);
+        return new Sale($this->schemes, fn (string $key): bool => $ledger->claim($key, $ttl), $this->settle, $this->events, $this->verify, fn (string $key) => $ledger->release($key), $payment, $req, $payer, $duration, ofac: $this->ofac);
     }
 
     /**
@@ -354,8 +358,9 @@ final class X402McpMiddleware implements MiddlewareInterface
             } elseif ($sale->held()) {
                 $sale->remember($this->ledger, ['status' => 'pending', 'receipt' => $receipt, 'id' => $id] + $mark, $response);
             }
-        } catch (\Throwable) {
-            // ponytail: no outcome event for a lost store; the settle's PaymentOutcome already went out.
+        } catch (\Throwable $e) {
+            // The settle's PaymentOutcome already went out; the lost state is a PaymentFault (record): a person looks.
+            $sale->fault(PaymentFault::RECORD, $e);
         }
     }
 

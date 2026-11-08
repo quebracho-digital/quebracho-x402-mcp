@@ -21,7 +21,7 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
  * makes every /mcp request fail (the controller cannot be built) instead of
  * serving paid tools for free.
  */
-final class Facilitator
+final class Facilitator implements PaymentStatus
 {
     private readonly ?LibFacilitator $remote;
 
@@ -87,7 +87,7 @@ final class Facilitator
     }
 
     /**
-     * A settle's status by its paymentId, for ReceiptLookup. NULL when the facilitator has no status
+     * A settle's status by its paymentId, for the library's ReceiptLookup. NULL when the facilitator has no status
      * route (only PaymentStatus ones have it: Circle) or is mock (nothing was sent to a facilitator).
      */
     public function status(string $paymentId, string $network): ?array

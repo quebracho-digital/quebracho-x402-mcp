@@ -4,24 +4,15 @@ declare(strict_types=1);
 
 namespace App\Tests\Job;
 
-use App\Job\FileJobStore;
-use App\Job\Job;
-use App\Job\JobFailed;
-use App\Job\JobJanitor;
-use App\Job\JobRunner;
-use App\Job\JobWork;
 use App\Mcp\AnalyzeTermsJobTool;
 use App\Mcp\WisdomTool;
 use App\X402\JobDelivery;
 use App\X402\JobDeposit;
 use App\X402\JobDesk;
 use App\X402\JobIdOnRefusal;
-use App\X402\JobPayments;
-use App\X402\JobReconciler;
 use App\X402\JobSlots;
 use App\X402\PaidJob;
 use App\X402\Pricing;
-use App\X402\Reconciler;
 use App\X402\SensitiveRules;
 use Mcp\Exception\ToolCallException;
 use Mcp\Schema\Request\CallToolRequest;
@@ -38,6 +29,15 @@ use Psr\Http\Server\RequestHandlerInterface;
 use Quebracho\X402\Authorization;
 use Quebracho\X402\EvmExact;
 use Quebracho\X402\FileLedger;
+use Quebracho\X402\Job\FileJobStore;
+use Quebracho\X402\Job\Job;
+use Quebracho\X402\Job\JobFailed;
+use Quebracho\X402\Job\JobJanitor;
+use Quebracho\X402\Job\JobPayments;
+use Quebracho\X402\Job\JobReconciler;
+use Quebracho\X402\Job\JobRunner;
+use Quebracho\X402\Job\JobWork;
+use Quebracho\X402\Reconciler;
 use Quebracho\X402\Settlement;
 use Quebracho\X402\Signer;
 use Quebracho\X402\X402McpMiddleware;
@@ -868,7 +868,7 @@ final class JobFlowTest extends TestCase
         self::assertNull($b->payer($params, self::BUYER_ADDRESS));
 
         self::assertSame(Job::DELIVERING, $a->delivery->deliver($jobId)->state);
-        $this->expectException(\App\Job\IllegalTransition::class);
+        $this->expectException(\Quebracho\X402\Job\IllegalTransition::class);
         $b->delivery->deliver($jobId);
     }
 
