@@ -85,6 +85,22 @@ final class X402CheckCommandTest extends KernelTestCase
         self::assertStringNotContainsString('app:screening sync', $run(100000)[1]);
     }
 
+    public function testDebugIsAWarningNotAFailure(): void
+    {
+        $limiter = static fn () => new RateLimiterFactory(['id' => 'x', 'policy' => 'fixed_window', 'limit' => 1, 'interval' => '1 minute'], new InMemoryStorage());
+        $limits = ['MCP_LIMIT_IP' => '1', 'MCP_LIMIT_GLOBAL' => '1', 'TERMS_LIMIT_IP' => '1', 'TERMS_LIMIT_DAY' => '1'];
+        $run = static function (bool $debug) use ($limiter, $limits): array {
+            $command = new X402CheckCommand(static fn () => null, static fn () => null, $limiter, $limiter, $limiter, $limiter, $limits, '{}', '170', 'eip155:84532', [new EvmExact()], 'wisdom', debug: $debug);
+
+            return [$command(new SymfonyStyle(new ArrayInput([]), $out = new BufferedOutput())), $out->fetch()];
+        };
+
+        [$code, $out] = $run(true);
+        self::assertSame(0, $code, $out);
+        self::assertStringContainsString('Deploy with APP_ENV=prod', $out);
+        self::assertStringNotContainsString('APP_ENV=prod', $run(false)[1]);
+    }
+
     public function testAnOfferExactlyAsLongAsOurBuyerSignsPasses(): void
     {
         self::assertSame(0, $this->check(['X402_BUYER_MAX_TIMEOUT' => '120'])->getStatusCode());

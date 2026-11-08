@@ -59,6 +59,8 @@ final class X402CheckCommand
         // OFAC publishes a few times a week: a list older than this means app:screening sync stopped running.
         private readonly ?OfacSdn $ofac = null,
         private readonly int $ofacMaxAgeDays = 14,
+        // app/.env says dev, for development: a deploy that keeps it shows stack traces to buyers.
+        #[Autowire('%kernel.debug%')] private readonly bool $debug = false,
     ) {
     }
 
@@ -67,6 +69,9 @@ final class X402CheckCommand
         $errors = [];
         if ('' === trim((string) $this->paidTools)) {
             $io->warning('X402_PAID_TOOLS is empty: every tool is free except #[PaidJob] ones.');
+        }
+        if ($this->debug) {
+            $io->warning('Debug is on (APP_ENV=dev or APP_DEBUG=1): errors show stack traces. Deploy with APP_ENV=prod.');
         }
         if (null !== $this->ofac && !$this->ofac->isOff()) {
             $days = intdiv(time() - (int) strtotime($this->ofac->published()), 86400);
