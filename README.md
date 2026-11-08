@@ -516,6 +516,9 @@ OFAC changes without a fixed schedule, so sync it **every day** from cron. The
 command replaces the file atomically, keeps it when it already holds a younger
 list, and exits non-zero if the download fails, so cron's mail shows it:
 
+`app:x402:check` warns when the list in use is older than 14 days: OFAC publishes
+a few times a week, so an older one means the cron stopped.
+
 ```cron
 # daily, 06:00: OFAC's SDN list into app/var/screening/ofac-sdn.json
 0 6 * * * cd /path/to/quebracho-x402-mcp/app && bin/console app:screening sync

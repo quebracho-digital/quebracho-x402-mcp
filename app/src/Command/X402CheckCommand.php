@@ -8,6 +8,7 @@ use App\X402\LedgerFactory;
 use App\X402\NetworkCheck;
 use App\X402\Pricing;
 use App\X402\SensitiveRules;
+use Quebracho\X402\OfacSdn;
 use Quebracho\X402\PayingMcpClient;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -55,6 +56,9 @@ final class X402CheckCommand
         #[Autowire(env: 'csv:X402_SENSITIVE_TOOLS')] private readonly array $sensitive = [],
         #[Autowire('%app.mcp_tools%')] private readonly array $served = [],
         #[Autowire('%app.x402_sensitive_rules%')] private readonly array $sensitiveRules = [],
+        // OFAC publishes a few times a week: a list older than this means app:screening sync stopped running.
+        private readonly ?OfacSdn $ofac = null,
+        private readonly int $ofacMaxAgeDays = 14,
     ) {
     }
 
@@ -63,6 +67,12 @@ final class X402CheckCommand
         $errors = [];
         if ('' === trim((string) $this->paidTools)) {
             $io->warning('X402_PAID_TOOLS is empty: every tool is free except #[PaidJob] ones.');
+        }
+        if (null !== $this->ofac && !$this->ofac->isOff()) {
+            $days = intdiv(time() - (int) strtotime($this->ofac->published()), 86400);
+            if ($days > $this->ofacMaxAgeDays) {
+                $io->warning("The OFAC list in use was published {$this->ofac->published()}, $days days ago: is app:screening sync running from cron?");
+            }
         }
         $check = static function (string $what, \Closure $build) use (&$errors, $io): void {
             try {
