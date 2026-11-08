@@ -9,9 +9,6 @@ jobs:
         with:
           php-version: '8.4'
           extensions: gmp, sodium
-      - run: composer install --no-interaction --no-progress -d packages/x402
-      - run: vendor/bin/phpunit
-        working-directory: packages/x402
       - run: composer install --no-interaction --no-progress -d app
       - run: vendor/bin/phpunit
         working-directory: app

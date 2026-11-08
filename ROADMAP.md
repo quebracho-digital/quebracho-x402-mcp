@@ -7,7 +7,7 @@ Decisions are recorded in [DECISIONS.md](DECISIONS.md).
 
 | Dates | Step | Status |
 |---|---|---|
-| 10-28 → 11-01 | `packages/x402`: signing, verification, tests | done |
+| 10-28 → 11-01 | `quebracho/x402`: signing, verification, tests | done |
 | 11-02 → 11-03 | 402 middleware, MCP in band (D2), claim once (D5) | done |
 | 11-04 → 11-05 | Paying clients, budget (D6), `app:ask` agent | done |
 | — | Address screening: OFAC, own lists, Chainalysis (D7) | done |
@@ -24,7 +24,7 @@ Decisions are recorded in [DECISIONS.md](DECISIONS.md).
 
 The gaps x402_pay found refactoring onto the library (G1–G13) all go in before submitting (D10).
 
-Tasks for the library are in [packages/x402/ROADMAP.md](packages/x402/ROADMAP.md).
+Tasks for the library are in [https://github.com/quebracho-digital/x402/blob/main/ROADMAP.md](https://github.com/quebracho-digital/x402/blob/main/ROADMAP.md).
 
 - [x] Settle on testnet (Base Sepolia) through a facilitator.
 - [x] Screening in the app: `app:x402:check` warns when the OFAC list in use is older than 14 days.

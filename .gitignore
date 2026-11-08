@@ -2,12 +2,10 @@
 .env.*.local
 /app/var/
 /app/vendor/
-/packages/*/vendor/
 .phpunit.cache/
 .php-cs-fixer.cache
 /.ddev/traefik/
 CONTEXT.md
-/packages/*/.phpunit.result.cache
 
 # Local video work (not for git)
 /video/

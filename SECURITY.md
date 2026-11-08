@@ -22,7 +22,7 @@ defaults to testnets:
 Do not send funds to addresses found in this repository other than through the
 demo, and use your own keys for anything real.
 
-In scope: the `quebracho/x402` library (`packages/x402`) and the demo app
+In scope: the `quebracho/x402` library (`quebracho/x402`, in its own repository) and the demo app
 (`app/`): payment verification, replay (claiming one payment twice), the
 buyer's budget, address screening, and the MCP/HTTP transports.
 

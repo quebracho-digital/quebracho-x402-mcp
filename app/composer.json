@@ -11,7 +11,7 @@
         "ext-iconv": "*",
         "mcp/sdk": "0.9.0",
         "nyholm/psr7": "^1.8",
-        "quebracho/x402": "dev-main",
+        "quebracho/x402": "^0.4.1",
         "symfony/ai-agent": "0.15.0",
         "symfony/ai-bundle": "0.15.0",
         "symfony/ai-generic-platform": "0.15.0",
@@ -81,15 +81,11 @@
             "require": "8.1.*"
         }
     },
-    "repositories": [{
-        "name": "x402",
-        "type": "path",
-        "url": "../packages/x402"
-    }],
     "suggest": {
         "symfony/monolog-bundle": "Enables the 'x402' Monolog channel in production (x402 payment logs). Without it, the app logs through the PSR-3 logger with the 'x402 ' prefix."
     },
     "require-dev": {
+        "friendsofphp/php-cs-fixer": "^3.95.27",
         "phpstan/phpstan": "^2.3",
         "phpunit/phpunit": "^12",
         "symfony/monolog-bundle": "^4.1"

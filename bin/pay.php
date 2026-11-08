@@ -6,7 +6,7 @@
 // params._meta["x402/payment"]. Run inside DDEV: ddev exec php bin/pay.php
 declare(strict_types=1);
 
-require __DIR__ . '/../packages/x402/vendor/autoload.php';
+require __DIR__ . '/../app/vendor/autoload.php';
 
 use Quebracho\X402\EvmExact;
 use Quebracho\X402\Signer;
