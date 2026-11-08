@@ -110,6 +110,11 @@ services:
             $requests: '@mcp.psr17_factory'
             $streams: '@mcp.psr17_factory'
 
+    # OFAC's SDN list, asked by the library before any AddressCheck listener, seller and buyer alike.
+    # The snapshot app:screening sync keeps fresh (daily cron); until the first sync, the copy shipped with the library.
+    Quebracho\X402\OfacSdn:
+        arguments: ['%kernel.project_dir%/var/screening/ofac-sdn.json']
+
     # The buyer pays only the wallets in X402_PAYTO_ALLOW (comma separated); empty pays nobody. OFAC still runs first.
     Quebracho\X402\PayeeAllowlist:
         factory: ['Quebracho\X402\PayeeAllowlist', 'fromCsv']
@@ -162,8 +167,9 @@ services:
             $payer: !closure ['@App\X402\JobDesk', 'payer']
             $responses: '@mcp.psr17_factory'
             $streams: '@mcp.psr17_factory'
-            # AddressCheck on the payer, answered by App\X402\Screening.
+            # AddressCheck on the payer: OFAC first (below), then the listeners (App\X402\Screening, TokenBlacklist).
             $events: '@event_dispatcher'
+            $ofac: '@Quebracho\X402\OfacSdn'
             # A 'pending' payment is settled or freed by the chain (EVM receipt) or the facilitator (paymentId), not left to 409 until its TTL.
             $lookup: !closure ['@Quebracho\X402\ReceiptLookup', '__invoke']
             # config/x402_sensitive.yaml plus X402_SENSITIVE_TOOLS: the ledger keeps the state, never the answer (DECISIONS.md, D17, D18).
@@ -222,7 +228,7 @@ services:
             $streams: '@mcp.psr17_factory'
 
     # Frozen in the USDC contract itself (not only OFAC): asked after Screening's
-    # lists (lower priority). An RPC that cannot answer follows the same policy
+    # lists (lower priority), our allowlist included. An RPC that cannot answer follows the same policy
     # as the screening API: X402_SCREENING_UNAVAILABLE, "reject" by default.
     Quebracho\X402\TokenBlacklist:
         factory: ['App\X402\BlacklistFactory', 'create']
@@ -273,8 +279,9 @@ services:
             $streams: '@mcp.psr17_factory'
             $onPaid: !closure '@App\X402\Receipts'
             $onRefused: !closure ['@App\X402\Receipts', 'refused']
-            # AddressCheck on payTo before signing, answered by App\X402\Screening.
+            # AddressCheck on payTo before signing: OFAC first, then PayeeAllowlist, App\X402\Screening and TokenBlacklist.
             $events: '@event_dispatcher'
+            $ofac: '@Quebracho\X402\OfacSdn'
 
 when@test:
     services:

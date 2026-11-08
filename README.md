@@ -488,29 +488,36 @@ limits we know and leave in, each also said in a comment where it lives:
 
 ### Address screening
 
-> **In transition.** The library now screens every address against OFAC's
-> official SDN list by default (`Quebracho\X402\OfacSdn`, see
-> [its README](packages/x402/README.md#address-screening)), before any of the
-> app's lists below and even over the app's allowlist. The app still runs its
-> own `App\X402\Screening` too, until it is moved onto the library's listeners
-> (`AddressList`, `ChainalysisApi`, `ChainalysisOracle`, `TokenBlacklist`).
+Both sides screen addresses through the library's PSR-14 `AddressCheck`: the
+server checks the payer once its signature is verified, the agent checks `payTo`
+before it signs. First refusal wins:
 
-Both sides screen addresses with `App\X402\Screening`: the server checks the
-payer once its signature is verified, the agent checks `payTo` before it signs.
-First match wins: **our allowlist** (passes, even over OFAC), **our denylist**,
-**OFAC's sanctioned addresses** (a local copy), and optionally **Chainalysis'
-sanctions API** (`X402_SCREENING_API_KEY`). The API lookup starts when the payment is
-checked and is read just before settling; answers are cached
-`X402_SCREENING_CACHE_TTL` seconds, and no answer in time follows
-`X402_SCREENING_UNAVAILABLE`. Until `app:screening sync` has run once, the OFAC step
-matches nothing and only logs a warning: run it before taking payments.
+1. **OFAC's SDN list**, from OFAC's own Sanctions List Service
+   (`Quebracho\X402\OfacSdn`, see [its README](packages/x402/README.md#address-screening)).
+   The library asks it before any listener, so nothing in the app can let a
+   sanctioned address through, our allowlist included. The app's snapshot is
+   `app/var/screening/ofac-sdn.json`; until the first `app:screening sync`, the
+   copy shipped with the library is used.
+2. **Our allowlist** (`app/var/screening/allow.txt`): skips 3 and 4, nothing else.
+3. **Our denylist** (`app/var/screening/deny.txt`): `address_denied`.
+4. **Chainalysis' sanctions API** (`Quebracho\X402\ChainalysisApi`), only with
+   `X402_SCREENING_API_KEY`. It is asked when the verdict is read (just before
+   settling, or signing); answers are cached `X402_SCREENING_CACHE_TTL` seconds,
+   and no answer in time follows `X402_SCREENING_UNAVAILABLE` (`allow` lets the
+   address pass and logs `ScreeningSkipped`). A 4xx (a wrong key) always rejects.
+5. **The token's own blacklist** (`TokenBlacklist`, below).
 
-OFAC changes without a fixed schedule, so sync it **every day** from cron (the
-command replaces the file atomically, and exits non-zero if the download fails,
-so cron's mail shows it):
+`App\X402\Screening` holds 2 to 4; the lists are the library's text format
+(`AddressList`: one address per line, `#` for comments). A list file that does
+not exist is empty; one that cannot be read refuses everyone. Every refusal and
+skip is logged by the library's `AddressRejected` and `ScreeningSkipped` events.
+
+OFAC changes without a fixed schedule, so sync it **every day** from cron. The
+command replaces the file atomically, keeps it when it already holds a younger
+list, and exits non-zero if the download fails, so cron's mail shows it:
 
 ```cron
-# daily, 06:00: OFAC's lists into app/var/screening/ofac.txt
+# daily, 06:00: OFAC's SDN list into app/var/screening/ofac-sdn.json
 0 6 * * * cd /path/to/quebracho-x402-mcp/app && bin/console app:screening sync
 ```
 
@@ -538,9 +545,9 @@ in `TokenBlacklist::TOKENS` is not asked** (it passes): add yours with its
 | USDT0 on Arbitrum and Rootstock | `isBlocked` | answers, but `false` for the same 8: never seen to freeze, **not active** |
 
 ```bash
-ddev exec --dir /var/www/html/app bin/console app:screening sync          # download OFAC's lists
+ddev exec --dir /var/www/html/app bin/console app:screening sync          # download OFAC's SDN list
 ddev exec --dir /var/www/html/app bin/console app:screening deny 0x…      # our own report
-ddev exec --dir /var/www/html/app bin/console app:screening allow 0x…     # override a public list
+ddev exec --dir /var/www/html/app bin/console app:screening allow 0x…     # skip our denylist and the API (never OFAC)
 ddev exec --dir /var/www/html/app bin/console app:screening check 0x…
 ```
 
@@ -590,10 +597,10 @@ with a 500.
 | `X402_MAX_PER_PAYMENT` | `{"eip155:84532":"0.02"}` | Ceiling for one single payment, same shape. |
 | `X402_BUYER_MAX_TIMEOUT` | `170` | The longest validity (seconds) the agent signs. Under the 180 s its HTTP client waits, so it never signs a payment that can be settled after it hung up. |
 | `X402_PAYTO_ALLOW` | the demo `PAY_TO` | Wallets the agent may pay, comma separated, default deny: a seller cannot name its own wallet. |
-| `X402_SCREENING_API_KEY` | empty | Chainalysis sanctions API key. Empty: only our lists and OFAC's. |
+| `X402_SCREENING_API_KEY` | empty | Chainalysis sanctions API key. Empty: OFAC's list, ours and the token's. |
 | `X402_SCREENING_CACHE_TTL` | `86400` | Seconds an API answer (clean or sanctioned) is kept. |
 | `X402_SCREENING_TIMEOUT` | `3` | Seconds to wait for the API. |
-| `X402_SCREENING_UNAVAILABLE` | `reject` | No API answer in time (or a 5xx): `reject` or `allow`. |
+| `X402_SCREENING_UNAVAILABLE` | `reject` | No API answer in time (or a 5xx, or a reply without `identifications`): `reject` or `allow`. |
 | `MCP_URL` | the DDEV site's `/mcp` | The MCP server the agent connects to. |
 | `OMBU_MCP_URL` | `https://ombu.quebracho.digital/mcp` | Ombú's MCP server, the agent's second client (search only, see above). |
 | `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | placeholders | The agent's OpenAI-compatible LLM; set them in `.env.local`. |
@@ -714,7 +721,7 @@ Working and verified:
 - PSR-18 paying clients with a per-network spending cap: MCP in band (`PayingMcpClient`) and plain HTTP 402 (`PayingHttpClient`).
 - Symfony MCP server charging a tool end to end (`bin/smoke.sh`).
 - Symfony AI agent (`app:ask`) that discovers, pays and calls the tool, verified against a local llama.cpp model (mock mode).
-- Address screening on both sides (PSR-14 `AddressCheck`): our allow/deny lists, OFAC's sanctioned addresses, optional Chainalysis API.
+- Address screening on both sides (PSR-14 `AddressCheck`): OFAC's SDN list first, then our allow/deny lists, the optional Chainalysis API and the token's own blacklist.
 - Settlement on testnet through a facilitator (`X402_FACILITATOR=https://x402.org/facilitator`, verified on Base Sepolia).
 
 Not yet:
