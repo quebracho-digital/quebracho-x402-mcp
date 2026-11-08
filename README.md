@@ -29,7 +29,7 @@ Drupal module [x402_pay](https://www.drupal.org/project/x402_pay).
 - **Why:** agents can call tools but cannot pay for them. API keys and accounts do not scale to machines.
 - **How:** the agent calls a tool, gets a price (402), signs within a budget, retries with the payment, and receives the result with an on-chain receipt.
 - **Safe by construction:** verify is not paid. One signature buys one delivery, a replay never runs the handler, smart-wallet signatures are refused, gas is bounded, and addresses are screened. Each defence has a test.
-- **Proven:** 474 library tests and 365 app tests with no network, EVM, Solana and NEAR (experimental) schemes, a real USDC settle on Base Sepolia, and a real purchase on Arc mainnet through Ombú's MCP server.
+- **Proven:** 474 library tests and 365 app tests with no network, EVM, Solana, NEAR and Casper (both experimental) schemes, a real USDC settle on Base Sepolia, and a real purchase on Arc mainnet through Ombú's MCP server.
 - **Used by:** ombu.quebracho.digital, in production on mainnet, and the Drupal module [x402_pay](https://www.drupal.org/project/x402_pay): release 1.0.0-beta3 on drupal.org runs on this library (`quebracho/x402 ^0.3`). The library grew from that module, so one codebase serves Drupal and Symfony.
 - **Try it:** `bin/smoke.sh` after `ddev start` (below). Mock mode needs no wallet and no faucet.
 
@@ -665,7 +665,7 @@ $network = Networks::add(chainId: 4202, asset: '0x…', name: 'USDC', version: '
 (`near:testnet`, NEP-366 delegate action, `ext-sodium`) is **experimental**:
 its `verify()` does not tie the public key to `sender_id` (the network checks
 that on settle), and it is not wired into the demo. `SolanaExact`
-(`solana:*`) pays and verifies offline; see the library README.
+(`solana:*`) pays and verifies offline; see the library README. `CasperExact` (`casper:*`, a CEP-18 authorization signed as Casper EIP-712, Ed25519 keys) is **experimental**: verified offline against the reference client's vectors, not yet settled live, and not wired into the demo; see [docs/casper.md](https://github.com/quebracho-digital/x402/blob/main/docs/casper.md).
 
 ## Attacks it resists
 
