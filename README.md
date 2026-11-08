@@ -323,7 +323,7 @@ server, so a tool served through a service id the registry (`App\Mcp\` in
 `mcp.yaml`) matches counts even when its class lives elsewhere, and the build
 fails if a served tool is missing from it. `analyze_terms_start`,
 `analyze_terms_result` and the free `analyze_terms_status` (`App\Mcp\AnalyzeTermsJobTool`)
-carry it; their jobs live in `app/var/jobs` (`App\Job\FileJobStore`). The
+carry it; their jobs live in `app/var/jobs` (`Quebracho\X402\Job\FileJobStore`). The
 `_start` offer says in `extra.job` that the deposit is non-refundable and that
 `_result` is free when the job fails by our fault.
 
@@ -408,7 +408,7 @@ ambiguous (`delivering`), a retry queued a job but found no free slot
 (`queued`), or a runner died (`running`). `app:jobs:janitor` deals with all of
 them, in this order: it moves `settling` and `delivering` jobs on once the
 ledger or the chain (the token's `authorizationState`) knows how their payment
-ended (`App\X402\JobReconciler`), runs queued jobs no request ran in a free
+ended (`Quebracho\X402\Job\JobReconciler`), runs queued jobs no request ran in a free
 slot, fails work untouched for 5 minutes (`failed_ours`, so `_result` is free),
 and drops delivered results after their 5-minute re-read window, results nobody
 bought after a day (the job then answers `expired`), and the buyer's text on a
@@ -456,7 +456,7 @@ the web's environment (the model's token, `JOB_SLOTS`).
 This app is an example to read, for one host, not for production. These are
 limits we know and leave in, each also said in a comment where it lives:
 
-- **"Nonce used" is not proof that we were paid** (`App\X402\JobPayments`).
+- **"Nonce used" is not proof that we were paid** (`Quebracho\X402\Job\JobPayments`).
   When the ledger has forgotten a deposit or a `_result` payment, the cron asks
   the token's `authorizationState(from, nonce)`. An EIP-3009 nonce is the
   payer's: the buyer can burn it with `cancelAuthorization`, or spend it on
@@ -480,7 +480,7 @@ limits we know and leave in, each also said in a comment where it lives:
   settle. It stays spendable (only to our `payTo`) until it expires, and the
   buyer's budget counts it until then. A stronger and cheaper proof would be an
   EIP-191 signature over the `jobId`.
-- **`_status` takes the payer's address, which is public** (`App\Job\JobStatus`):
+- **`_status` takes the payer's address, which is public** (`Quebracho\X402\Job\JobStatus`):
   the 128-bit random `jobId` is the real secret there.
 - **Buyer text goes to Hugging Face** (`analyze_terms_start` says so): the
   analysis, quotes included, is cached 7 days unless `sensitive`, and the job's
@@ -598,15 +598,18 @@ with a 500.
 | `OMBU_MCP_URL` | `https://ombu.quebracho.digital/mcp` | Ombú's MCP server, the agent's second client (search only, see above). |
 | `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | placeholders | The agent's OpenAI-compatible LLM; set them in `.env.local`. |
 
-**Payment logs.** `App\X402\PaymentLog` logs an `intent` line before each
-settle or upfront tool run, and an `outcome` line per paid call (never the
-signature, the response body or a token). With `symfony/monolog-bundle`
+**Payment logs.** The library's `PaymentLog` logs every event it reports: an
+`intent` line before each settle or upfront tool run, an `outcome` line per
+paid call, a `fault` when the ledger failed and the sale went on (`record` is
+an error: money may have moved and its state was lost), each address the
+screening refused or could not check, and the buyer's purchases and budget
+reclaims (never the signature, the response body or a token). With `symfony/monolog-bundle`
 installed (a `require-dev` here) it uses the `x402` Monolog channel; without
 it (`composer install --no-dev`) it writes to `php://stderr` at level `info`
 (`app.x402_stderr_logger` in `app/config/services.yaml`), prefixed `x402 `.
 
 **Payment records.** Logs can be lost (PHP-FPM may drop stderr), so
-`App\X402\PaymentRecord` also keeps the payments that moved money or should
+`Quebracho\X402\PaymentRecord` also keeps the payments that moved money or should
 have: one JSON line per `settled`, `delivered`, `not_settled` or
 `failed_after_settle` outcome, appended to `app/var/x402-records/<YYYY-MM>.jsonl`
 (time, status, settlement key, network, `payTo`, amount, asset, payer,

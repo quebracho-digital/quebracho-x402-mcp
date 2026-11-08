@@ -51,7 +51,7 @@ final class PricingTest extends TestCase
         $start = $pricing(['name' => 'demo_start'])[0];
         self::assertSame(['upfront', '5000'], [$start['extra']['paymentFlow'], $start['amount']], 'its own deposit price, settled first');
         // Said in the offer, before the buyer signs (decision 1): the deposit is not refunded.
-        self::assertSame(['deposit' => 'non_refundable', 'refund' => 'none; if the job fails by our fault (failed_ours), demo_result is free', 'result' => 'demo_result', 'resultTtl' => \App\Job\Job::RESULT_TTL], $start['extra']['job']);
+        self::assertSame(['deposit' => 'non_refundable', 'refund' => 'none; if the job fails by our fault (failed_ours), demo_result is free', 'result' => 'demo_result', 'resultTtl' => \Quebracho\X402\Job\Job::RESULT_TTL], $start['extra']['job']);
         $result = $pricing(['name' => 'demo_result'])[0];
         self::assertSame(['10000', null], [$result['amount'], $result['extra']['paymentFlow'] ?? null]);
         self::assertNull($pricing(['name' => 'demo_status']), 'a status read is free');

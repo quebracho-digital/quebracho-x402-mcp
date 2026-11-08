@@ -6,6 +6,7 @@ namespace App\X402;
 
 use Quebracho\X402\FileLedger;
 use Quebracho\X402\PaymentLedger;
+use Quebracho\X402\RedisLedger;
 
 /**
  * The seller's one PaymentLedger (services.yaml): Redis when X402_REDIS_URL is set, else this host's files.

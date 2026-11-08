@@ -5,10 +5,10 @@ declare(strict_types=1);
 namespace App\Tests\X402;
 
 use App\X402\LedgerFactory;
-use App\X402\RedisLedger;
 use PHPUnit\Framework\TestCase;
 use Quebracho\X402\FileLedger;
 use Quebracho\X402\LedgerUnavailableException;
+use Quebracho\X402\RedisLedger;
 
 final class LedgerFactoryTest extends TestCase
 {

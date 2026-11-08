@@ -5,18 +5,18 @@ declare(strict_types=1);
 namespace App\Tests;
 
 use App\EventListener\McpRateLimit;
-use App\Job\FileJobStore;
-use App\Job\JobRunner;
-use App\Job\JobStore;
 use App\Kernel;
 use App\X402\Facilitator;
 use App\X402\JobDesk;
 use App\X402\Pricing;
-use App\X402\ReceiptLookup;
 use Psr\Cache\CacheItemPoolInterface;
 use Quebracho\X402\Budget;
+use Quebracho\X402\Job\FileJobStore;
+use Quebracho\X402\Job\JobRunner;
+use Quebracho\X402\Job\JobStore;
 use Quebracho\X402\Networks;
 use Quebracho\X402\PayingMcpClient;
+use Quebracho\X402\ReceiptLookup;
 use Quebracho\X402\X402McpMiddleware;
 use Symfony\Bundle\FrameworkBundle\Console\Application;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
@@ -235,7 +235,7 @@ final class AppKernelTest extends KernelTestCase
         $console = new Application(self::bootKernel());
         self::assertTrue($console->has('app:jobs:janitor'));
         self::assertTrue($console->has('app:jobs:reconcile'));
-        self::assertNotNull(self::getContainer()->get(\App\X402\JobReconciler::class), 'wired: its ledger and the chain lookup');
+        self::assertNotNull(self::getContainer()->get(\Quebracho\X402\Job\JobReconciler::class), 'wired: its ledger and the chain lookup');
     }
 
     public function testAnOptionalBundleIsRegisteredOnlyWhenItsClassExists(): void

@@ -18,9 +18,9 @@ services:
         autowire: true      # Automatically injects dependencies in your services.
         autoconfigure: true # Automatically registers your services as commands, event subscribers, etc.
 
-    # Each job tool's work (App\Job\JobWork), for the runner: found by the _start tool it belongs to.
+    # Each job tool's work (Quebracho\X402\Job\JobWork), for the runner: found by the _start tool it belongs to.
     _instanceof:
-        App\Job\JobWork:
+        Quebracho\X402\Job\JobWork:
             tags: [app.job_work]
 
     # makes classes in src/ available to be used as services
@@ -73,10 +73,10 @@ services:
         arguments: [{timeout: 15, max_duration: 40}]
 
     # Paid jobs (job mode): files under var/, never cache.app (a cache:clear would wipe a paid job).
-    App\Job\FileJobStore:
+    Quebracho\X402\Job\FileJobStore:
         arguments: ['%kernel.project_dir%/var/jobs']
-    App\Job\JobStore: '@App\Job\FileJobStore'
-    App\Job\JobRunner:
+    Quebracho\X402\Job\JobStore: '@Quebracho\X402\Job\FileJobStore'
+    Quebracho\X402\Job\JobRunner:
         arguments:
             $works: !tagged_iterator app.job_work
     # Job mode's payment hooks (validate, payer, settle, sensitive below): the settle it wraps is the facilitator's.
@@ -89,10 +89,40 @@ services:
             $streams: '@mcp.psr17_factory'
     # How a job's payment ended when its request is gone: the ledger, then (cron only) the token's authorizationState.
     # In mock mode nothing moves on chain, so the chain is never asked ($facilitator "mock" drops the lookup).
-    App\X402\JobPayments:
+    Quebracho\X402\Job\JobPayments:
         arguments:
-            $authorizationUsed: !closure '@App\X402\AuthorizationState'
+            $authorizationUsed: !closure '@Quebracho\X402\AuthorizationState'
             $facilitator: '%env(X402_FACILITATOR)%'
+    Quebracho\X402\Job\JobJanitor: ~
+    Quebracho\X402\Job\JobReconciler: ~
+
+    # EIP-3009 authorizationState(from, nonce) through each network's RPC, 5 s at most: the buyer's Budget asks it
+    # before freeing an expired signature (an unanswered call keeps it spent), JobPayments before closing a job.
+    Quebracho\X402\AuthorizationState:
+        arguments:
+            $http: !service
+                class: Symfony\Component\HttpClient\Psr18Client
+                arguments:
+                    - !service
+                        class: Symfony\Contracts\HttpClient\HttpClientInterface
+                        factory: ['Symfony\Component\HttpClient\HttpClient', 'create']
+                        arguments: [{timeout: 5, max_duration: 5}]
+            $requests: '@mcp.psr17_factory'
+            $streams: '@mcp.psr17_factory'
+
+    # The buyer pays only the wallets in X402_PAYTO_ALLOW (comma separated); empty pays nobody. OFAC still runs first.
+    Quebracho\X402\PayeeAllowlist:
+        factory: ['Quebracho\X402\PayeeAllowlist', 'fromCsv']
+        arguments: ['%env(X402_PAYTO_ALLOW)%']
+        tags:
+            - { name: kernel.event_listener, event: Quebracho\X402\AddressCheck, method: __invoke }
+
+    # The seller's own record of sales and failed settlements: one JSON line per payment, var/x402-records/<YYYY-MM>.jsonl.
+    Quebracho\X402\PaymentRecord:
+        arguments:
+            $dir: '%kernel.project_dir%/var/x402-records'
+        tags:
+            - { name: kernel.event_listener, event: Quebracho\X402\PaymentOutcome, method: __invoke }
 
     # The only EvmExact: the seller verifies with it, the buyer (PayingMcpClient below) pays with it.
     # X402_BUYER_KEY empty: it verifies and refuses to pay (App\X402\SchemeFactory).
@@ -135,24 +165,35 @@ services:
             # AddressCheck on the payer, answered by App\X402\Screening.
             $events: '@event_dispatcher'
             # A 'pending' payment is settled or freed by the chain (EVM receipt) or the facilitator (paymentId), not left to 409 until its TTL.
-            $lookup: !closure ['@App\X402\ReceiptLookup', '__invoke']
+            $lookup: !closure ['@Quebracho\X402\ReceiptLookup', '__invoke']
             # config/x402_sensitive.yaml plus X402_SENSITIVE_TOOLS: the ledger keeps the state, never the answer (DECISIONS.md, D17, D18).
             # Through JobDesk: a _start's answer (a job id) is always kept, a _result's follows its job (JobDesk::sensitive).
             $sensitive: !closure ['@App\X402\JobDesk', 'sensitive']
 
     # The 'x402' Monolog channel exists only with symfony/monolog-bundle (optional; config/packages/x402_log.php).
-    # '@?' leaves the key out of the locator without it; PaymentLog asks at runtime with has().
+    # '@?' leaves the key out of the locator without it; PaymentLogFactory asks with has() when PaymentLog is built.
     # Without the bundle, PaymentLog logs through this logger. The framework's own 'logger' (HttpKernel's) stops at
     # 'error' unless SHELL_VERBOSITY says otherwise, so the intent and settled lines would be dropped in production.
     app.x402_stderr_logger:
         class: Symfony\Component\HttpKernel\Log\Logger
         arguments: ['info', 'php://stderr', '@App\X402\PaymentLogFormatter']
 
-    App\X402\PaymentLog:
+    # Every event the library reports (payments, faults, screening, the buyer's purchases) as a log line.
+    Quebracho\X402\PaymentLog:
+        factory: ['App\X402\PaymentLogFactory', 'create']
         arguments:
             $logger: '@app.x402_stderr_logger'
             $channels: !service_locator
                 x402: '@?monolog.logger.x402'
+        tags:
+            - { name: kernel.event_listener, event: Quebracho\X402\PaymentIntent, method: intent }
+            - { name: kernel.event_listener, event: Quebracho\X402\PaymentOutcome, method: outcome }
+            - { name: kernel.event_listener, event: Quebracho\X402\PaymentFault, method: fault }
+            - { name: kernel.event_listener, event: Quebracho\X402\AddressRejected, method: rejected }
+            - { name: kernel.event_listener, event: Quebracho\X402\ScreeningSkipped, method: skipped }
+            - { name: kernel.event_listener, event: Quebracho\X402\PurchaseIntent, method: purchaseIntent }
+            - { name: kernel.event_listener, event: Quebracho\X402\PurchaseOutcome, method: purchase }
+            - { name: kernel.event_listener, event: Quebracho\X402\BudgetReclaim, method: reclaim }
 
     # The lookup's RPC calls: 10 s, then NULL (still pending). The framework's default client has no timeout.
     app.receipt_http_client:
@@ -161,8 +202,10 @@ services:
         arguments: [{timeout: 10, max_duration: 10}]
 
     # The lookup's RPC and facilitator calls; any failure answers NULL (still pending).
-    App\X402\ReceiptLookup:
+    Quebracho\X402\ReceiptLookup:
         arguments:
+            # Only Circle's facilitator has a status route; App\X402\Facilitator answers NULL for the others and mock.
+            $facilitator: '@App\X402\Facilitator'
             $http: !service
                 class: Symfony\Component\HttpClient\Psr18Client
                 arguments: ['@app.receipt_http_client']
@@ -170,7 +213,7 @@ services:
             $streams: '@mcp.psr17_factory'
 
     # app:x402:reconcile: the open payments against each network's RPC, with the lookup's 10 s client.
-    App\X402\Reconciler:
+    Quebracho\X402\Reconciler:
         arguments:
             $http: !service
                 class: Symfony\Component\HttpClient\Psr18Client
@@ -226,7 +269,7 @@ services:
                 # Caps per network and per single payment, in USD, from env (JSON). A network without a cap is never paid.
                 # Expired signatures the seller never settled are freed, once the chain says so.
                 # X402_BUYER_MAX_TIMEOUT: no signature lives longer than the 180 s the client below waits.
-                arguments: ['%env(json:X402_BUDGETS)%', '%env(json:X402_MAX_PER_PAYMENT)%', !closure '@App\X402\AuthorizationState', '%env(X402_BUYER_KEY)%', '%env(int:X402_BUYER_MAX_TIMEOUT)%']
+                arguments: ['%env(json:X402_BUDGETS)%', '%env(json:X402_MAX_PER_PAYMENT)%', !closure '@Quebracho\X402\AuthorizationState', '%env(X402_BUYER_KEY)%', '%env(int:X402_BUYER_MAX_TIMEOUT)%']
             $streams: '@mcp.psr17_factory'
             $onPaid: !closure '@App\X402\Receipts'
             $onRefused: !closure ['@App\X402\Receipts', 'refused']

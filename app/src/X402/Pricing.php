@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace App\X402;
 
-use App\Job\Job;
 use Mcp\Capability\Discovery\SchemaValidator;
 use Quebracho\X402\Budget;
 use Quebracho\X402\EvmExact;
+use Quebracho\X402\Job\Job;
 use Quebracho\X402\Networks;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
