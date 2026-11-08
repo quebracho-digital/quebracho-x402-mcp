@@ -19,6 +19,10 @@ use Psr\Http\Message\RequestFactoryInterface;
  *
  * A 0x… address is matched in any case on every EVM network; any other form exactly as written.
  *
+ * The list's date is an optional comment, `# updated: 2026-11-06T19:33:18Z` (ISO 8601, UTC). sync() writes it,
+ * from the source's own `# updated:` line, else its Last-Modified header, else the time of the download, and
+ * never replaces a file whose list is younger than the one downloaded: the youngest list wins.
+ *
  * A file you keep by hand is read as it is. A list another site publishes is downloaded with sync() from a
  * cron, to a file this class then reads.
  *
@@ -70,6 +74,36 @@ final class AddressList
     }
 
     /**
+     * When each list file was last updated (its `# updated:` comment), NULL for a file without one: to alert on
+     * a list that stopped syncing.
+     *
+     * @return array<string, ?string> file => date
+     */
+    public function updatedAt(): array
+    {
+        $dates = [];
+        foreach ($this->files as $file) {
+            $text = is_file($file) ? @file_get_contents($file) : false;
+            $dates[$file] = false === $text ? null : self::updated($text);
+        }
+
+        return $dates;
+    }
+
+    /**
+     * The date in a list's `# updated:` comment, as Y-m-d\TH:i:s\Z in UTC, or NULL when it has none (or one that
+     * is not a date).
+     */
+    public static function updated(string $text): ?string
+    {
+        if (!preg_match('/^\s*#\s*updated:\s*(\S+)\s*$/mi', $text, $m) || false === ($time = strtotime($m[1]))) {
+            return null;
+        }
+
+        return gmdate('Y-m-d\\TH:i:s\\Z', $time);
+    }
+
+    /**
      * The addresses in a list, normalized (0x… in lower case), in order, without repeats.
      *
      * @return list<string>
@@ -90,9 +124,10 @@ final class AddressList
 
     /**
      * Downloads a list another site publishes (HTTPS only, no redirects), checks that it parses into at
-     * least $min addresses, and replaces $file with it. On any failure $file is left as it was.
+     * least $min addresses, and replaces $file with it. On any failure $file is left as it was. When $file holds
+     * a younger list than the one downloaded (a cache or a mirror that lags), $file is kept too.
      *
-     * @return int the number of addresses written
+     * @return int the number of addresses written, or of the younger list kept
      *
      * @throws \RuntimeException
      */
@@ -117,8 +152,15 @@ final class AddressList
         if (\count($addresses) < $min) {
             throw new \RuntimeException("Address list $url: ".\count($addresses)." addresses, $min expected; the file was kept.");
         }
+        $lastModified = $response->getHeaderLine('Last-Modified');
+        $updated = self::updated($text)
+            ?? gmdate('Y-m-d\\TH:i:s\\Z', '' !== $lastModified && false !== strtotime($lastModified) ? (int) strtotime($lastModified) : time());
+        $current = is_file($file) ? @file_get_contents($file) : false;
+        if (false !== $current && (self::updated($current) ?? '') > $updated) {
+            return \count(self::parse($current));
+        }
         $tmp = $file.'.'.bin2hex(random_bytes(4)).'.tmp';
-        if (false === @file_put_contents($tmp, "# $url, ".gmdate('Y-m-d\TH:i:s\Z')."\n".implode("\n", $addresses)."\n") || !@rename($tmp, $file)) {
+        if (false === @file_put_contents($tmp, "# source: $url\n# updated: $updated\n".implode("\n", $addresses)."\n") || !@rename($tmp, $file)) {
             @unlink($tmp);
             throw new \RuntimeException("Address list: cannot write $file.");
         }

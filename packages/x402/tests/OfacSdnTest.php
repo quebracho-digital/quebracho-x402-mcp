@@ -176,6 +176,16 @@ final class OfacSdnTest extends TestCase
         self::assertTrue((new \Quebracho\X402\AddressList([$list]))->listed('b.near'));
     }
 
+    public function testAnOlderOfacListNeverReplacesAYoungerOne(): void
+    {
+        $file = $this->dir.'/sdn.json';
+        self::assertSame(120, OfacSdn::write(self::csv(120), 'Fri, 06 Nov 2026 19:33:18 GMT', $file));
+        self::assertSame(120, OfacSdn::write(self::csv(130), 'Thu, 05 Nov 2026 19:33:18 GMT', $file), 'the younger file is kept');
+        self::assertSame('2026-11-06T19:33:18Z', (new OfacSdn($file))->published());
+        self::assertSame(140, OfacSdn::write(self::csv(140), 'Sat, 07 Nov 2026 19:33:18 GMT', $file));
+        self::assertSame('2026-11-07T19:33:18Z', (new OfacSdn($file))->published());
+    }
+
     public function testSyncKeepsTheOldFileWhenTheAnswerIsNotTheList(): void
     {
         $file = $this->dir.'/sdn.json';

@@ -144,6 +144,25 @@ final class ScreeningProvidersTest extends TestCase
         }
     }
 
+    public function testTheYoungestListWinsAndItsDateIsKept(): void
+    {
+        $file = $this->dir.'/remote.txt';
+        $url = 'https://lists.example/bad.txt';
+        // The source dates itself: that date is written.
+        AddressList::sync(self::http([new Response(200, ['Last-Modified' => 'Fri, 06 Nov 2026 10:00:00 GMT'], "# updated: 2026-11-06T12:00:00Z\nnew.near\n")]), new Psr17Factory(), $url, $file);
+        self::assertSame([$file => '2026-11-06T12:00:00Z'], (new AddressList([$file]))->updatedAt());
+
+        // An older copy (a lagging mirror, a cache) never replaces it.
+        self::assertSame(1, AddressList::sync(self::http([new Response(200, ['Last-Modified' => 'Thu, 05 Nov 2026 10:00:00 GMT'], "old.near\nolder.near\n")]), new Psr17Factory(), $url, $file));
+        self::assertTrue((new AddressList([$file]))->listed('new.near'));
+        self::assertFalse((new AddressList([$file]))->listed('old.near'));
+
+        // A younger one does, dated by its Last-Modified when it has no line of its own.
+        self::assertSame(2, AddressList::sync(self::http([new Response(200, ['Last-Modified' => 'Sat, 07 Nov 2026 10:00:00 GMT'], "a.near\nb.near\n")]), new Psr17Factory(), $url, $file));
+        self::assertSame('2026-11-07T10:00:00Z', AddressList::updated((string) file_get_contents($file)));
+        self::assertNull(AddressList::updated("# updated: someday\n"));
+    }
+
     public function testTheOracleAsksIsSanctionedAndFailsClosed(): void
     {
         $f = new Psr17Factory();

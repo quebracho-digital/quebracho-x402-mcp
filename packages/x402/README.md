@@ -392,13 +392,25 @@ The list format is plain text, one address per line
 
 ```text
 # comments and blank lines are ignored
+# updated: 2026-11-06T00:00:00Z
 0x000000000000000000000000000000000000dEaD  a note after the address is ignored
 9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin
 scam-example.near
 ```
 
 A `0x…` address matches in any case on every EVM network; any other form
-exactly. Serve it over HTTPS and any site can subscribe. A source of another
+exactly. The optional `# updated:` line dates the list (ISO 8601, UTC).
+
+**The youngest list wins.** Every copy carries its date: OFAC's snapshot its
+`published` (OFAC's Last-Modified), a text list its `# updated:` line (the
+source's own, else its Last-Modified, else the time of the download). A sync
+never replaces a younger copy with an older one, so a lagging mirror or cache
+cannot roll a list back, and between the copy shipped with the library and
+yours, the younger is used. `OfacSdn::published()` and
+`AddressList::updatedAt()` give the date in use, to alert on a list that
+stopped syncing.
+
+Serve a list over HTTPS and any site can subscribe. A source of another
 kind (a vendor feed, a database) is your own `ListSync`: implement
 `sync(string $file): int`, write the format the list reads
 (`OfacSdn::write()` for OFAC's, the text format above for the others), and

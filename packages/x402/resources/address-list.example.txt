@@ -4,6 +4,9 @@
 # A 0x… address is matched in any case on every EVM network; any other form
 # (Solana, NEAR, Tron, Bitcoin…) exactly as written.
 # Served over HTTPS as text/plain, AddressList::sync() downloads it.
+# The date of the list (optional, ISO 8601 UTC): sync() never replaces a
+# younger list with an older one.
+# updated: 2026-11-06T00:00:00Z
 
 0x000000000000000000000000000000000000dEaD  burn address, an example only
 9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin  a Solana address, an example only

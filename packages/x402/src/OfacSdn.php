@@ -150,6 +150,9 @@ final class OfacSdn
      *
      * @return int the number of addresses written
      *
+     * When $file already holds a list OFAC published later than this one (a cache or a mirror that lags), the
+     * younger list wins: $file is kept, and its count is returned
+     *
      * @throws \RuntimeException when the parse finds too few addresses or $file cannot be written; it is left as it was
      */
     public static function write(string $csv, string $lastModified, string $file): int
@@ -159,9 +162,19 @@ final class OfacSdn
         if ($count < self::MIN_ADDRESSES) {
             throw new \RuntimeException("OFAC SDN: only $count addresses parsed; the file was kept.");
         }
+        $published = gmdate('Y-m-d\\TH:i:s\\Z', '' !== $lastModified && false !== strtotime($lastModified) ? (int) strtotime($lastModified) : time());
+        try {
+            $current = is_file($file) ? self::read($file) : null;
+        } catch (\RuntimeException) {
+            // ponytail: a broken file is replaced, whatever its date.
+            $current = null;
+        }
+        if (null !== $current && $current['published'] > $published) {
+            return array_sum(array_map('count', $current['addresses']));
+        }
         $json = json_encode([
             'source' => self::URL,
-            'published' => '' !== $lastModified ? gmdate('Y-m-d\\TH:i:s\\Z', (int) strtotime($lastModified)) : gmdate('Y-m-d\\TH:i:s\\Z'),
+            'published' => $published,
             'addresses' => $addresses,
         ], \JSON_PRETTY_PRINT | \JSON_UNESCAPED_SLASHES | \JSON_THROW_ON_ERROR);
         $tmp = $file.'.'.bin2hex(random_bytes(4)).'.tmp';
