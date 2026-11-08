@@ -12,6 +12,8 @@ composer require quebracho/x402
 Needs PHP 8.3+, `ext-gmp`, `ext-sodium`, any PSR-7/17 implementation (e.g.
 `nyholm/psr7`) and, for buying, any PSR-18 client.
 
+Upgrading from 0.3: read [UPGRADE.md](UPGRADE.md) (OFAC screening is now on by default).
+
 ## Seller
 
 ```php
