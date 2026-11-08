@@ -41,8 +41,9 @@ final class JobIdOnRefusal implements MiddlewareInterface
         }
         $out = json_decode((string) $response->getBody(), true);
         $response->getBody()->rewind();
-        $required = \is_array($out) ? ($out['result']['structuredContent'] ?? null) : null;
-        if (true !== ($out['result']['isError'] ?? null) || !\is_array($required) || !isset($required['x402Version'], $required['error'])) {
+        $result = \is_array($out) ? ($out['result'] ?? null) : null;
+        $required = \is_array($result) ? ($result['structuredContent'] ?? null) : null;
+        if (!\is_array($out) || !\is_array($result) || true !== ($result['isError'] ?? null) || !\is_array($required) || !isset($required['x402Version'], $required['error'])) {
             return $response;
         }
         $jobId = $this->deposit->jobIdFor($message['params']);
@@ -50,8 +51,9 @@ final class JobIdOnRefusal implements MiddlewareInterface
             return $response;
         }
         $required['jobId'] = $jobId;
-        $out['result']['structuredContent'] = $required;
-        $out['result']['content'] = [['type' => 'text', 'text' => json_encode($required, \JSON_UNESCAPED_SLASHES | \JSON_THROW_ON_ERROR)]];
+        $result['structuredContent'] = $required;
+        $result['content'] = [['type' => 'text', 'text' => json_encode($required, \JSON_UNESCAPED_SLASHES | \JSON_THROW_ON_ERROR)]];
+        $out['result'] = $result;
 
         return $response->withBody($this->streams->createStream(json_encode($out, \JSON_UNESCAPED_SLASHES | \JSON_THROW_ON_ERROR)));
     }

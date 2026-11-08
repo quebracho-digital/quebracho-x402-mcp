@@ -107,7 +107,8 @@ final class X402CheckCommand
         $check('sensitive rules (config/x402_sensitive.yaml valid, no duplicates; X402_SENSITIVE_TOOLS and tool rules served)', fn () => SensitiveRules::check($this->sensitive, $this->sensitiveRules, $this->served));
         $check('X402_TIMEOUTS within X402_BUYER_MAX_TIMEOUT', function (): void {
             foreach ((array) json_decode((string) $this->timeouts, true) as $tool => $seconds) {
-                if ((int) $seconds > (int) $this->buyerMax) {
+                // Not a number: Pricing's own check above names it.
+                if (is_numeric($seconds) && (int) $seconds > (int) $this->buyerMax) {
                     throw new \InvalidArgumentException("$tool offers $seconds s, longer than our own buyer signs ({$this->buyerMax} s): app:ask would refuse it.");
                 }
             }

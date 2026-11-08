@@ -123,7 +123,12 @@ final class Pricing
             // ponytail: unreachable, the constructor refuses a paid name that is no tool; fail closed anyway.
             return "Unknown tool: {$params['name']}";
         }
-        $errors = (new SchemaValidator())->validateAgainstJsonSchema([] === $args ? new \stdClass() : $args, json_decode($schema, false, 512, \JSON_THROW_ON_ERROR));
+        $decoded = json_decode($schema, false, 512, \JSON_THROW_ON_ERROR);
+        if (!\is_object($decoded)) {
+            // ponytail: unreachable, the SDK generates an object schema; fail closed anyway.
+            return "Tool {$params['name']} has no input schema.";
+        }
+        $errors = (new SchemaValidator())->validateAgainstJsonSchema([] === $args ? new \stdClass() : $args, $decoded);
 
         return [] === $errors ? null : "Invalid parameters for tool '{$params['name']}': ".implode('; ', array_map(static fn (array $e) => ('' !== $e['pointer'] ? $e['pointer'].': ' : '').$e['message'], $errors));
     }

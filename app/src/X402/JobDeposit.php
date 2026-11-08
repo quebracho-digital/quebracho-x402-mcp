@@ -219,17 +219,20 @@ final class JobDeposit implements ResetInterface
         if ('start' !== ($this->tools[$name]['job']['role'] ?? null)) {
             return null;
         }
-        $payment = $params['_meta'][X402McpMiddleware::PAYMENT] ?? null;
-        $auth = \is_array($payment) ? ($payment['payload']['authorization'] ?? null) : null;
-        $signature = \is_array($payment) ? ($payment['payload']['signature'] ?? null) : null;
-        if (!\is_array($auth) || !\is_string($signature) || !\is_string($auth['from'] ?? null)) {
+        $meta = $params['_meta'] ?? null;
+        $payment = \is_array($meta) ? ($meta[X402McpMiddleware::PAYMENT] ?? null) : null;
+        $payload = \is_array($payment) ? ($payment['payload'] ?? null) : null;
+        $auth = \is_array($payload) ? ($payload['authorization'] ?? null) : null;
+        $signature = \is_array($payload) ? ($payload['signature'] ?? null) : null;
+        if (!\is_array($payment) || !\is_array($auth) || !\is_string($signature) || !\is_string($auth['from'] ?? null)) {
             return null;
         }
         try {
-            $network = $payment['accepted']['network'] ?? null;
+            $accepted = $payment['accepted'] ?? null;
+            $network = \is_array($accepted) ? ($accepted['network'] ?? null) : null;
             $priced = ['name' => $name, 'arguments' => \is_array($params['arguments'] ?? null) ? $params['arguments'] : []];
             $req = current(array_filter(($this->pricing)($priced) ?? [], static fn (array $a) => $a['network'] === $network));
-            if (false === $req || !str_starts_with($req['network'], 'eip155:')
+            if (false === $req || !\is_string($req['network'] ?? null) || !str_starts_with($req['network'], 'eip155:')
                 || 0 !== strcasecmp((string) Signer::recover(Authorization::digest($req, $auth), $signature), $auth['from'])) {
                 return null;
             }

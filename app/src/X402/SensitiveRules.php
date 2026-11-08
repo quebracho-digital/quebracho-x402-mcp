@@ -16,12 +16,14 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
  * (X402McpMiddleware). A rule that cannot read the subject does not match it.
  *
  * A bad rule fails the deploy (SensitiveToolsWarmer, app:x402:check), not this request path.
+ *
+ * @phpstan-type Rule array{kind: 'header', name: string, value: string, unless_header?: string}|array{kind: 'argument', name: string, value: scalar}|array{kind: 'tool', name: string}
  */
 final class SensitiveRules
 {
     private const KINDS = ['header', 'argument', 'tool'];
 
-    /** @var list<array<string, mixed>> */
+    /** @var list<Rule> */
     private readonly array $rules;
 
     /**
@@ -32,7 +34,9 @@ final class SensitiveRules
         #[Autowire(env: 'csv:X402_SENSITIVE_TOOLS')] array $tools,
         #[Autowire('%app.x402_sensitive_rules%')] array $rules,
     ) {
-        $this->rules = self::merge($tools, $rules);
+        /** @var list<Rule> $merged cache:warmup refused any other shape (SensitiveToolsWarmer runs validate()) */
+        $merged = self::merge($tools, $rules);
+        $this->rules = $merged;
     }
 
     /**
@@ -76,6 +80,8 @@ final class SensitiveRules
      * @param list<array<string, mixed>> $rules
      *
      * @throws \InvalidArgumentException naming each bad rule by its position
+     *
+     * @phpstan-assert list<Rule> $rules
      */
     public static function validate(array $rules): void
     {
@@ -152,7 +158,7 @@ final class SensitiveRules
     }
 
     /**
-     * @param array<string, mixed>                        $rule
+     * @param Rule                                        $rule
      * @param ServerRequestInterface|array<string, mixed> $subject
      */
     private static function matches(array $rule, ServerRequestInterface|array $subject): bool

@@ -58,7 +58,7 @@ final class McpRateLimit
     public function __invoke(RequestEvent $event): void
     {
         $request = $event->getRequest();
-        if (!$event->isMainRequest() || !$request->isMethod('POST') || !str_starts_with((string) $request->attributes->get('_route'), self::ROUTE_PREFIX)) {
+        if (!$event->isMainRequest() || !$request->isMethod('POST') || !str_starts_with(self::route($request), self::ROUTE_PREFIX)) {
             return;
         }
         // The transport answers a foreign Host or Origin with 403 anyway: it must not spend this client's bucket.
@@ -90,8 +90,13 @@ final class McpRateLimit
     private static function paidTerms(Request $request): bool
     {
         $m = json_decode($request->getContent(), true);
-        if (!\is_array($m) || 'tools/call' !== ($m['method'] ?? null) || !\in_array($m['params']['name'] ?? null, [AnalyzeTermsTool::NAME, AnalyzeTermsJobTool::START], true)
-          || !\is_array($m['params']['_meta'][X402McpMiddleware::PAYMENT] ?? null) || !\is_string($text = $m['params']['arguments']['text'] ?? null)) {
+        $params = \is_array($m) && 'tools/call' === ($m['method'] ?? null) ? ($m['params'] ?? null) : null;
+        if (!\is_array($params) || !\in_array($params['name'] ?? null, [AnalyzeTermsTool::NAME, AnalyzeTermsJobTool::START], true)) {
+            return false;
+        }
+        $meta = $params['_meta'] ?? null;
+        $args = $params['arguments'] ?? null;
+        if (!\is_array($meta) || !\is_array($meta[X402McpMiddleware::PAYMENT] ?? null) || !\is_array($args) || !\is_string($text = $args['text'] ?? null)) {
             return false;
         }
         try {
@@ -144,5 +149,13 @@ final class McpRateLimit
             // Exposed so a browser client can read when to retry.
             ['Retry-After' => (string) max(1, $limit->getRetryAfter()->getTimestamp() - time()), 'Access-Control-Expose-Headers' => 'Retry-After'],
         );
+    }
+
+    /** The matched route's name, '' when there is none. */
+    public static function route(Request $request): string
+    {
+        $route = $request->attributes->get('_route');
+
+        return \is_string($route) ? $route : '';
     }
 }

@@ -49,9 +49,14 @@ final class PaidJob
         $handlers = [];
         $names = [];
         foreach ($calls as $args) {
+            [$class, $method] = \is_array($handler = $args[0] ?? null) ? [$handler[0] ?? null, $handler[1] ?? null] : [null, null];
+            $name = $args[1] ?? null;
+            if (!\is_string($class) || !class_exists($class) || !\is_string($method) || (null !== $name && !\is_string($name))) {
+                throw new \LogicException('An MCP addTool call that is not [[class, method], name]: '.json_encode($args).'.');
+            }
             // One tool on two servers is one handler.
-            $handlers[implode('::', $args[0])] = $args[0];
-            $names[] = $args[1];
+            $handlers["$class::$method"] = [$class, $method];
+            $names[] = $name;
         }
         $tools = self::catalog(array_values($handlers));
         foreach ($names as $name) {
