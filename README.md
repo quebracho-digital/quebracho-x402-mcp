@@ -488,7 +488,7 @@ server checks the payer once its signature is verified, the agent checks `payTo`
 before it signs. First refusal wins:
 
 1. **OFAC's SDN list**, from OFAC's own Sanctions List Service
-   (`Quebracho\X402\OfacSdn`, see [its README](https://github.com/quebracho-digital/x402/blob/main/README.md#address-screening)).
+   (`Quebracho\X402\OfacSdn`, see [its README](https://github.com/quebracho-digital/x402/blob/main/docs/screening.md)).
    The library asks it before any listener, so nothing in the app can let a
    sanctioned address through, our allowlist included. The app's snapshot is
    `app/var/screening/ofac-sdn.json`; until the first `app:screening sync`, the
@@ -654,7 +654,7 @@ $client = new PayingHttpClient(
 );
 ```
 
-**Networks**: built in are the demo testnets (Base Sepolia, Arc testnet, Ethereum Sepolia, Avalanche Fuji, Polygon Amoy, Solana devnet), Arc mainnet (`eip155:5042`, where Ombú sells), and Ethereum mainnet, which is there to be read (the blacklist of its USDC and USDT: an `eth_call`, no gas). Any other EVM chain, mainnets included, whose token implements EIP-3009, is added with `Networks::add()`. The steps, the contract and the blacklist function to use are in [Add a blockchain](https://github.com/quebracho-digital/x402/blob/main/README.md#add-a-blockchain):
+**Networks**: built in are the demo testnets (Base Sepolia, Arc testnet, Ethereum Sepolia, Avalanche Fuji, Polygon Amoy, Solana devnet), Arc mainnet (`eip155:5042`, where Ombú sells), and Ethereum mainnet, which is there to be read (the blacklist of its USDC and USDT: an `eth_call`, no gas). Any other EVM chain, mainnets included, whose token implements EIP-3009, is added with `Networks::add()`. The steps, the contract and the blacklist function to use are in [Add a blockchain](https://github.com/quebracho-digital/x402/blob/main/docs/networks.md):
 
 ```php
 $network = Networks::add(chainId: 4202, asset: '0x…', name: 'USDC', version: '2');
