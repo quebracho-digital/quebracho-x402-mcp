@@ -15,10 +15,15 @@ Decisions are recorded in [DECISIONS.md](DECISIONS.md).
 | 10-29 | Settle on testnet through a real facilitator (x402.org, Base Sepolia) | done |
 | 10-29 | Facilitator clients in the library: any URL, Circle, on chain (G7) | done |
 | 10-29 | Online verify, claim release, 502 when the facilitator is down, upfront flow, resource, outcome event (G2–G5, G8, G10) | done |
-| 10-30 → 11-03 | Solana (G6), network catalogue (G1), G9, G11–G12, Packagist (G13), NEAR strict screening | done (G13: split at v0.2.1; Packagist lists v0.2.0 until its update hook is set) |
-| 11-04 → 11-07 | `bin/smoke.sh` is the demo (README quickstart), minimal CI (done), 90 s video | video pending |
+| 10-30 → 11-03 | Solana (G6), network catalogue (G1), G9, G11–G12, Packagist (G13), NEAR strict screening | done (v0.3.0 on Packagist, 11-03) |
 | 11-03 | Mainnet: the library runs in production in Ombú (Arc); blacklist of mainnet USDC; Ethereum built in (read only); Concordium removed (D14) | done |
-| **before 11-22 18:00 CET** | **Submit** (form, public repo, new 90 s video) | |
+| 11-04 → 11-08 | Job mode (D22): deposit, free status, paid result, reconciler and janitor; the engine moved into the library | done (library v0.4.0, 11-08) |
+| 11-06 → 11-08 | OFAC screening in the library, on by default, with events for third-party lists; the app uses it | done (v0.4.0) |
+| 11-08 | `CasperExact` merged in the library repo (v0.4.1); the app now takes the library from Packagist (`^0.4.1`) | done |
+| 11-09 | Docs brought up to date; `analyze_terms` stays at 0.02 USDC | done |
+| before 11-18 | A real purchase through Ombú's MCP with the hackathon wallets (needs a facilitator for the network it pays on) | pending, waits for Leo |
+| before 11-20 | New 90 s video (the library, the Symfony app, `x402_pay`, Ombú) | pending |
+| **before 11-22 18:00 CET** | **Submit** (form, public repo, video) | |
 
 ## Tasks (hackathon and app)
 
@@ -29,8 +34,12 @@ Tasks for the library are in [https://github.com/quebracho-digital/x402/blob/mai
 - [x] Settle on testnet (Base Sepolia) through a facilitator.
 - [x] Screening in the app: `app:x402:check` warns when the OFAC list in use is older than 14 days.
 - [ ] Try the server with MCP Inspector.
+- [ ] Real purchase on Ombú with the hackathon wallets, a cents-sized cap, the key only in `app/.env.local`.
+- [ ] Mainnet test of each supported network, and a testnet smoke, once, when the maintainer orders it.
 
 ## After the hackathon
 
 - phay.io: a hosted registry of trusted sellers and reported addresses, behind the `AddressCheck` hook.
-- The Drupal module `x402_pay` uses this library.
+- `auth-capture` for job mode (authorize at the start, capture when the job is ready, void if it fails): written in the library on a branch, not released; Base and Base Sepolia only.
+- Circle Gateway as a payment scheme, for buyers and sellers.
+- The Drupal module `x402_pay` uses this library (`^0.4`).

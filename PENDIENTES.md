@@ -1,32 +1,27 @@
-# Pendientes de Leo (quebracho-x402-mcp), 2026-11-05
+# Pendientes de Leo (quebracho-x402-mcp), 2026-11-09
 
-Para retomar en otra sesión. `todo.txt` tiene el detalle y las fechas; esto es el resumen de lo que depende de Leo.
+Resumen de lo que depende de Leo. `todo.txt` tiene el detalle y las fechas. Las decisiones de job mode, la allowlist de payTo, OFAC y la versión de la librería ya están tomadas y registradas en `DECISIONS.md` (D22 a D24).
 
-## Decisiones de Leo
+## Para entregar el hackathon (plazo oficial: 2026-11-22 18:00 CET)
 
-1. **Job mode, estado `settling`.** ¿Agregamos un estado `settling` antes de `queued` en el store de jobs? Sirve para registrar el depósito antes de liquidarlo: si el proceso se cae entre la liquidación y el guardado del job, el reconciliador sabe qué buscar en la cadena. La librería ya tiene ese estado en su ledger; el job store todavía no lo usa. Recomendación: sí, ahora.
-2. **Job mode, parámetros de entrada.** ¿Guardamos el nombre del tool y sus parámetros en el job? Sin ellos, un job que se cae a mitad no se puede reanudar y el comprador pierde lo pagado. Costo: el texto del comprador queda en disco hasta la entrega; hay que borrarlo al final.
-3. **Job mode, hosts.** ¿La app corre en un solo servidor? El store de archivos (`app/src/Job`) solo sirve para un host. Para el hackathon, alcanza.
-4. **W7, tope de gas.** `ChainFacilitator` recibe el tope por argumento, sin default en código (`null` = sin tope). La app no lo usa todavía (liquida con Circle/HttpFacilitator). ¿La app liquida on-chain con su gas wallet? Si sí, el valor va a un archivo de configuración y se pasa al constructor.
-5. **AllowList de payTo en la demo.** `X402_PAYTO_ALLOW` en `app/.env` ya trae `0x7e510E6B4c3E2121CB64CD0686a4f241Df326510`. ¿Es tu wallet? Si no, cambiar el valor.
-6. **OFAC, suscripción.** Suscribirte al correo de OFAC (GovDelivery, código `USTREAS_61`). El RSS se retiró. Es tarea tuya, no del código.
-7. **OFAC, fuente.** La app baja la lista de un espejo de terceros (`0xB10C/ofac-sanctioned-digital-currency-addresses` en GitHub), no de OFAC. ¿Pasamos a bajarla directo de OFAC?
+1. **Compra real en la demo (antes del 18/11).** Contra un listado de Ombú, con las wallets del hackathon de Tameion, con un tope de centavos y la clave solo en `app/.env.local`. Red elegida por Leo (2026-11-09): Base Sepolia, con `https://x402.org/facilitator` (no pide clave). Necesita: (a) que levantes la orden del 2026-11-05 de no pagar contra nodo real; (b) fondos de testnet en la wallet del comprador; (c) un listado de Ombú que cobre en Base Sepolia: hoy Ombú vende en Arc, así que hay que crear uno de prueba o comprar un servicio nuestro de esta app.
+2. **Video nuevo (antes del 20/11).** Rehacerlo: la librería, la app Symfony con MCP, `x402_pay` y Ombú. Guion en `video/guion-v9.md` (local).
+3. **Formulario.** Repo (este monorepo), video, y el párrafo actualizado (cifras: librería 670 tests, app 273, v0.4.1, `analyze_terms` super beta, compra real en mainnet por Ombú). Al enviar: verificar los números y crear el tag `hackathon-submission`.
+4. **Prueba en mainnet de cada red soportada y smoke en testnet**, una sola vez, cuando lo ordenes.
 
-## Código sin commit (rama `feat/job-mode-foundations`)
+## Decisiones abiertas
 
-- Job mode paso 4: `app/src/Job/` (`Job`, `JobStore`, `FileJobStore`) y sus tests. Lo hizo un subagente; 288 tests de la app OK, según su reporte. No lo revisé línea por línea.
-- Cron diario de OFAC documentado en `README.md` raíz.
-- Revertido el default de `maxGasCost` en `packages/x402/src/ChainFacilitator.php`; sin cambios netos en la librería.
-- Versión de la librería y merge a `main`: decide Leo.
-- Commit: nada se commitea sin tu orden.
+- **Tope de gas (W7).** ¿La app liquida on-chain con su propia gas wallet? Hoy liquida con Circle o con `HttpFacilitator`, así que `ChainFacilitator` y su tope no se usan. Si la respuesta es sí, el valor va a un archivo de configuración y se pasa al constructor.
+- **Tag v0.4.2 de la librería**, al fusionar `quebracho-digital/x402#3` (correcciones de `CasperExact` tras la revisión de protocolo). Decide Leo.
+- **Propuesta a la Fundación x402** (modo de trabajos): primero preguntar en su Slack o abrir un issue corto.
 
-## Pendientes en otros proyectos (ya en sus todo)
+## Fechas
 
-- Ombú (`ombu/todo.txt`): allowlist de payTo al importar y editar listados.
-- Kalibang (`kalibang/todo.txt`): la misma allowlist en cualquier flujo que cobre con x402.
+- Cada semana, y antes de cada release: refrescar la lista OFAC incluida en la librería (`bin/update-ofac.php`).
+- 2026-11-19: Concordium se puede retomar (`git show b83b145` lo restaura); hasta entonces nada de Concordium en este repo.
+- 2026-11-27: rotar `HF_TOKEN` (vence el cupón).
 
-## Pendientes de la línea de hackathon (sin cambio hoy)
+## Fuera de este repo
 
-- Video v9, guion en `video/guion-v9.md`.
-- Prueba en mainnet y smoke en testnet, una sola vez, cuando lo ordenes. Hasta entonces no se paga contra nodo real.
-- Entrega del hackathon: 18/11, con cierre oficial 22/11 a las 18:00 CET.
+- Ombú: guardar el `payTo` esperado de cada listado y rechazar un 402 con otro; detector de inyección de instrucciones al importar listados.
+- `x402_pay` pasa a `quebracho/x402 ^0.4` (ya hecho en Ombú).

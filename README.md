@@ -6,8 +6,8 @@ lets any PHP service sell, or any PHP agent buy, over
 API keys, no accounts. The library is [`quebracho/x402`](https://github.com/quebracho-digital/x402) (on Packagist). This repo holds a
 Symfony MCP server with a Symfony AI agent (`app/`) that show it working.
 
-Built for the Symfony AI & MCP Hackathon (team Ombu). The version we submitted is
-the tag `hackathon-submission`; `main` may move on after it.
+Built for the Symfony AI & MCP Hackathon (team Ombu). The version we submit is the
+tag `hackathon-submission` (set when the form goes in); `main` may move on after it.
 
 What was made for the hackathon: the library and this demo start at commit
 [`185d334`](https://github.com/quebracho-digital/quebracho-x402-mcp/commit/185d334)
@@ -29,8 +29,8 @@ Drupal module [x402_pay](https://www.drupal.org/project/x402_pay).
 - **Why:** agents can call tools but cannot pay for them. API keys and accounts do not scale to machines.
 - **How:** the agent calls a tool, gets a price (402), signs within a budget, retries with the payment, and receives the result with an on-chain receipt.
 - **Safe by construction:** verify is not paid. One signature buys one delivery, a replay never runs the handler, smart-wallet signatures are refused, gas is bounded, and addresses are screened. Each defence has a test.
-- **Proven:** 474 library tests and 365 app tests with no network, EVM, Solana, NEAR and Casper (both experimental) schemes, a real USDC settle on Base Sepolia, and a real purchase on Arc mainnet through Ombú's MCP server.
-- **Used by:** ombu.quebracho.digital, in production on mainnet, and the Drupal module [x402_pay](https://www.drupal.org/project/x402_pay): release 1.0.0-beta3 on drupal.org runs on this library (`quebracho/x402 ^0.3`). The library grew from that module, so one codebase serves Drupal and Symfony.
+- **Proven:** 670 library tests (9 skipped, no network) and 273 app tests, EVM and Solana schemes (NEAR and Casper are experimental), a real USDC settle on Base Sepolia, and a real purchase on Arc mainnet through Ombú's MCP server.
+- **Used by:** ombu.quebracho.digital, in production on mainnet, and the Drupal module [x402_pay](https://www.drupal.org/project/x402_pay): 1.0.0-beta4 runs on this library (`quebracho/x402 ^0.4`). The library grew from that module, so one codebase serves Drupal and Symfony.
 - **Try it:** `bin/smoke.sh` after `ddev start` (below). Mock mode needs no wallet and no faucet.
 
 ## How the pieces fit
@@ -152,7 +152,7 @@ ddev exec -d /var/www/html/app bin/console app:ask "give me a paid piece of engi
 
 ```
  Tools on the server: analyze_terms, echo, ombu_search, wisdom
- Paid tool "wisdom": 0.01 USDC (10000 atomic) on eip155:84532 to 0x7e51…6510, settled
+ Paid tool "wisdom": 0.01 USDC (10000 atomic) on eip155:84532 to 0xcb2d…B794, settled
  Receipt: {"success":true,"transaction":"","network":"eip155:84532","payer":"0x2c75…5c23"}
 
 Answer
@@ -579,7 +579,7 @@ with a 500.
 |---|---|---|
 | `X402_NETWORK` | `eip155:84532` | CAIP-2 network (Base Sepolia). |
 | `X402_PRICE` | `0.01` | Price per paid call, in USD. |
-| `X402_PAY_TO` | `0x7e51…6510` | Who gets paid. **This is the author's wallet.** Change it to yours. |
+| `X402_PAY_TO` | `0xcb2d…B794` | Who gets paid. **This is the author's wallet.** Change it to yours. |
 | `X402_PAID_TOOLS` | `wisdom,analyze_terms` | Comma-separated tool names that cost money. A `#[PaidJob]` tool is always paid, listed or not. A name here (or in `X402_PRICES`, `X402_TIMEOUTS`, `X402_DURATIONS`) that is no tool is a config error (`app:x402:check` exits 1; `/mcp` answers 500). |
 | `X402_SENSITIVE_TOOLS` | empty | Comma-separated tool names whose answers the payment ledger never keeps (only the payment's state): a retry of a settled payment gets `already_settled`, not the answer. A caller can also pass `sensitive: true` to `analyze_terms`, which also skips its memo. See DECISIONS.md, D17. |
 | `X402_FACILITATOR` | `mock` | Must be set explicitly: `mock` (verified signatures, nothing settled) or a facilitator URL such as `https://x402.org/facilitator` (real settle: on Base Sepolia by default, on a mainnet when `X402_NETWORK` is one you registered). Anything else fails closed: every `/mcp` request errors, nothing is served for free. |

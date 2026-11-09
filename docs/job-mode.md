@@ -19,10 +19,12 @@ The buyer starts the job, polls its status, and buys the result once it is
 ready. If the job fails by our fault, the result is refused **without
 charging**, so the buyer loses the deposit only.
 
-The library knows nothing about jobs: `quebracho/x402`'s `X402McpMiddleware`
-takes hooks (`validate`, `payer`, `settle`, `sensitive`), and this app plugs
-job mode into them. A tool declares its role with `#[PaidJob('start' |
-'result', pairedWith: ...)]` (`App\X402\PaidJob`).
+The job engine is in the library (`quebracho/x402` since v0.4.0): the `Job`
+states, the job store (`FileJobStore`), the runner, the reconciler and the
+janitor live in `Quebracho\X402\Job`. The paid-tool wiring is this app's:
+`X402McpMiddleware` takes hooks (`validate`, `payer`, `settle`, `sensitive`),
+and the app plugs job mode into them. A tool declares its role with
+`#[PaidJob('start' | 'result', pairedWith: ...)]` (`App\X402\PaidJob`).
 
 ## The flow
 
