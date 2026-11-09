@@ -29,7 +29,9 @@ final class Facilitator implements PaymentStatus
         #[Autowire(env: 'X402_FACILITATOR')] string $mode,
         private readonly LoggerInterface $logger,
         HttpClientInterface $http,
+        #[Autowire(env: 'X402_FACILITATOR_KEY')] #[\SensitiveParameter] string $key = '',
     ) {
+        $bearer = '' === $key ? null : $key;
         try {
             $client = new Psr18Client($http->withOptions([
                 'timeout' => 30,
@@ -39,8 +41,8 @@ final class Facilitator implements PaymentStatus
             ]));
             $this->remote = match (true) {
                 'mock' === $mode => null,
-                self::normalize($mode) === self::normalize(CircleFacilitator::URL) => new CircleFacilitator($client, $client, $client),
-                default => new HttpFacilitator($client, $client, $client, $mode),
+                self::normalize($mode) === self::normalize(CircleFacilitator::URL) => new CircleFacilitator($client, $client, $client, $bearer),
+                default => new HttpFacilitator($client, $client, $client, $mode, $bearer),
             };
         } catch (\InvalidArgumentException) {
             // Only scheme and host are shown: the URL may carry a password or a token in its userinfo or query.
