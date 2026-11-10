@@ -25,12 +25,12 @@ final class JobDesk implements ResetInterface
         #[\Symfony\Component\DependencyInjection\Attribute\Autowire(param: 'app.mcp_tools')] private readonly array $tools,
     ) {
         $jobs = self::extractJobs($tools);
-        $validate = fn(array $params) => $pricing->validate($params);
-        $sensitive = fn(array $params) => $sensitiveRules->marks($params['name'], $params['arguments'] ?? []);
+        $validate = fn (array $params) => $pricing->validate($params);
+        $sensitive = fn (array $params) => $sensitiveRules->marks($params['name'], $params['arguments'] ?? []);
 
         // Wrap the Facilitator to accept the optional $reference parameter the library passes.
         // The app's Facilitator only accepts 2 args, so we ignore $reference.
-        $settler = fn(array $payment, array $req, ?\Closure $reference = null) => ($this->settle)($payment, $req);
+        $settler = fn (array $payment, array $req, ?\Closure $reference = null) => ($this->settle)($payment, $req);
 
         $this->desk = new LibJobDesk($this->deposit->lib, $this->delivery->lib, $settler, $jobs, $validate, $sensitive);
     }

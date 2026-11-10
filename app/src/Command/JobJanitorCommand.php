@@ -8,7 +8,6 @@ use App\X402\JobSlots;
 use Quebracho\X402\Job\JobJanitor;
 use Quebracho\X402\Job\JobReconciler;
 use Quebracho\X402\Job\JobRunner;
-use Quebracho\X402\Job\JobSlots as JobSlotsInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Attribute\Option;
 use Symfony\Component\Console\Style\SymfonyStyle;

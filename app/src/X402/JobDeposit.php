@@ -29,19 +29,50 @@ final class JobDeposit
         private readonly ?\Closure $clock = null,
     ) {
         $roles = self::extractRoles($tools);
-        $price = fn(array $params) => $pricing($params);
-        $sensitive = fn(array $params) => $sensitiveRules->marks($params['name'], $params['arguments'] ?? []);
+        $price = fn (array $params) => $pricing($params);
+        $sensitive = fn (array $params) => $sensitiveRules->marks($params['name'], $params['arguments'] ?? []);
         $this->lib = new LibJobDeposit($jobs, $runner, $slots, $price, $roles, $sensitive, $clock, []);
     }
 
-    public function check(array $params): ?string { return $this->lib->check($params); }
-    public function payer(array $params, string $from): ?string { return $this->lib->payer($params, $from); }
-    public function beforeSettle(array $payment, array $req): ?array { return $this->lib->beforeSettle($payment, $req); }
-    public function afterSettle(bool $nothing): void { $this->lib->afterSettle($nothing); }
-    public function queue(string $name, array $args, ?array $payment): Job { return $this->lib->queue($name, $args, $payment); }
-    public function afterResponse(): void { $this->lib->afterResponse(); }
-    public function jobIdFor(array $params): ?string { return $this->lib->jobIdFor($params); }
-    public function reset(): void { $this->lib->reset(); }
+    public function check(array $params): ?string
+    {
+        return $this->lib->check($params);
+    }
+
+    public function payer(array $params, string $from): ?string
+    {
+        return $this->lib->payer($params, $from);
+    }
+
+    public function beforeSettle(array $payment, array $req): ?array
+    {
+        return $this->lib->beforeSettle($payment, $req);
+    }
+
+    public function afterSettle(bool $nothing): void
+    {
+        $this->lib->afterSettle($nothing);
+    }
+
+    public function queue(string $name, array $args, ?array $payment): Job
+    {
+        return $this->lib->queue($name, $args, $payment);
+    }
+
+    public function afterResponse(): void
+    {
+        $this->lib->afterResponse();
+    }
+
+    public function jobIdFor(array $params): ?string
+    {
+        return $this->lib->jobIdFor($params);
+    }
+
+    public function reset(): void
+    {
+        $this->lib->reset();
+    }
 
     private static function extractRoles(array $tools): array
     {

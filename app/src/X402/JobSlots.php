@@ -41,7 +41,9 @@ final class JobSlots implements JobSlotsInterface
             $lock = $this->locks->createLock("job-slot-$i", self::TTL);
             if ($lock->acquire(false)) {
                 return new class($lock) implements JobSlot {
-                    public function __construct(private readonly LockInterface $lock) {}
+                    public function __construct(private readonly LockInterface $lock)
+                    {
+                    }
 
                     public function release(): void
                     {
