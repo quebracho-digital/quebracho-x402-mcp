@@ -17,6 +17,9 @@ services:
     _defaults:
         autowire: true      # Automatically injects dependencies in your services.
         autoconfigure: true # Automatically registers your services as commands, event subscribers, etc.
+        # Bind library interfaces to app-level adapters (library classes are final).
+        bind:
+            'Quebracho\X402\Job\JobSlots': '@App\X402\JobSlots'
 
     # Each job tool's work (Quebracho\X402\Job\JobWork), for the runner: found by the _start tool it belongs to.
     _instanceof:

@@ -4,56 +4,43 @@ declare(strict_types=1);
 
 namespace App\X402;
 
-use Quebracho\X402\Settlement;
-use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use Quebracho\X402\Job\JobDesk as LibJobDesk;
 use Symfony\Contracts\Service\ResetInterface;
 
 /**
- * Where job mode meets the payment: the hooks X402McpMiddleware calls (config/services.yaml), routed by the
- * tool's #[PaidJob] role. A job is bought in two payments, and each has its own class:
- *
- *   `_start`   the deposit, settled BEFORE the tool runs: JobDeposit
- *   `_result`  the rest, settled AFTER the tool answered: JobDelivery (also `_status`, which is free)
- *
- * The order the middleware calls the hooks in, for one tools/call:
- *
- *   validate()   before any payment is read: the tool's schema (Pricing), then a `_start`'s work check
- *   payer()      once the signature proved who pays, before the claim: the role's own refusal, or NULL
- *   sensitive()  whether the ledger may keep the answer
- *   settle()     around the facilitator's settle: the role's beforeSettle(), the facilitator, its afterSettle()
- *
- * then, after the response went out, afterResponse() (App\EventListener\JobTerminate, kernel.terminate).
- * A tool without a #[PaidJob] role goes straight through: its schema, the rules, the facilitator.
- *
- * One instance per request, like its two parts: the role is this request's call, set by payer().
+ * Adapter: wraps the library's JobDesk and adapts Symfony-specific Pricing/SensitiveRules
+ * to the library's closure-based constructor.
  */
 final class JobDesk implements ResetInterface
 {
     /** This request's role ('start' or 'result'), from payer(); NULL for a tool that is no job. */
     private ?string $role = null;
 
-    /**
-     * @param \Closure                                                                                            $settle the facilitator's settle (App\X402\Facilitator)
-     * @param array<string, array{job: ?array{role: string, pairedWith: string, price: ?string}, schema: string}> $tools
-     */
     public function __construct(
         public readonly JobDeposit $deposit,
         public readonly JobDelivery $delivery,
         private readonly Pricing $pricing,
         private readonly SensitiveRules $sensitiveRules,
         private readonly \Closure $settle,
-        #[Autowire(param: 'app.mcp_tools')] private readonly array $tools,
+        #[\Symfony\Component\DependencyInjection\Attribute\Autowire(param: 'app.mcp_tools')] private readonly array $tools,
     ) {
+        $jobs = self::extractJobs($tools);
+        $validate = fn(array $params) => $pricing->validate($params);
+        $sensitive = fn(array $params) => $sensitiveRules->marks($params['name'], $params['arguments'] ?? []);
+
+        // Wrap the Facilitator to accept the optional $reference parameter the library passes.
+        // The app's Facilitator only accepts 2 args, so we ignore $reference.
+        $settler = fn(array $payment, array $req, ?\Closure $reference = null) => ($this->settle)($payment, $req);
+
+        $this->desk = new LibJobDesk($this->deposit->lib, $this->delivery->lib, $settler, $jobs, $validate, $sensitive);
     }
 
-    /**
-     * X402McpMiddleware's $validate: the schema (Pricing), then for a `_start` its work's own check.
-     */
+    private LibJobDesk $desk;
+
+    /** Delegate: library already calls pricing->validate then deposit->check internally. */
     public function validate(array $params): ?string
     {
-        $invalid = $this->pricing->validate($params);
-
-        return null === $invalid && 'start' === $this->role($params['name']) ? $this->deposit->check($params) : $invalid;
+        return $this->desk->validate($params);
     }
 
     /**
@@ -84,10 +71,10 @@ final class JobDesk implements ResetInterface
         if (null !== $instead) {
             return $instead;
         }
-        $receipt = null === $reference ? ($this->settle)($payment, $req) : ($this->settle)($payment, $req, $reference);
+        $receipt = $this->desk->settle($payment, $req, $reference);
         $moved = true === ($receipt['success'] ?? null);
         // A clear refusal: no transaction, and a reason that says no money can have moved.
-        $nothing = !$moved && '' === ($receipt['transaction'] ?? '') && !\in_array($receipt['errorReason'] ?? null, Settlement::MAY_HAVE_MOVED, true);
+        $nothing = !$moved && '' === ($receipt['transaction'] ?? '') && !\in_array($receipt['errorReason'] ?? null, \Quebracho\X402\Settlement::MAY_HAVE_MOVED, true);
         match ($this->role) {
             'start' => $this->deposit->afterSettle($nothing),
             'result' => $this->delivery->afterSettle($moved, $nothing),
@@ -97,18 +84,10 @@ final class JobDesk implements ResetInterface
         return $receipt;
     }
 
-    /**
-     * X402McpMiddleware's $sensitive: whether the ledger must not keep this call's answer.
-     */
+    /** Delegate: library already handles sensitive rules internally. */
     public function sensitive(array $params): bool
     {
-        return match ($this->role($params['name'])) {
-            // A job id, no buyer text: always kept, so a retry of the same deposit gets the same job (7c)
-            // instead of already_settled. A sensitive deposit marks its job instead (see the result).
-            'start' => false,
-            'result' => $this->delivery->sensitive($params),
-            default => $this->sensitiveRules->marks($params['name'], $params['arguments'] ?? []),
-        };
+        return $this->desk->sensitive($params);
     }
 
     /**
@@ -135,5 +114,18 @@ final class JobDesk implements ResetInterface
     private function role(string $name): ?string
     {
         return $this->tools[$name]['job']['role'] ?? null;
+    }
+
+    private static function extractJobs(array $tools): array
+    {
+        $jobs = [];
+        foreach ($tools as $name => $t) {
+            $j = $t['job'] ?? null;
+            if (null !== $j) {
+                $jobs[$name] = ['role' => $j['role'], 'pairedWith' => $j['pairedWith'], 'price' => $j['price'] ?? null];
+            }
+        }
+
+        return $jobs;
     }
 }

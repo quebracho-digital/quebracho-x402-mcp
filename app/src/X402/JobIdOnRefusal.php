@@ -11,13 +11,9 @@ use Psr\Http\Server\MiddlewareInterface;
 use Psr\Http\Server\RequestHandlerInterface;
 
 /**
- * Right outside X402McpMiddleware (App\Controller\McpController): a `_start` call that the library refused
- * once its job row existed gets the jobId in the PaymentRequired it answers (structuredContent.jobId, and the
- * same JSON in content[0].text), so the buyer polls `_status` instead of retrying a deposit whose signature
- * may have expired. Who gets it is JobDeposit::jobIdFor's call: only the deposit's payer.
+ * Re-export of library's JobIdOnRefusal in App\X402 namespace for DI compatibility.
  *
- * Only a JSON answer with an x402 refusal is touched: a success already carries the jobId, and anything
- * else (a stream, a JSON-RPC error) goes as it came.
+ * Identical to Quebracho\X402\Job\JobIdOnRefusal - same logic, just in our namespace.
  */
 final class JobIdOnRefusal implements MiddlewareInterface
 {
