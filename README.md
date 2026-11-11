@@ -413,7 +413,7 @@ A buyer never needs a second try to learn its job: every `analyze_terms_start`
 answer given once the job row exists carries the `jobId`, refusals included
 (`settlement_pending`, `needs_review`, `facilitator_unavailable`, an expired
 signature on a late retry), in `structuredContent.jobId`
-(`App\X402\JobIdOnRefusal`, only when the deposit's signature recovers to its
+(`Quebracho\X402\Job\JobIdOnRefusal`, only when the deposit's signature recovers to its
 payer). The deposit's signature lives 60 s and the reconciler first looks at a
 `settling` row after 60 s, so a retry would come too late; the buyer polls
 `analyze_terms_status` with the `jobId` instead.
@@ -470,7 +470,7 @@ limits we know and leave in, each also said in a comment where it lives:
   `maxmemory-policy noeviction` and `appendonly yes` (AOF). The DDEV Redis in
   this repo is for development and is not set up that way.
 - **The free re-read needs a real payment signature**
-  (`App\X402\JobDelivery`). To read a delivered result again within 5 minutes the
+  (`Quebracho\X402\Job\JobDelivery`). To read a delivered result again within 5 minutes the
   payer signs a valid EIP-3009 authorization for the full price, which we never
   settle. It stays spendable (only to our `payTo`) until it expires, and the
   buyer's budget counts it until then. A stronger and cheaper proof would be an

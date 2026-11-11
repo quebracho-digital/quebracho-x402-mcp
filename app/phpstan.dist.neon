@@ -4,8 +4,3 @@ parameters:
     ignoreErrors:
         # ponytail: payloads are free-form JSON arrays; shapes are checked at runtime
         - identifier: missingType.iterableValue
-        # Closures capture these properties; PHPStan level 9 can't see the capture
-        -
-            messages:
-                - '~never read, only written~'
-                - '~expects array\{name: string~'

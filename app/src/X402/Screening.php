@@ -11,45 +11,49 @@ use Quebracho\X402\OfacSdn;
 use Quebracho\X402\OfacSdnSync;
 use Quebracho\X402\Screening as LibScreening;
 use Quebracho\X402\SyncResult;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use Symfony\Component\EventDispatcher\Attribute\AsEventListener;
 use Symfony\Component\Filesystem\Filesystem;
 use Symfony\Component\HttpClient\Psr18Client;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 /**
- * Adapter: wraps the library's Screening and adds Symfony-specific dependencies
- * (Filesystem, HttpClient) for admin operations (sync, ofac).
+ * The app's lists on the library's AddressCheck: the payer (we sell) and payTo (we buy). A listener of
+ * AddressCheck: without the attribute below the deny list and the API are asked by nobody (AppKernelTest).
  *
- * The library's Screening is simpler (no Symfony deps). This wrapper keeps the
- * Symfony wiring for the app's admin CLI commands while delegating __invoke()
- * to the library implementation.
+ * The checks and their order are the library's (Quebracho\X402\Screening): OFAC first, asked by the library
+ * before any listener; our allowlist (var/screening/allow.txt), which skips the next two and never OFAC nor
+ * the token's own blacklist; our denylist (deny.txt, address_denied); Chainalysis' sanctions API, only when
+ * X402_SCREENING_API_KEY is set, cached X402_SCREENING_CACHE_TTL seconds. An API that does not answer within
+ * X402_SCREENING_TIMEOUT follows X402_SCREENING_UNAVAILABLE: "reject" (default) or "allow".
+ *
+ * What this class adds is the Symfony wiring (env, the HTTP client's timeouts) and the admin's sync of
+ * OFAC's list into var/screening (app:screening sync).
  */
+#[AsEventListener]
 final class Screening
 {
     private readonly LibScreening $lib;
-    private readonly ?ChainalysisApi $api;
     private readonly Psr18Client $client;
     private readonly Filesystem $fs;
 
     public function __construct(
-        #[\Symfony\Component\DependencyInjection\Attribute\Autowire('%kernel.project_dir%/var/screening')] private readonly string $dir,
-        #[\Symfony\Component\DependencyInjection\Attribute\Autowire(env: 'X402_SCREENING_API_KEY')] #[\SensitiveParameter] string $apiKey,
-        #[\Symfony\Component\DependencyInjection\Attribute\Autowire(env: 'int:X402_SCREENING_CACHE_TTL')] private readonly int $cacheTtl,
-        #[\Symfony\Component\DependencyInjection\Attribute\Autowire(env: 'float:X402_SCREENING_TIMEOUT')] private readonly float $timeout,
-        #[\Symfony\Component\DependencyInjection\Attribute\Autowire(env: 'X402_SCREENING_UNAVAILABLE')] private readonly string $unavailable,
+        #[Autowire('%kernel.project_dir%/var/screening')] private readonly string $dir,
+        #[Autowire(env: 'X402_SCREENING_API_KEY')] #[\SensitiveParameter] string $apiKey,
+        #[Autowire(env: 'int:X402_SCREENING_CACHE_TTL')] int $cacheTtl,
+        #[Autowire(env: 'float:X402_SCREENING_TIMEOUT')] float $timeout,
+        #[Autowire(env: 'X402_SCREENING_UNAVAILABLE')] string $unavailable,
         private readonly OfacSdn $ofac,
         HttpClientInterface $http,
-        private readonly CacheItemPoolInterface $cache,
+        CacheItemPoolInterface $cache,
     ) {
-        // Build the library Screening (simpler constructor, no Symfony deps)
-        $chainalysisApi = '' === $apiKey ? null : new ChainalysisApi(
+        $api = '' === $apiKey ? null : new ChainalysisApi(
             new Psr18Client($http->withOptions(['max_redirects' => 0, 'timeout' => $timeout, 'max_duration' => $timeout])),
             new Psr18Client($http->withOptions(['max_redirects' => 0])),
             $apiKey,
         );
-        $this->lib = new LibScreening($this->dir, $chainalysisApi, $this->cache, $this->cacheTtl, $this->unavailable);
-
-        // Keep Symfony-specific deps for admin operations
-        $this->api = $chainalysisApi;
+        $this->lib = new LibScreening($dir, $api, $cache, $cacheTtl, $unavailable);
+        // OFAC's own redirects are followed by OfacSdnSync, HTTPS only.
         $this->client = new Psr18Client($http->withOptions(['max_redirects' => 0]));
         $this->fs = new Filesystem();
     }

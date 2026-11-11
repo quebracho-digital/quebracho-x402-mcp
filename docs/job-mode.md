@@ -63,13 +63,13 @@ sequenceDiagram
 
 | Class | Does |
 |---|---|
-| `App\X402\JobDesk` | routes the middleware's hooks by the tool's role |
-| `App\X402\JobDeposit` | the `_start`: checks, slot, the `settling` row before the settle, queue, the run after the response, the `jobId` on a refusal |
-| `App\X402\JobDelivery` | the `_result` and the `_status`: who may buy, ready → delivering, the state after the settle, the free re-read |
+| `Quebracho\X402\Job\JobDesk` | routes the middleware's hooks by the tool's role |
+| `Quebracho\X402\Job\JobDeposit` | the `_start`: checks, slot, the `settling` row before the settle, queue, the run after the response, the `jobId` on a refusal |
+| `Quebracho\X402\Job\JobDelivery` | the `_result` and the `_status`: who may buy, ready → delivering, the state after the settle, the free re-read |
 | `Quebracho\X402\Job\Job` | the job and its states (below) |
 | `Quebracho\X402\Job\JobRunner`, `App\Terms\AnalyzeTermsWork` | the work, run after the response in the slot the deposit took |
 | `Quebracho\X402\Job\JobReconciler`, `Quebracho\X402\Job\JobJanitor` | the cron: moves on jobs whose request is gone |
-| `App\X402\JobIdOnRefusal` | adds the `jobId` to any `_start` refusal given once the job exists |
+| `Quebracho\X402\Job\JobIdOnRefusal` | adds the `jobId` to any `_start` refusal given once the job exists |
 
 ## States
 

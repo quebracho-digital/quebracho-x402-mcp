@@ -6,13 +6,12 @@ namespace App\X402;
 
 use Quebracho\X402\Job\JobSlot;
 use Quebracho\X402\Job\JobSlots as JobSlotsInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\Lock\LockFactory;
 use Symfony\Component\Lock\LockInterface;
 
 /**
- * Symfony Lock adapter for the library's JobSlots interface.
- *
- * One lock per slot, `job-slot-0` .. `job-slot-N-1`. A `_start` takes a slot
+ * The library's JobSlots on Symfony Lock. At most JOB_SLOTS jobs work at once (decision 3): one lock per slot, `job-slot-0` .. `job-slot-N-1`. A `_start` takes a slot
  * BEFORE its deposit settles, so a busy server refuses the sale instead of
  * selling work it cannot start. The slot is held by the PHP process that will
  * run the job (the kernel.terminate runner of the same request); with
@@ -25,7 +24,7 @@ final class JobSlots implements JobSlotsInterface
 
     public function __construct(
         private readonly LockFactory $locks,
-        #[\Symfony\Component\DependencyInjection\Attribute\Autowire(env: 'int:JOB_SLOTS')] private readonly int $slots,
+        #[Autowire(env: 'int:JOB_SLOTS')] private readonly int $slots,
     ) {
         if ($this->slots < 1) {
             throw new \InvalidArgumentException('JOB_SLOTS must be at least 1.');

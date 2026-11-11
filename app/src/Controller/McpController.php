@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
-use App\X402\JobIdOnRefusal;
 use Mcp\Server;
 use Mcp\Server\Transport\StreamableHttpTransport;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\StreamFactoryInterface;
 use Psr\Log\LoggerInterface;
+use Quebracho\X402\Job\JobIdOnRefusal;
 use Quebracho\X402\X402McpMiddleware;
 use Symfony\AI\McpBundle\Http\MiddlewareFactory;
 use Symfony\Bridge\PsrHttpMessage\HttpFoundationFactoryInterface;

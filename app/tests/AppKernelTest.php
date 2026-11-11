@@ -7,11 +7,11 @@ namespace App\Tests;
 use App\EventListener\McpRateLimit;
 use App\Kernel;
 use App\X402\Facilitator;
-use App\X402\JobDesk;
 use App\X402\Pricing;
 use Psr\Cache\CacheItemPoolInterface;
 use Quebracho\X402\Budget;
 use Quebracho\X402\Job\FileJobStore;
+use Quebracho\X402\Job\JobDesk;
 use Quebracho\X402\Job\JobRunner;
 use Quebracho\X402\Job\JobStore;
 use Quebracho\X402\Networks;
@@ -192,6 +192,17 @@ final class AppKernelTest extends KernelTestCase
         self::assertSame('Rate limit reached for analyze_terms. Nothing was charged; try later.', json_decode((string) $refused->getContent(), true)['error']['message']);
     }
 
+    public function testTheAppsScreeningListensToEveryAddressCheck(): void
+    {
+        // Without it the deny list and the sanctions API are asked by nobody, and app:screening check still
+        // answers "denied" for an address that can pay.
+        $listeners = self::getContainer()->get('event_dispatcher')->getListeners(\Quebracho\X402\AddressCheck::class);
+        $classes = array_map(static fn ($l) => \is_array($l) ? $l[0]::class : (\is_object($l) ? $l::class : ''), $listeners);
+        self::assertContains(\App\X402\Screening::class, $classes);
+        // After it (lower priority): the token's own blacklist, which our allowlist never skips.
+        self::assertLessThan(array_search(\Quebracho\X402\TokenBlacklist::class, $classes, true), array_search(\App\X402\Screening::class, $classes, true));
+    }
+
     public function testJobModeIsWiredThroughJobDesk(): void
     {
         $container = self::getContainer();
@@ -214,7 +225,7 @@ final class AppKernelTest extends KernelTestCase
         $tool = $container->get(\App\Mcp\AnalyzeTermsJobTool::class);
         self::assertSame($desk->deposit, (new \ReflectionProperty($tool, 'deposit'))->getValue($tool));
         self::assertSame($desk->delivery, (new \ReflectionProperty($tool, 'delivery'))->getValue($tool));
-        $refusal = $container->get(\App\X402\JobIdOnRefusal::class);
+        $refusal = $container->get(\Quebracho\X402\Job\JobIdOnRefusal::class);
         self::assertSame($desk->deposit, (new \ReflectionProperty($refusal, 'deposit'))->getValue($refusal));
 
         // Decision 9: jobs are files outside the cache, which cache:clear and a deploy wipe.

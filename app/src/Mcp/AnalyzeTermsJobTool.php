@@ -4,14 +4,14 @@ declare(strict_types=1);
 
 namespace App\Mcp;
 
-use App\X402\JobDelivery;
-use App\X402\JobDeposit;
 use App\X402\PaidJob;
 use Mcp\Capability\Attribute\McpTool;
 use Mcp\Exception\ToolCallException;
 use Mcp\Server\RequestContext;
 use Quebracho\X402\Job\IllegalTransition;
 use Quebracho\X402\Job\Job;
+use Quebracho\X402\Job\JobDelivery;
+use Quebracho\X402\Job\JobDeposit;
 use Quebracho\X402\Job\JobStatus;
 use Quebracho\X402\X402McpMiddleware;
 
