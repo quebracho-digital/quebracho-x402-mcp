@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace App\Tests\X402;
 
-use App\X402\SensitiveRules;
 use App\X402\SensitiveToolsWarmer;
 use Nyholm\Psr7\ServerRequest;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use Quebracho\X402\SensitiveRules;
 use Symfony\Component\Yaml\Yaml;
 
 final class SensitiveRulesTest extends TestCase
@@ -43,12 +43,12 @@ final class SensitiveRulesTest extends TestCase
     #[DataProvider('headers')]
     public function testHeaders(array $headers, bool $sensitive): void
     {
-        self::assertSame($sensitive, (new SensitiveRules([], self::shipped()))(self::http($headers)));
+        self::assertSame($sensitive, (new SensitiveRules(self::shipped()))(self::http($headers)));
     }
 
     public function testARuleValueIsTrimmed(): void
     {
-        $rules = new SensitiveRules([], [['kind' => 'header', 'name' => 'Cache-Control', 'value' => ' no-store ']]);
+        $rules = new SensitiveRules([['kind' => 'header', 'name' => 'Cache-Control', 'value' => ' no-store ']]);
 
         self::assertTrue($rules(self::http(['Cache-Control' => 'no-store'])));
         self::assertTrue($rules(self::http(['Cache-Control' => ' max-age=0 , NO-STORE'])));
@@ -58,7 +58,7 @@ final class SensitiveRulesTest extends TestCase
 
     public function testMcpArgumentAndTool(): void
     {
-        $rules = new SensitiveRules(['analyze_terms'], self::shipped());
+        $rules = new SensitiveRules(self::shipped(), ['analyze_terms']);
 
         self::assertTrue($rules(['name' => 'wisdom', 'arguments' => ['sensitive' => true]]));
         self::assertFalse($rules(['name' => 'wisdom', 'arguments' => ['sensitive' => 'true']]));
@@ -71,7 +71,7 @@ final class SensitiveRulesTest extends TestCase
 
     public function testNoRuleIsNotSensitive(): void
     {
-        $rules = new SensitiveRules([], []);
+        $rules = new SensitiveRules([]);
         self::assertFalse($rules(self::http(['Cache-Control' => 'no-store'])));
         self::assertFalse($rules(['name' => 'analyze_terms', 'arguments' => ['sensitive' => true]]));
     }

@@ -6,9 +6,9 @@ namespace App\Tests\Terms;
 
 use App\Mcp\AnalyzeTermsTool;
 use App\Terms\TermsAnalyzer;
-use App\X402\SensitiveRules;
 use Mcp\Exception\ToolCallException;
 use PHPUnit\Framework\TestCase;
+use Quebracho\X402\SensitiveRules;
 use Symfony\AI\Platform\Test\MockPlatformFactory;
 use Symfony\Component\Cache\Adapter\ArrayAdapter;
 use Symfony\Component\RateLimiter\RateLimiterFactory;
@@ -34,7 +34,7 @@ final class TermsAnalyzerTest extends TestCase
     {
         $limiter = static fn (string $id, int $limit) => new RateLimiterFactory(['id' => $id, 'policy' => 'fixed_window', 'limit' => $limit, 'interval' => '1 day'], new InMemoryStorage());
 
-        return new AnalyzeTermsTool($analyzer, $limiter('day', $perDay), new SensitiveRules([], []));
+        return new AnalyzeTermsTool($analyzer, $limiter('day', $perDay), new SensitiveRules([]));
     }
 
     public function testKeepsOnlyQuotesFoundInTheTextAndCountsTheRest(): void
@@ -360,7 +360,7 @@ in Delaware'],
         // X402_SENSITIVE_TOOLS=analyze_terms (a `tool` rule) keeps the ledger's copy out; it must keep the memo out too.
         [$analyzer, $calls] = $this->counting(['{}']);
         $limiter = static fn (string $id, int $limit) => new RateLimiterFactory(['id' => $id, 'policy' => 'fixed_window', 'limit' => $limit, 'interval' => '1 day'], new InMemoryStorage());
-        $tool = new AnalyzeTermsTool($analyzer, $limiter('day', 500), new SensitiveRules(['analyze_terms'], []));
+        $tool = new AnalyzeTermsTool($analyzer, $limiter('day', 500), new SensitiveRules([], ['analyze_terms']));
 
         $tool(self::TEXT);
         $tool(self::TEXT);

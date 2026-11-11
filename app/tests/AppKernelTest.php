@@ -6,16 +6,16 @@ namespace App\Tests;
 
 use App\EventListener\McpRateLimit;
 use App\Kernel;
-use App\X402\Facilitator;
-use App\X402\Pricing;
 use Psr\Cache\CacheItemPoolInterface;
 use Quebracho\X402\Budget;
+use Quebracho\X402\Facilitator;
 use Quebracho\X402\Job\FileJobStore;
 use Quebracho\X402\Job\JobDesk;
 use Quebracho\X402\Job\JobRunner;
 use Quebracho\X402\Job\JobStore;
 use Quebracho\X402\Networks;
 use Quebracho\X402\PayingMcpClient;
+use Quebracho\X402\PriceList;
 use Quebracho\X402\ReceiptLookup;
 use Quebracho\X402\X402McpMiddleware;
 use Symfony\Bundle\FrameworkBundle\Console\Application;
@@ -28,15 +28,15 @@ use Symfony\Component\Routing\Exception\ResourceNotFoundException;
 use Symfony\Component\Routing\RouterInterface;
 
 /**
- * The committed app/.env, through the real container: Pricing is only built on
+ * The committed app/.env, through the real container: the price list is only built on
  * the first /mcp request, so a bad X402_TIMEOUTS or X402_DURATIONS shows up here.
  */
 final class AppKernelTest extends KernelTestCase
 {
     public function testTheCommittedEnvBuildsPricing(): void
     {
-        $pricing = self::getContainer()->get(Pricing::class);
-        self::assertInstanceOf(Pricing::class, $pricing);
+        $pricing = self::getContainer()->get(PriceList::class);
+        self::assertInstanceOf(PriceList::class, $pricing);
 
         self::assertSame(120, $pricing(['name' => 'analyze_terms'])[0]['maxTimeoutSeconds']);
         self::assertSame(60, $pricing->duration(['name' => 'analyze_terms']));
@@ -106,7 +106,7 @@ final class AppKernelTest extends KernelTestCase
         self::assertStringContainsString('100%percent%', $tools['demo_start']['schema'], 'a "%name%" survives the container');
 
         // Served by id, so priced: before, a #[PaidJob] tool served this way was free.
-        $start = self::getContainer()->get(Pricing::class)(['name' => 'demo_start']);
+        $start = self::getContainer()->get(PriceList::class)(['name' => 'demo_start']);
         self::assertSame('upfront', $start[0]['extra']['paymentFlow'] ?? null);
     }
 
@@ -203,6 +203,18 @@ final class AppKernelTest extends KernelTestCase
         self::assertLessThan(array_search(\Quebracho\X402\TokenBlacklist::class, $classes, true), array_search(\App\X402\Screening::class, $classes, true));
     }
 
+    public function testOneStopSwitchPausesTheSellerAndTheBuyer(): void
+    {
+        $container = self::getContainer();
+        $stop = $container->get(\Quebracho\X402\Stop::class);
+        // The same instance, so the same file: app:x402:stop on stops what we sell and what app:ask buys.
+        self::assertSame($stop, (new \ReflectionProperty(X402McpMiddleware::class, 'stop'))->getValue($container->get(X402McpMiddleware::class)));
+        self::assertSame($stop, (new \ReflectionProperty(PayingMcpClient::class, 'stop'))->getValue($container->get(PayingMcpClient::class)));
+        // X402_STOP_FILE is empty in app/.env: the default, under var/ and absolute.
+        self::assertStringEndsWith('/var/x402-stop/paused', (string) (new \ReflectionProperty(\Quebracho\X402\Stop::class, 'file'))->getValue($stop));
+        self::assertFalse($stop->engaged(), 'the committed env sells');
+    }
+
     public function testJobModeIsWiredThroughJobDesk(): void
     {
         $container = self::getContainer();
@@ -235,7 +247,7 @@ final class AppKernelTest extends KernelTestCase
         self::assertStringEndsWith('/var/jobs', $dir);
 
         // Priced by their #[PaidJob]: the deposit upfront, the rest after; the status free.
-        $pricing = $container->get(Pricing::class);
+        $pricing = $container->get(PriceList::class);
         self::assertSame(['10000', 'upfront'], [$pricing(['name' => 'analyze_terms_start'])[0]['amount'], $pricing(['name' => 'analyze_terms_start'])[0]['extra']['paymentFlow']]);
         self::assertSame(['10000', null], [$pricing(['name' => 'analyze_terms_result'])[0]['amount'], $pricing(['name' => 'analyze_terms_result'])[0]['extra']['paymentFlow'] ?? null]);
         self::assertNull($pricing(['name' => 'analyze_terms_status']));

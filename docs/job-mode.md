@@ -21,9 +21,12 @@ charging**, so the buyer loses the deposit only.
 
 The job engine is in the library (`quebracho/x402` since v0.4.0): the `Job`
 states, the job store (`FileJobStore`), the runner, the reconciler and the
-janitor live in `Quebracho\X402\Job`. The paid-tool wiring is this app's:
-`X402McpMiddleware` takes hooks (`validate`, `payer`, `settle`, `sensitive`),
-and the app plugs job mode into them. A tool declares its role with
+janitor live in `Quebracho\X402\Job`. Since v0.5.0 the paid-tool wiring is
+the library's too: `X402McpMiddleware` takes hooks (`validate`, `payer`,
+`settle`, `sensitive`), and `Job\JobDesk` plugs job mode into them. The app
+keeps the tools, the work, Symfony Lock as the slots, and one
+`afterResponse()` call (`App\EventListener\JobTerminate`); the wiring is in
+`app/config/services.yaml`, under JOB MODE. A tool declares its role with
 `#[PaidJob('start' | 'result', pairedWith: ...)]` (`App\X402\PaidJob`).
 
 ## The flow

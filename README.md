@@ -77,6 +77,7 @@ tools it needs.
 | `app/` | Symfony 8.1 + `symfony/mcp-bundle`: an MCP server with a free `echo` tool, a free `ombu_search` tool (finds services on [Ombú](https://ombu.quebracho.digital), faceted by the server to Quebracho's own listings, `/market?seller[ours]=ours`; this tool's caller cannot change the facet), a paid `wisdom` tool and a paid `analyze_terms` tool (super beta example, below), and `bin/console app:ask`, a Symfony AI agent that discovers, pays and calls them. |
 | `bin/smoke.sh` | End-to-end check over real HTTP: free call, unpaid call (PaymentRequired), paid call (result + receipt). |
 | `bin/inspect.py` | Stdlib-only Python MCP client: initialize, `tools/list`, free call, unpaid call (shows the PaymentRequired). No Node needed. |
+| `bin/quickstart.php` | The library in one file, no framework: a seller that charges for an HTTP route and a buyer that pays it, in one process, with the mock facilitator. See [Get started with the library](#get-started-with-the-library). |
 | `bin/pay.php` | Minimal buyer: turns a PaymentRequired tool result into the same call, paid. |
 
 ## Quick start (5 minutes)
@@ -558,7 +559,7 @@ traces on errors. `app:x402:check` warns when debug is on.
 
 On every deploy, after `composer install`, run `bin/console cache:clear` (not
 `cache:warmup`, which can keep the old container) and then
-`bin/console app:x402:check`: Pricing, the limiters and the buyer's budget are otherwise only built on the
+`bin/console app:x402:check`: the price list, the limiters and the buyer's budget are otherwise only built on the
 first request, and the command exits 1 naming each bad value: a name in
 `X402_PAID_TOOLS`, `X402_PRICES`, `X402_TIMEOUTS` or `X402_DURATIONS` that is
 no tool (a typo there would leave the tool you meant to charge free), a price
@@ -572,7 +573,7 @@ is no served tool), an `X402_TIMEOUTS` above `X402_BUYER_MAX_TIMEOUT` (our own
 agent would refuse it), and an `X402_PRICES` entry for a tool that is not paid. A typo in a
 tool name is reported before the timeout or duration error it causes. An
 empty `X402_PAID_TOOLS` is only a warning (every tool free but the
-`#[PaidJob]` ones). The same Pricing errors also answer every `/mcp` request
+`#[PaidJob]` ones). The same price-list errors also answer every `/mcp` request
 with a 500.
 
 | Variable | Default | Meaning |
@@ -600,6 +601,7 @@ with a 500.
 | `X402_MAX_PER_PAYMENT` | `{"eip155:84532":"0.02"}` | Ceiling for one single payment, same shape. |
 | `X402_BUYER_MAX_TIMEOUT` | `170` | The longest validity (seconds) the agent signs. Under the 180 s its HTTP client waits, so it never signs a payment that can be settled after it hung up. |
 | `X402_PAYTO_ALLOW` | the demo `PAY_TO` | Wallets the agent may pay, comma separated, default deny: a seller cannot name its own wallet. |
+| `X402_STOP_FILE` | empty (`app/var/x402-stop/paused`) | The stop switch's flag file: while it exists nothing is sold or bought (`app:x402:stop`, below). An absolute path, in a directory only the app's user can write to. Several hosts: a path they share. |
 | `X402_SCREENING_API_KEY` | empty | Chainalysis sanctions API key. Empty: OFAC's list, ours and the token's. |
 | `X402_SCREENING_CACHE_TTL` | `86400` | Seconds an API answer (clean or sanctioned) is kept. |
 | `X402_SCREENING_TIMEOUT` | `3` | Seconds to wait for the API. |
@@ -627,33 +629,116 @@ transaction, reason; never the signature). Refusals charged nothing and stay
 in the log only. Nothing rotates or deletes these files. A `failed_after_settle`
 line is a refund to make by hand.
 
-## Using the library
+### The stop switch
 
-**Seller (MCP)**: `X402McpMiddleware` charges tool calls in band; `$price`
-gets the `tools/call` params. **Seller (plain HTTP)**: `X402Middleware` answers
-402 with `PAYMENT-REQUIRED`, for any endpoint:
+One command pauses every payment of this deployment, for when something looks
+wrong (a facilitator incident, a key you no longer trust, a price set by
+mistake):
 
-```php
-use Quebracho\X402\{EvmExact, FileClaims, Networks, X402Middleware};
-
-$price = fn ($request) => [Networks::requirements('eip155:84532', '0.01', $payTo)]; // or null = free
-$middleware = new X402Middleware([new EvmExact()], $price, $claim, $psr17, $psr17, $settle);
-// $settle: a facilitator callback, or Settlement::mock() (nothing moves on chain).
+```bash
+ddev exec --dir /var/www/html/app bin/console app:x402:stop on "why"   # pause
+ddev exec --dir /var/www/html/app bin/console app:x402:stop status      # exits 1 while paused, 0 while running
+ddev exec --dir /var/www/html/app bin/console app:x402:stop off        # resume
 ```
 
-**Buyer (MCP)**: `PayingMcpClient` wraps the PSR-18 client of an MCP HTTP
-transport and pays tools in band; same arguments as below plus a PSR-17 stream
-factory. **Buyer (plain HTTP)**: wrap any PSR-18 client; it pays 402s within a budget:
+It is the library's `Quebracho\X402\Stop`: a flag file (`X402_STOP_FILE`) that
+the seller's middleware and the buyer's client both look at on every request.
+While it exists a paid `tools/call` is answered `payments_paused` (JSON-RPC
+-32000) before anything is verified, claimed, run or charged, and `app:ask`
+signs nothing; free tools and `tools/list` still answer. With no PHP at hand,
+`touch` on the file does the same. It cannot recall a payment already signed or
+a settle already sent, and a payment the ledger already holds is still
+delivered: it was paid. Jobs already paid for keep running. `app:x402:check`
+warns when the switch is engaged and still passes: the deploy of a fix must go
+through while payments are paused. To alert on it, ask `app:x402:stop status`
+(exit code 1 while paused).
+
+## Get started with the library
+
+Five minutes, no framework, no funds. Seller and buyer in one file:
+
+```bash
+ddev exec php bin/quickstart.php      # or: php bin/quickstart.php (PHP 8.3+, ext-gmp)
+```
+
+```
+A paid route: 402, signed within the budget, sent again
+   -> GET /report
+   <- 402  (PAYMENT-REQUIRED: the offer)
+   -> GET /report  (with PAYMENT-SIGNATURE)
+   <- 200  (PAYMENT-RESPONSE: the receipt)
+   paid 10000 atomic units of USDC on eip155:84532 to 0xcb2d…B794
+   You asked for /report. Here it is.
+```
+
+In your own project:
+
+```bash
+composer require quebracho/x402 nyholm/psr7     # any PSR-7/17 implementation will do
+```
+
+**1. Sell.** A PSR-15 middleware in front of your handler. It needs four
+things: how a payment is verified (a scheme per chain family), who settles it
+(a facilitator), where each payment is remembered (the ledger: one payment buys
+one delivery, and a retry gets the same answer), and what a request costs.
 
 ```php
-use Quebracho\X402\{Budget, EvmExact, PayingHttpClient, Signer};
+use Quebracho\X402\{EvmExact, Facilitators, FileLedger, Networks, Seller};
 
-$client = new PayingHttpClient(
-    $anyPsr18Client,
-    [new EvmExact(new Signer($testnetKey))],
-    Budget::usd('eip155:84532', '0.05'),   // never spends more than 5 cents
-);
+$facilitator = Facilitators::from('mock', $psr18, $psr17, $psr17);   // or 'https://x402.org/facilitator'
+
+$middleware = Seller::with([new EvmExact()], $facilitator, $psr17, $psr17)
+    ->ledger(new FileLedger('/var/lib/x402/ledger'))
+    ->http(fn ($request) => '/free' === $request->getUri()->getPath()
+        ? null                                                          // null: not charged
+        : [Networks::requirements('eip155:84532', '0.01', $payTo)]);    // 0.01 USDC, Base Sepolia
 ```
+
+An unpaid request gets `402` with the offer in `PAYMENT-REQUIRED`. A paid one
+is verified offline, screened (OFAC, on by default), verified with the
+facilitator, claimed, handed to your handler, and settled only if the handler
+answered 2xx; the receipt goes back in `PAYMENT-RESPONSE`. Your handler never
+sees a payment.
+
+**2. Buy.** A PSR-18 client around your PSR-18 client. It pays a `402` once,
+inside a budget, and sends the request again; your code sees the paid answer.
+
+```php
+use Quebracho\X402\{Budget, Buyer, EvmExact, Signer};
+
+$client = Buyer::with([new EvmExact(new Signer($key))], Budget::usd('eip155:84532', '0.05'))
+    ->http($psr18);                         // $psr18 must not follow redirects
+$response = $client->sendRequest($request); // 402 → signed → 200
+```
+
+**3. Go from the mock to real money.** Four changes, all in what you pass in:
+
+| In the quick start | For real |
+|---|---|
+| `Facilitators::from('mock', …)`: signatures verified, nothing moves | a facilitator URL (`https://x402.org/facilitator` on testnet, Circle's for Arc) |
+| a random key, made up for the run | your own key, from a secret; it only signs, the facilitator pays the gas |
+| `FileLedger` (one host) | `RedisLedger` when several hosts serve the same route |
+| a 5 cent budget, any seller | `Budget` caps per network and per payment, and a `PayeeAllowlist` of the sellers you trust |
+
+**MCP instead of HTTP.** Same parts, other ends: `->mcp($priceList)` on the
+seller gives an `X402McpMiddleware` that charges `tools/call` in band (the
+price function gets the call's params; `PriceList` covers fixed prices per
+tool), and `->mcp($psr18, $psr17)` on the buyer gives a `PayingMcpClient`.
+
+**In Symfony.** This repo's app is the worked example, and
+[`app/config/services.yaml`](app/config/services.yaml) is written to be read
+top to bottom: the seller in nine numbered parts, job mode, the buyer. The
+library has no Symfony code, so everything it takes (closures, PSR interfaces)
+is wired there, and `App\X402` holds only what belongs to an application:
+factories that read env, the `#[PaidJob]` attribute, the MCP input check and
+the deploy checks.
+
+Everything else (hooks, the ledger and its reconciler, events and logs,
+screening, the stop switch, job mode, adding a chain) is in the library's
+guides: [seller](https://github.com/quebracho-digital/x402/blob/main/docs/seller.md),
+[buyer](https://github.com/quebracho-digital/x402/blob/main/docs/buyer.md),
+[protections](https://github.com/quebracho-digital/x402/blob/main/docs/protections.md),
+[extending](https://github.com/quebracho-digital/x402/blob/main/docs/extending.md).
 
 **Networks**: built in are the demo testnets (Base Sepolia, Arc testnet, Ethereum Sepolia, Avalanche Fuji, Polygon Amoy, Solana devnet), Arc mainnet (`eip155:5042`, where Ombú sells), and Ethereum mainnet, which is there to be read (the blacklist of its USDC and USDT: an `eth_call`, no gas). Any other EVM chain, mainnets included, whose token implements EIP-3009, is added with `Networks::add()`. The steps, the contract and the blacklist function to use are in [Add a blockchain](https://github.com/quebracho-digital/x402/blob/main/docs/networks.md):
 

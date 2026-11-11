@@ -8,9 +8,9 @@
 #   SELLER (this app charges for its MCP tools)
 #     1. Quebracho\X402\X402McpMiddleware   the PSR-15 middleware that answers 402 and settles; every hook it
 #                                           takes is one closure, each explained on its line below
-#     2. App\X402\Pricing                   its $price: what a tools/call costs (the x402 `accepts` list), or null = free
+#     2. Quebracho\X402\PriceList           its $price: what a tools/call costs (the x402 `accepts` list), or null = free
 #     3. Quebracho\X402\EvmExact            its $schemes: how a payment is verified (and, for the buyer, signed)
-#     4. App\X402\Facilitator               its $verify and $settle: who moves the money (mock, Circle, any facilitator URL)
+#     4. Quebracho\X402\Facilitator         its $verify and $settle: who moves the money (mock, Circle, any facilitator URL)
 #     5. Quebracho\X402\PaymentLedger       its $ledger: one payment is claimed, settled and answered once (files or Redis)
 #     6. Quebracho\X402\OfacSdn, App\X402\Screening, TokenBlacklist, PayeeAllowlist
 #                                           who may pay or be paid: listeners of the library's AddressCheck event
@@ -18,10 +18,15 @@
 #                                           what happened: listeners of PaymentIntent, PaymentOutcome, PaymentFault...
 #     8. Quebracho\X402\ReceiptLookup, Reconciler
 #                                           a payment whose settle never answered, resolved by the chain (cron)
+#     9. Quebracho\X402\Stop                the stop switch: one flag file pauses the seller and the buyer (app:x402:stop)
 #     The middleware is put in front of the MCP server by App\Controller\McpController.
 #
 #   JOB MODE (work longer than a signature lives: a deposit, then the result; docs/job-mode.md)
 #     Quebracho\X402\Job\JobDesk and its two parts wrap hooks 2 and 4 above; the tools are App\Mcp\AnalyzeTermsJobTool.
+#
+#   What is left in App\X402 is only what belongs to this application: factories that read env (Facilitator,
+#   Ledger, Scheme, Budget, Blacklist, PaymentLog), the #[PaidJob] attribute, the MCP input check (ToolInput),
+#   Symfony Lock as job slots, and the deploy checks (warmers, app:x402:check).
 #
 #   BUYER (app:ask pays other servers' tools)
 #     Quebracho\X402\PayingMcpClient, at the end: a PSR-18 client that pays a 402 within a Budget and retries.
@@ -32,10 +37,13 @@
 # Put parameters here that don't need to change on each machine where the app is deployed
 # https://symfony.com/doc/current/best_practices.html#use-parameters-for-application-configuration
 imports:
-    # app.x402_sensitive_rules: the ways to ask for no cache (App\X402\SensitiveRules).
+    # app.x402_sensitive_rules: the ways to ask for no cache (Quebracho\X402\SensitiveRules).
     - { resource: x402_sensitive.yaml }
 
 parameters:
+    # The stop switch's flag file when X402_STOP_FILE is not set (app:x402:stop). Absolute, and in a directory only
+    # the application's user writes to: the library refuses to engage it anywhere else.
+    app.x402_stop_file: '%kernel.project_dir%/var/x402-stop/paused'
 
 services:
     # default configuration for services in *this* file
@@ -70,6 +78,52 @@ services:
     App\X402\NetworkWarmer:
         arguments:
             $schemes: *x402_schemes
+
+    # What each tool costs, from env: the paid tools (X402_PAID_TOOLS) at X402_PRICE or their own X402_PRICES, the
+    # #[PaidJob] tools (app.job_tools, always paid) at their flag's price; the rest are free. Built once and checked
+    # then: a name that is no served tool (a typo would leave it free), a price the token cannot represent, a
+    # timeout no buyer signs. app:x402:check builds it at deploy.
+    Quebracho\X402\PriceList:
+        # new PriceList(...) with these same arguments; the factory only names the env variable in an error.
+        factory: ['App\X402\PriceListFactory', 'create']
+        arguments:
+            $network: '%env(X402_NETWORK)%'
+            $payTo: '%env(X402_PAY_TO)%'
+            $price: '%env(X402_PRICE)%'
+            $paid: '%env(csv:X402_PAID_TOOLS)%'
+            $prices: '%env(json:X402_PRICES)%'
+            # A slow tool: a longer signature, and its worst case from the claim to the settle.
+            $timeouts: '%env(json:X402_TIMEOUTS)%'
+            $durations: '%env(json:X402_DURATIONS)%'
+            $jobs: '%app.job_tools%'
+            $served: '%app.mcp_tool_names%'
+            $schemes: *x402_schemes
+
+    # Which answers the ledger must not keep for a retry: the rules of config/x402_sensitive.yaml, plus one `tool`
+    # rule per name in X402_SENSITIVE_TOOLS. Invokable: it is the middleware's $sensitive as it is.
+    Quebracho\X402\SensitiveRules:
+        arguments:
+            $rules: '%app.x402_sensitive_rules%'
+            $tools: '%env(csv:X402_SENSITIVE_TOOLS)%'
+
+    # Who settles, from X402_FACILITATOR: "mock", Circle's URL or any facilitator URL (Facilitators::from).
+    # The middleware and JobDesk take the Facilitator itself as $settle; no adapter in between.
+    Quebracho\X402\Facilitator:
+        factory: ['App\X402\FacilitatorFactory', 'create']
+        arguments:
+            $setting: '%env(X402_FACILITATOR)%'
+            $key: '%env(X402_FACILITATOR_KEY)%'
+    # The middleware's $verify from that facilitator: its /verify before the tool runs (balance, nonce unused),
+    # so an empty wallet costs no work. Given by hand below because $settle there is JobDesk's closure; a
+    # middleware given the Facilitator as $settle derives it by itself.
+    app.x402_verify:
+        class: Closure
+        factory: ['Quebracho\X402\Settlement', 'verifier']
+        arguments: ['@Quebracho\X402\Facilitator']
+
+    # The stop switch (app:x402:stop): the same instance for the seller's middleware and the buyer's client below.
+    Quebracho\X402\Stop:
+        arguments: ['%env(default:app.x402_stop_file:X402_STOP_FILE)%']
 
     # A bad config/x402_sensitive.yaml, or a sensitive tool that is not served (a typo), at cache:warmup: the deploy fails, not the ledger.
     App\X402\SensitiveToolsWarmer: ~
@@ -119,26 +173,26 @@ services:
     # JobIdOnRefusal must share this request's call.
     Quebracho\X402\Job\JobDeposit:
         arguments:
-            $price: !closure '@App\X402\Pricing'
+            $price: !closure '@Quebracho\X402\PriceList'
             $roles: '%app.job_tools%'
-            $sensitive: !closure '@App\X402\SensitiveRules'
+            $sensitive: !closure '@Quebracho\X402\SensitiveRules'
             $clock: ~
             $schemes: *x402_schemes
     Quebracho\X402\Job\JobDelivery:
         arguments:
             $roles: '%app.job_tools%'
-            $sensitive: !closure '@App\X402\SensitiveRules'
+            $sensitive: !closure '@Quebracho\X402\SensitiveRules'
             $clock: ~
             $schemes: *x402_schemes
     # The payment hooks (validate, payer, settle, sensitive below): the settle it wraps is the facilitator's.
     # kernel.reset: a worker that serves many requests starts each one with no role and no held slot.
     Quebracho\X402\Job\JobDesk:
         arguments:
-            $settle: !closure '@App\X402\Facilitator'
+            $settle: '@Quebracho\X402\Facilitator'
             $jobs: '%app.job_tools%'
-            # A paid name that is no registered tool, or arguments outside its input schema.
-            $validate: !closure ['@App\X402\Pricing', 'validate']
-            $sensitive: !closure '@App\X402\SensitiveRules'
+            # Arguments outside the tool's input schema (App\X402\ToolInput): refused before any payment is read.
+            $validate: !closure '@App\X402\ToolInput'
+            $sensitive: !closure '@Quebracho\X402\SensitiveRules'
         tags:
             - { name: kernel.reset, method: reset }
     # A _start refusal (settlement_pending, needs_review, an expired retry...) carries the jobId once the job exists.
@@ -211,20 +265,19 @@ services:
     # by the scheme and $duration, $payer, the address check ($events, $ofac), the online $verify, and last the
     # claim ($ledger); then the tool and $settle (the other way round for an upfront payment), and $sensitive
     # decides whether the ledger keeps the answer for a retry.
-    # Settlement goes through App\X402\Facilitator: X402_FACILITATOR is
-    # "mock" or a facilitator URL, never left implicit.
+    # Settlement goes through the Facilitator above: X402_FACILITATOR is "mock" or a facilitator URL, never left implicit.
     Quebracho\X402\X402McpMiddleware:
         arguments:
             $schemes: *x402_schemes
-            $price: !closure '@App\X402\Pricing'
+            $price: !closure '@Quebracho\X402\PriceList'
             $claim: !closure '@Quebracho\X402\FileClaims'
             # Through JobDesk: a _start's job row is written before its deposit settles, a _result's after (JobDesk::settle).
             $settle: !closure ['@Quebracho\X402\Job\JobDesk', 'settle']
             # Replaces $claim and $release for the payment state (see the ledger above). A claim whose payment charged nothing is freed by the ledger too.
             $ledger: '@Quebracho\X402\PaymentLedger'
-            $verify: !closure ['@App\X402\Facilitator', 'verify']
+            $verify: '@app.x402_verify'
             # A slow tool (X402_DURATIONS) refuses a signature that would expire before its settle.
-            $duration: !closure ['@App\X402\Pricing', 'duration']
+            $duration: !closure ['@Quebracho\X402\PriceList', 'duration']
             # A paid name that is no registered tool, or a _start input its work would refuse: JSON-RPC -32602 before any payment is read.
             $validate: !closure ['@Quebracho\X402\Job\JobDesk', 'validate']
             # Job mode: a _start needs a free slot, a _result the deposit's payer and a ready job (JobDesk::payer). Before the claim.
@@ -239,6 +292,8 @@ services:
             # config/x402_sensitive.yaml plus X402_SENSITIVE_TOOLS: the ledger keeps the state, never the answer (DECISIONS.md, D17, D18).
             # Through JobDesk: a _start's answer (a job id) is always kept, a _result's follows its job (JobDesk::sensitive).
             $sensitive: !closure ['@Quebracho\X402\Job\JobDesk', 'sensitive']
+            # While the flag file exists: payments_paused, before anything is verified, claimed, run or charged.
+            $stop: '@Quebracho\X402\Stop'
 
     # The 'x402' Monolog channel exists only with symfony/monolog-bundle (optional; config/packages/x402_log.php).
     # '@?' leaves the key out of the locator without it; PaymentLogFactory asks with has() when PaymentLog is built.
@@ -274,8 +329,11 @@ services:
     # The lookup's RPC and facilitator calls; any failure answers NULL (still pending).
     Quebracho\X402\ReceiptLookup:
         arguments:
-            # Only Circle's facilitator has a status route; App\X402\Facilitator answers NULL for the others and mock.
-            $facilitator: '@App\X402\Facilitator'
+            # Only Circle's facilitator has a status route (PaymentStatus); NULL for the others and mock.
+            $facilitator: !service
+                class: Quebracho\X402\PaymentStatus
+                factory: ['App\X402\FacilitatorFactory', 'status']
+                arguments: ['@Quebracho\X402\Facilitator']
             $http: !service
                 class: Symfony\Component\HttpClient\Psr18Client
                 arguments: ['@app.receipt_http_client']
@@ -354,11 +412,13 @@ services:
             # AddressCheck on payTo before signing: OFAC first, then PayeeAllowlist, App\X402\Screening and TokenBlacklist.
             $events: '@event_dispatcher'
             $ofac: '@Quebracho\X402\OfacSdn'
+            # The same switch as the seller: while it is engaged nothing is reserved or signed.
+            $stop: '@Quebracho\X402\Stop'
 
 when@test:
     services:
         # Served by id: the registry (App\Mcp\) matches this id although the class is outside it.
-        # app.mcp_tools must list (and Pricing charge) its #[PaidJob] tools (AppKernelTest).
+        # app.mcp_tools must list (and PriceList charge) its #[PaidJob] tools (AppKernelTest).
         App\Mcp\AliasedJobs:
             class: App\Tests\X402\JobToolsFixture
             autoconfigure: true

@@ -6,10 +6,10 @@ namespace App\Tests\Job;
 
 use App\Mcp\AnalyzeTermsJobTool;
 use App\Mcp\WisdomTool;
+use App\Tests\Support\Prices;
 use App\X402\JobSlots;
 use App\X402\PaidJob;
-use App\X402\Pricing;
-use App\X402\SensitiveRules;
+use App\X402\ToolInput;
 use Mcp\Exception\ToolCallException;
 use Mcp\Schema\Request\CallToolRequest;
 use Mcp\Server\RequestContext;
@@ -37,7 +37,9 @@ use Quebracho\X402\Job\JobPayments;
 use Quebracho\X402\Job\JobReconciler;
 use Quebracho\X402\Job\JobRunner;
 use Quebracho\X402\Job\JobWork;
+use Quebracho\X402\PriceList;
 use Quebracho\X402\Reconciler;
+use Quebracho\X402\SensitiveRules;
 use Quebracho\X402\Settlement;
 use Quebracho\X402\Signer;
 use Quebracho\X402\X402McpMiddleware;
@@ -63,7 +65,7 @@ final class JobFlowTest extends TestCase
     private string $dir;
     private FileJobStore $jobs;
     private FileLedger $ledger;
-    private Pricing $pricing;
+    private PriceList $pricing;
     private JobSlots $slots;
     private JobDesk $desk;
     private \Closure $facilitator;
@@ -95,7 +97,7 @@ final class JobFlowTest extends TestCase
         $this->jobs = new FileJobStore($this->dir.'/jobs');
         $this->ledger = new FileLedger($this->dir.'/ledger');
         $tools = PaidJob::catalog([[AnalyzeTermsJobTool::class, 'start'], [AnalyzeTermsJobTool::class, 'result'], [AnalyzeTermsJobTool::class, 'status'], [WisdomTool::class, '__invoke']]);
-        $this->pricing = new Pricing(['wisdom'], 'eip155:84532', '0.01', self::PAY_TO, tools: $tools);
+        $this->pricing = Prices::of(['wisdom'], 'eip155:84532', '0.01', self::PAY_TO, tools: $tools);
         $this->slots = new JobSlots(new LockFactory(new FlockStore($this->dir)), 1);
         $this->facilitator = function (array $payment, array $req): array {
             $this->onSettle && ($this->onSettle)($payment);
@@ -117,15 +119,15 @@ final class JobFlowTest extends TestCase
         $tools ??= PaidJob::catalog([[AnalyzeTermsJobTool::class, 'start'], [AnalyzeTermsJobTool::class, 'result'], [AnalyzeTermsJobTool::class, 'status'], [WisdomTool::class, '__invoke']]);
         $clock = fn (): int => $this->now ?? time();
 
-        $rules = new SensitiveRules([], [['kind' => 'argument', 'name' => 'sensitive', 'value' => true]]);
+        $rules = new SensitiveRules([['kind' => 'argument', 'name' => 'sensitive', 'value' => true]]);
 
         // As config/services.yaml wires the library's classes: app.job_tools, the app's prices and rules.
-        $jobs = array_filter(array_map(static fn (array $t): ?array => $t['job'] ?? null, $tools));
+        $jobs = Prices::jobs($tools);
 
         return new JobDesk(
             new JobDeposit($this->jobs, $this->runner(), $this->slots, ($this->pricing)(...), $jobs, $rules(...), $clock),
             new JobDelivery($this->jobs, $jobs, $this->reconciler(), new JobJanitor($this->jobs), $rules(...), $clock),
-            $this->facilitator, $jobs, $this->pricing->validate(...), $rules(...),
+            $this->facilitator, $jobs, (new ToolInput($tools))(...), $rules(...),
         );
     }
 

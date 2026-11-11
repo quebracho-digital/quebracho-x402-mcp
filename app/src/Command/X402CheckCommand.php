@@ -6,10 +6,11 @@ namespace App\Command;
 
 use App\X402\LedgerFactory;
 use App\X402\NetworkCheck;
-use App\X402\Pricing;
-use App\X402\SensitiveRules;
 use Quebracho\X402\OfacSdn;
 use Quebracho\X402\PayingMcpClient;
+use Quebracho\X402\PriceList;
+use Quebracho\X402\SensitiveRules;
+use Quebracho\X402\Stop;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Style\SymfonyStyle;
@@ -31,7 +32,7 @@ final class X402CheckCommand
      * @param list<array<string, mixed>> $sensitiveRules config/x402_sensitive.yaml
      */
     public function __construct(
-        #[AutowireServiceClosure(Pricing::class)] private readonly \Closure $pricing,
+        #[AutowireServiceClosure(PriceList::class)] private readonly \Closure $pricing,
         #[AutowireServiceClosure(PayingMcpClient::class)] private readonly \Closure $buyer,
         #[AutowireServiceClosure('limiter.mcp_ip')] private readonly \Closure $mcpIp,
         #[AutowireServiceClosure('limiter.mcp_global')] private readonly \Closure $mcpGlobal,
@@ -61,6 +62,8 @@ final class X402CheckCommand
         private readonly int $ofacMaxAgeDays = 14,
         // app/.env says dev, for development: a deploy that keeps it shows stack traces to buyers.
         #[Autowire('%kernel.debug%')] private readonly bool $debug = false,
+        // The stop switch (app:x402:stop): a deploy must not go live paused without anyone noticing.
+        #[AutowireServiceClosure(Stop::class)] private readonly ?\Closure $stop = null,
     ) {
     }
 
@@ -96,18 +99,27 @@ final class X402CheckCommand
         foreach (['mcp_ip' => $this->mcpIp, 'mcp_global' => $this->mcpGlobal, 'terms_ip' => $this->termsIp, 'terms_day' => $this->termsDay] as $id => $factory) {
             $check("limiter $id", fn () => $factory()->create('app:x402:check'));
         }
-        // Pricing's constructor prices every paid tool and refuses a name that is no tool.
+        // PriceList's constructor prices every paid tool and refuses a name that is no tool.
         // Sale refuses a payment on a network no Scheme supports with a 500, on every paid call: catch it at deploy.
         $check('X402_NETWORK', fn () => NetworkCheck::assertSupported((string) $this->network, $this->schemes));
-        $check('Pricing (X402_PAID_TOOLS, X402_PRICE(S), X402_PAY_TO, X402_NETWORK, X402_TIMEOUTS, X402_DURATIONS, #[PaidJob])', fn () => ($this->pricing)());
+        $check('prices (X402_PAID_TOOLS, X402_PRICE(S), X402_PAY_TO, X402_NETWORK, X402_TIMEOUTS, X402_DURATIONS, #[PaidJob])', fn () => ($this->pricing)());
         $check('buyer (X402_BUDGETS, X402_MAX_PER_PAYMENT, X402_BUYER_KEY, X402_BUYER_MAX_TIMEOUT)', fn () => ($this->buyer)());
         if (null !== $this->ledgerDir) {
             $check('payment ledger (X402_REDIS_URL takes a claim, else var/x402-ledger does)', fn () => LedgerFactory::check($this->redisUrl, $this->ledgerDir));
         }
         $check('sensitive rules (config/x402_sensitive.yaml valid, no duplicates; X402_SENSITIVE_TOOLS and tool rules served)', fn () => SensitiveRules::check($this->sensitive, $this->sensitiveRules, $this->served));
+        if (null !== $this->stop) {
+            // A relative X402_STOP_FILE cannot build the switch, and then neither the middleware nor app:ask builds.
+            // Engaged is not an error: the deploy of a fix must pass while payments are paused. It is said, loudly.
+            $check('stop switch (X402_STOP_FILE)', function () use ($io): void {
+                if (($this->stop)()->engaged()) {
+                    $io->warning('Payments are PAUSED by the stop switch: nothing is sold or bought until "app:x402:stop off".');
+                }
+            });
+        }
         $check('X402_TIMEOUTS within X402_BUYER_MAX_TIMEOUT', function (): void {
             foreach ((array) json_decode((string) $this->timeouts, true) as $tool => $seconds) {
-                // Not a number: Pricing's own check above names it.
+                // Not a number: the price list's own check above names it.
                 if (is_numeric($seconds) && (int) $seconds > (int) $this->buyerMax) {
                     throw new \InvalidArgumentException("$tool offers $seconds s, longer than our own buyer signs ({$this->buyerMax} s): app:ask would refuse it.");
                 }

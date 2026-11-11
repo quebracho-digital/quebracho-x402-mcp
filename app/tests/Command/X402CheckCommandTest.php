@@ -69,6 +69,30 @@ final class X402CheckCommandTest extends KernelTestCase
         self::assertStringNotContainsString('X402_PAID_TOOLS is empty', $run('wisdom')[1]);
     }
 
+    public function testAnEngagedStopSwitchIsAWarningNotAFailure(): void
+    {
+        // The deploy of a fix must pass while payments are paused; it must not go unnoticed either.
+        $flag = sys_get_temp_dir().'/x402-check-stop-'.bin2hex(random_bytes(4));
+        touch($flag);
+        try {
+            $tester = $this->check(['X402_STOP_FILE' => $flag]);
+            self::assertSame(0, $tester->getStatusCode(), $tester->getDisplay());
+            self::assertStringContainsString('Payments are PAUSED', $tester->getDisplay());
+        } finally {
+            unlink($flag);
+        }
+        self::assertStringNotContainsString('PAUSED', $this->check(['X402_STOP_FILE' => $flag])->getDisplay(), 'released: said no more');
+    }
+
+    public function testAStopFileThatIsNoAbsolutePathFailsWithItsName(): void
+    {
+        // Relative: not the same place for the web and the CLI, so the switch would stop one and not the other.
+        $tester = $this->check(['X402_STOP_FILE' => 'var/paused']);
+        self::assertSame(1, $tester->getStatusCode());
+        self::assertStringContainsString('stop switch (X402_STOP_FILE)', $tester->getDisplay());
+        self::assertStringContainsString('absolute path', $tester->getDisplay());
+    }
+
     public function testAStaleOfacListIsAWarningNotAFailure(): void
     {
         $limiter = static fn () => new RateLimiterFactory(['id' => 'x', 'policy' => 'fixed_window', 'limit' => 1, 'interval' => '1 minute'], new InMemoryStorage());

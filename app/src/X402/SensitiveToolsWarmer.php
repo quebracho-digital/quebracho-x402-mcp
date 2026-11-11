@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\X402;
 
+use Quebracho\X402\SensitiveRules;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\HttpKernel\CacheWarmer\CacheWarmerInterface;
 
@@ -28,7 +29,12 @@ final class SensitiveToolsWarmer implements CacheWarmerInterface
 
     public function warmUp(string $cacheDir, ?string $buildDir = null): array
     {
-        SensitiveRules::check($this->sensitive, $this->rules, $this->served);
+        try {
+            SensitiveRules::check($this->sensitive, $this->rules, $this->served);
+        } catch (\InvalidArgumentException $e) {
+            // The library does not know where the rules were written.
+            throw new \InvalidArgumentException('config/x402_sensitive.yaml (with X402_SENSITIVE_TOOLS): '.$e->getMessage(), 0, $e);
+        }
 
         return [];
     }

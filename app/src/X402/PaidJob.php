@@ -11,7 +11,7 @@ use Mcp\Capability\Discovery\SchemaGenerator;
 /**
  * Marks an MCP tool as one half of a paid job: `start` (the deposit, settled
  * before the tool runs) or `result` (the rest, settled after it delivers).
- * The flag, not the name, makes it a job tool: Pricing always charges it,
+ * The flag, not the name, makes it a job tool: the price list always charges it,
  * listed in X402_PAID_TOOLS or not. Publish it in the tool's _meta too:
  * #[McpTool(meta: [PaidJob::META => ['role' => ..., 'pairedWith' => ...]])].
  */
@@ -61,7 +61,7 @@ final class PaidJob
         $tools = self::catalog(array_values($handlers));
         foreach ($names as $name) {
             if (null !== $name && !isset($tools[$name])) {
-                throw new \LogicException("MCP tool $name is served but not in app.mcp_tools: Pricing would treat it as free.");
+                throw new \LogicException("MCP tool $name is served but not in app.mcp_tools: the price list would treat it as free.");
             }
         }
 
@@ -89,9 +89,9 @@ final class PaidJob
                 continue;
             }
             $tool = $attrs[0]->newInstance();
-            $name = $tool->name ?? throw new \LogicException("$class::$method: give the #[McpTool] a name, Pricing matches tools by it.");
+            $name = $tool->name ?? throw new \LogicException("$class::$method: give the #[McpTool] a name, the price list matches tools by it.");
             if (isset($tools[$name])) {
-                throw new \LogicException("Two tools are named $name: Pricing would charge one for the other.");
+                throw new \LogicException("Two tools are named $name: the price list would charge one for the other.");
             }
             $job = [] === $jobs ? null : $jobs[0]->newInstance();
             if (null === $job && preg_match('/_(start|result)$/', $name)) {
