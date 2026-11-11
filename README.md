@@ -413,7 +413,7 @@ A buyer never needs a second try to learn its job: every `analyze_terms_start`
 answer given once the job row exists carries the `jobId`, refusals included
 (`settlement_pending`, `needs_review`, `facilitator_unavailable`, an expired
 signature on a late retry), in `structuredContent.jobId`
-(`App\X402\JobIdOnRefusal`, only when the deposit's signature recovers to its
+(`Quebracho\X402\Job\JobIdOnRefusal`, only when the deposit's signature recovers to its
 payer). The deposit's signature lives 60 s and the reconciler first looks at a
 `settling` row after 60 s, so a retry would come too late; the buyer polls
 `analyze_terms_status` with the `jobId` instead.
@@ -470,7 +470,7 @@ limits we know and leave in, each also said in a comment where it lives:
   `maxmemory-policy noeviction` and `appendonly yes` (AOF). The DDEV Redis in
   this repo is for development and is not set up that way.
 - **The free re-read needs a real payment signature**
-  (`App\X402\JobDelivery`). To read a delivered result again within 5 minutes the
+  (`Quebracho\X402\Job\JobDelivery`). To read a delivered result again within 5 minutes the
   payer signs a valid EIP-3009 authorization for the full price, which we never
   settle. It stays spendable (only to our `payTo`) until it expires, and the
   buyer's budget counts it until then. A stronger and cheaper proof would be an
@@ -583,6 +583,7 @@ with a 500.
 | `X402_PAID_TOOLS` | `wisdom,analyze_terms` | Comma-separated tool names that cost money. A `#[PaidJob]` tool is always paid, listed or not. A name here (or in `X402_PRICES`, `X402_TIMEOUTS`, `X402_DURATIONS`) that is no tool is a config error (`app:x402:check` exits 1; `/mcp` answers 500). |
 | `X402_SENSITIVE_TOOLS` | empty | Comma-separated tool names whose answers the payment ledger never keeps (only the payment's state): a retry of a settled payment gets `already_settled`, not the answer. A caller can also pass `sensitive: true` to `analyze_terms`, which also skips its memo. See DECISIONS.md, D17. |
 | `X402_FACILITATOR` | `mock` | Must be set explicitly: `mock` (verified signatures, nothing settled) or a facilitator URL such as `https://x402.org/facilitator` (real settle: on Base Sepolia by default, on a mainnet when `X402_NETWORK` is one you registered). Anything else fails closed: every `/mcp` request errors, nothing is served for free. |
+| `X402_FACILITATOR_KEY` | empty | The facilitator's API key, sent as `Authorization: Bearer` to `X402_FACILITATOR` and nowhere else. Circle's testnet facilitator (`https://api.circle.com/v1/facilitator/x402`, Arc) asks for one. Empty: no header. Put it in `.env.local`. |
 | `X402_REDIS_URL` | empty | Shared payment ledger, e.g. `redis://redis:6379` (DDEV). Each payment's state (claimed, delivered with its response, pending) lives there, so a retry replays the stored answer on any host. Unset: one host's files in `app/var/x402-ledger`. Set, and Redis down: every paid call fails (500), never a fallback to files, which would deliver one payment once per host. `app:x402:check` pings it. |
 | `X402_BUYER_KEY` | web3.js docs key | The agent's buyer key: the public web3.js key, holds testnet USDC; anyone can spend it. For a mainnet use your own key in `.env.local`, never in a committed file. |
 | `HF_TOKEN` | empty | Your Hugging Face token, for `app:ask --hf`. Put it in `app/.env.local`. |

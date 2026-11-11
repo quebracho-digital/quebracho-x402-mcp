@@ -50,7 +50,8 @@ class Kernel extends BaseKernel implements CompilerPassInterface
 
     /**
      * app.mcp_tools: every tool an MCP server serves, by name, with its #[PaidJob]
-     * flag and input schema (PaidJob::catalog), for Pricing. Read from the tools
+     * flag and input schema (PaidJob::catalog), for Pricing; and app.job_tools,
+     * the job flags alone, for the library's job classes. Read from the tools
      * McpPass registered on each server builder (it ran before: this pass is at
      * -10000), so a service id, an alias or a class the registry matches is
      * counted exactly as the bundle serves it.
@@ -72,5 +73,7 @@ class Kernel extends BaseKernel implements CompilerPassInterface
             $v = \is_string($v) ? str_replace('%', '%%', $v) : $v;
         });
         $container->setParameter('app.mcp_tools', $tools);
+        // app.job_tools: the #[PaidJob] ones alone, as the library's job classes take them (role, pairedWith, price).
+        $container->setParameter('app.job_tools', array_filter(array_map(static fn (array $t): ?array => $t['job'] ?? null, $tools)));
     }
 }

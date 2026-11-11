@@ -56,6 +56,20 @@ final class FacilitatorTest extends TestCase
         }
     }
 
+    public function testTheKeyTravelsAsABearerToTheFacilitatorOnly(): void
+    {
+        $seen = [];
+        $http = new MockHttpClient(function (string $method, string $url, array $options) use (&$seen) {
+            $seen[] = [$url, $options['normalized_headers']['authorization'][0] ?? null];
+
+            return new JsonMockResponse(['success' => true, 'transaction' => self::TX, 'network' => 'eip155:84532', 'payer' => strtolower(self::FROM)]);
+        });
+        (new Facilitator('https://f.example/facilitator', new NullLogger(), $http, 'k-123'))(self::PAYMENT, self::REQ);
+        (new Facilitator('https://f.example/facilitator', new NullLogger(), $http))(self::PAYMENT, self::REQ);
+
+        $this->assertSame([['https://f.example/facilitator/settle', 'Authorization: Bearer k-123'], ['https://f.example/facilitator/settle', null]], $seen, 'no key set, no header');
+    }
+
     public function testRejectsAnythingButMockOrAnHttpsUrl(): void
     {
         foreach (['', 'MOCK', 'http://f.example', 'https://', 'f.example'] as $mode) {

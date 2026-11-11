@@ -35,6 +35,7 @@ Tasks for the library are in [https://github.com/quebracho-digital/x402/blob/mai
 - [x] Screening in the app: `app:x402:check` warns when the OFAC list in use is older than 14 days.
 - [ ] Try the server with MCP Inspector.
 - [ ] Real purchase on Ombú with the hackathon wallets, a cents-sized cap, the key only in `app/.env.local`.
+- [ ] Global stop switch (`Quebracho\X402\Stop`, in the library): written, tested and reviewed; library PR quebracho-digital/x402#7, not yet merged, released or wired into the app (a `app:x402:stop` command).
 - [ ] Mainnet test of each supported network, and a testnet smoke, once, when the maintainer orders it.
 
 ## After the hackathon
@@ -43,3 +44,5 @@ Tasks for the library are in [https://github.com/quebracho-digital/x402/blob/mai
 - `auth-capture` for job mode (authorize at the start, capture when the job is ready, void if it fails): written in the library on a branch, not released; Base and Base Sepolia only.
 - Circle Gateway as a payment scheme, for buyers and sellers.
 - The Drupal module `x402_pay` uses this library (`^0.4`).
+- Human approval for large payments: above a threshold the buyer asks the user, through the MCP client, to confirm the exact amount, payee and network before signing. Needs a client that supports elicitation (not all do), so it waits for real users spending from their own wallets.
+- Signed receipts for what the buyer received: a record that commits to the exact bytes of the result, checkable offline and tied to the payment transaction. Waits for a stable format.

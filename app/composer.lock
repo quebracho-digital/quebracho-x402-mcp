@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "3c4f072c744c5b954f17625869863245",
+    "content-hash": "54bec23995dc15791922ded24a53c287",
     "packages": [
         {
             "name": "doctrine/deprecations",
@@ -1679,16 +1679,16 @@
         },
         {
             "name": "quebracho/x402",
-            "version": "v0.4.1",
+            "version": "v0.5.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/quebracho-digital/x402.git",
-                "reference": "5d2a6796bdb99bac6db16ba6796d6c0a944ef2bd"
+                "reference": "3c2361dd68dba12357735daf181d11ae7c46dc4f"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/quebracho-digital/x402/zipball/5d2a6796bdb99bac6db16ba6796d6c0a944ef2bd",
-                "reference": "5d2a6796bdb99bac6db16ba6796d6c0a944ef2bd",
+                "url": "https://api.github.com/repos/quebracho-digital/x402/zipball/3c2361dd68dba12357735daf181d11ae7c46dc4f",
+                "reference": "3c2361dd68dba12357735daf181d11ae7c46dc4f",
                 "shasum": ""
             },
             "require": {
@@ -1698,6 +1698,8 @@
                 "kornrunner/secp256k1": "^0.4",
                 "paragonie/ecc": "^2.6",
                 "php": "^8.3",
+                "psr/cache": "^3.0",
+                "psr/clock": "^1.0",
                 "psr/event-dispatcher": "^1.0",
                 "psr/http-client": "^1.0",
                 "psr/http-factory": "^1.1",
@@ -1707,15 +1709,16 @@
                 "psr/log": "^3"
             },
             "require-dev": {
-                "friendsofphp/php-cs-fixer": "*",
-                "infection/infection": "*",
+                "friendsofphp/php-cs-fixer": "^3.95",
+                "infection/infection": "^0.35",
                 "nyholm/psr7": "^1.8",
-                "phpstan/phpstan": "*",
+                "phpstan/phpstan": "^2.3",
                 "phpunit/phpunit": "^12",
-                "shipmonk/composer-dependency-analyser": "*",
+                "shipmonk/composer-dependency-analyser": "^1.8",
                 "symfony/http-client": "^7.3"
             },
             "suggest": {
+                "ext-posix": "Stop: checks that the flag file is owned by the user running PHP",
                 "ext-redis": "RedisLedger: one payment ledger for several hosts"
             },
             "type": "library",
@@ -1731,10 +1734,10 @@
             "description": "x402 payments for PHP: EIP-712/EIP-3009 signing, PSR-15 middleware and PSR-18 paying client.",
             "support": {
                 "issues": "https://github.com/quebracho-digital/x402/issues",
-                "source": "https://github.com/quebracho-digital/x402/tree/v0.4.1"
+                "source": "https://github.com/quebracho-digital/x402/tree/v0.5.0"
             },
-            "time": "2026-11-08T21:22:10+00:00",
-            "published-time": "2026-11-08T21:22:45+00:00"
+            "time": "2026-11-10T11:13:13+00:00",
+            "published-time": "2026-11-10T11:24:42+00:00"
         },
         {
             "name": "symfony/ai-agent",

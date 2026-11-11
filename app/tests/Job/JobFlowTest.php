@@ -6,10 +6,6 @@ namespace App\Tests\Job;
 
 use App\Mcp\AnalyzeTermsJobTool;
 use App\Mcp\WisdomTool;
-use App\X402\JobDelivery;
-use App\X402\JobDeposit;
-use App\X402\JobDesk;
-use App\X402\JobIdOnRefusal;
 use App\X402\JobSlots;
 use App\X402\PaidJob;
 use App\X402\Pricing;
@@ -31,7 +27,11 @@ use Quebracho\X402\EvmExact;
 use Quebracho\X402\FileLedger;
 use Quebracho\X402\Job\FileJobStore;
 use Quebracho\X402\Job\Job;
+use Quebracho\X402\Job\JobDelivery;
+use Quebracho\X402\Job\JobDeposit;
+use Quebracho\X402\Job\JobDesk;
 use Quebracho\X402\Job\JobFailed;
+use Quebracho\X402\Job\JobIdOnRefusal;
 use Quebracho\X402\Job\JobJanitor;
 use Quebracho\X402\Job\JobPayments;
 use Quebracho\X402\Job\JobReconciler;
@@ -119,10 +119,13 @@ final class JobFlowTest extends TestCase
 
         $rules = new SensitiveRules([], [['kind' => 'argument', 'name' => 'sensitive', 'value' => true]]);
 
+        // As config/services.yaml wires the library's classes: app.job_tools, the app's prices and rules.
+        $jobs = array_filter(array_map(static fn (array $t): ?array => $t['job'] ?? null, $tools));
+
         return new JobDesk(
-            new JobDeposit($this->jobs, $this->runner(), $this->slots, $this->pricing, $rules, $tools, $clock),
-            new JobDelivery($this->jobs, $rules, $tools, $this->reconciler(), new JobJanitor($this->jobs), $clock),
-            $this->pricing, $rules, $this->facilitator, $tools,
+            new JobDeposit($this->jobs, $this->runner(), $this->slots, ($this->pricing)(...), $jobs, $rules(...), $clock),
+            new JobDelivery($this->jobs, $jobs, $this->reconciler(), new JobJanitor($this->jobs), $rules(...), $clock),
+            $this->facilitator, $jobs, $this->pricing->validate(...), $rules(...),
         );
     }
 

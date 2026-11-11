@@ -4,7 +4,8 @@ Resumen de lo que depende de Leo. `todo.txt` tiene el detalle y las fechas. Las 
 
 ## Para entregar el hackathon (plazo oficial: 2026-11-22 18:00 CET)
 
-1. **Compra real en la demo (antes del 18/11).** Contra un listado de Ombú, con las wallets del hackathon de Tameion, con un tope de centavos y la clave solo en `app/.env.local`. Red elegida por Leo (2026-11-09): Base Sepolia, con `https://x402.org/facilitator` (no pide clave). Necesita: (a) que levantes la orden del 2026-11-05 de no pagar contra nodo real; (b) fondos de testnet en la wallet del comprador; (c) un listado de Ombú que cobre en Base Sepolia: hoy Ombú vende en Arc, así que hay que crear uno de prueba o comprar un servicio nuestro de esta app.
+1. **Compra real en la demo: hecha (2026-11-09).** En Arc testnet, con el facilitador de Circle y la wallet de Ombú como comprador y vendedor: `wisdom`, 0,01 USDC, tx `0x89c75dc8d426f6796caea2330204089e699d8dab09ca31bc22c83752c645c1a2`. Falta solo la captura en el video.
+1b. **Parada global de pagos.** Escrita y revisada en la librería: PR `quebracho-digital/x402#7`. Falta tu merge, el tag v0.4.2 (Packagist), subir la app a esa versión y el comando `app:x402:stop`.
 2. **Video nuevo (antes del 20/11).** Rehacerlo: la librería, la app Symfony con MCP, `x402_pay` y Ombú. Guion en `video/guion-v9.md` (local).
 3. **Formulario.** Repo (este monorepo), video, y el párrafo actualizado (cifras: librería 670 tests, app 273, v0.4.1, `analyze_terms` super beta, compra real en mainnet por Ombú). Al enviar: verificar los números y crear el tag `hackathon-submission`.
 4. **Prueba en mainnet de cada red soportada y smoke en testnet**, una sola vez, cuando lo ordenes.

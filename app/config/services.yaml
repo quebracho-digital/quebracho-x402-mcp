@@ -79,12 +79,37 @@ services:
     Quebracho\X402\Job\JobRunner:
         arguments:
             $works: !tagged_iterator app.job_work
-    # Job mode's payment hooks (validate, payer, settle, sensitive below): the settle it wraps is the facilitator's.
-    App\X402\JobDesk:
+    # At most JOB_SLOTS jobs at once: the library asks for its JobSlots, the app answers with Symfony Lock.
+    Quebracho\X402\Job\JobSlots: '@App\X402\JobSlots'
+    # Job mode is the library's (Quebracho\X402\Job): the app only hands it its prices, its rules and its facilitator.
+    # app.job_tools: the #[PaidJob] tools by name (App\Kernel). One instance of each: the hooks, the tools and
+    # JobIdOnRefusal must share this request's call.
+    Quebracho\X402\Job\JobDeposit:
+        arguments:
+            $price: !closure '@App\X402\Pricing'
+            $roles: '%app.job_tools%'
+            $sensitive: !closure '@App\X402\SensitiveRules'
+            $clock: ~
+            $schemes: *x402_schemes
+    Quebracho\X402\Job\JobDelivery:
+        arguments:
+            $roles: '%app.job_tools%'
+            $sensitive: !closure '@App\X402\SensitiveRules'
+            $clock: ~
+            $schemes: *x402_schemes
+    # The payment hooks (validate, payer, settle, sensitive below): the settle it wraps is the facilitator's.
+    # kernel.reset: a worker that serves many requests starts each one with no role and no held slot.
+    Quebracho\X402\Job\JobDesk:
         arguments:
             $settle: !closure '@App\X402\Facilitator'
+            $jobs: '%app.job_tools%'
+            # A paid name that is no registered tool, or arguments outside its input schema.
+            $validate: !closure ['@App\X402\Pricing', 'validate']
+            $sensitive: !closure '@App\X402\SensitiveRules'
+        tags:
+            - { name: kernel.reset, method: reset }
     # A _start refusal (settlement_pending, needs_review, an expired retry...) carries the jobId once the job exists.
-    App\X402\JobIdOnRefusal:
+    Quebracho\X402\Job\JobIdOnRefusal:
         arguments:
             $streams: '@mcp.psr17_factory'
     # How a job's payment ended when its request is gone: the ledger, then (cron only) the token's authorizationState.
@@ -155,16 +180,16 @@ services:
             $price: !closure '@App\X402\Pricing'
             $claim: !closure '@Quebracho\X402\FileClaims'
             # Through JobDesk: a _start's job row is written before its deposit settles, a _result's after (JobDesk::settle).
-            $settle: !closure ['@App\X402\JobDesk', 'settle']
+            $settle: !closure ['@Quebracho\X402\Job\JobDesk', 'settle']
             # Replaces $claim and $release for the payment state (see the ledger above). A claim whose payment charged nothing is freed by the ledger too.
             $ledger: '@Quebracho\X402\PaymentLedger'
             $verify: !closure ['@App\X402\Facilitator', 'verify']
             # A slow tool (X402_DURATIONS) refuses a signature that would expire before its settle.
             $duration: !closure ['@App\X402\Pricing', 'duration']
             # A paid name that is no registered tool, or a _start input its work would refuse: JSON-RPC -32602 before any payment is read.
-            $validate: !closure ['@App\X402\JobDesk', 'validate']
+            $validate: !closure ['@Quebracho\X402\Job\JobDesk', 'validate']
             # Job mode: a _start needs a free slot, a _result the deposit's payer and a ready job (JobDesk::payer). Before the claim.
-            $payer: !closure ['@App\X402\JobDesk', 'payer']
+            $payer: !closure ['@Quebracho\X402\Job\JobDesk', 'payer']
             $responses: '@mcp.psr17_factory'
             $streams: '@mcp.psr17_factory'
             # AddressCheck on the payer: OFAC first (below), then the listeners (App\X402\Screening, TokenBlacklist).
@@ -174,7 +199,7 @@ services:
             $lookup: !closure ['@Quebracho\X402\ReceiptLookup', '__invoke']
             # config/x402_sensitive.yaml plus X402_SENSITIVE_TOOLS: the ledger keeps the state, never the answer (DECISIONS.md, D17, D18).
             # Through JobDesk: a _start's answer (a job id) is always kept, a _result's follows its job (JobDesk::sensitive).
-            $sensitive: !closure ['@App\X402\JobDesk', 'sensitive']
+            $sensitive: !closure ['@Quebracho\X402\Job\JobDesk', 'sensitive']
 
     # The 'x402' Monolog channel exists only with symfony/monolog-bundle (optional; config/packages/x402_log.php).
     # '@?' leaves the key out of the locator without it; PaymentLogFactory asks with has() when PaymentLog is built.
@@ -252,7 +277,7 @@ services:
             - '@mcp.psr17_factory'
             - '@mcp.server.default.middleware_factory'
             - '@Quebracho\X402\X402McpMiddleware'
-            - '@App\X402\JobIdOnRefusal'
+            - '@Quebracho\X402\Job\JobIdOnRefusal'
             - '@logger'
         tags: [controller.service_arguments, { name: monolog.logger, channel: mcp }]
 
