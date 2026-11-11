@@ -20,6 +20,12 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
  * base URL, e.g. https://x402.org/facilitator (HttpFacilitator). Anything else
  * makes every /mcp request fail (the controller cannot be built) instead of
  * serving paid tools for free.
+ *
+ * Two of the library middleware's hooks (services.yaml): $verify is verify() and $settle is __invoke().
+ * The library's own facilitators (HttpFacilitator, CircleFacilitator, ChainFacilitator, MockFacilitator) can
+ * be given to the middleware directly; this class only chooses one from env, logs, and wraps the settle in
+ * Settlement::run, which turns anything the facilitator throws into a failed receipt (never an answer
+ * delivered unpaid).
  */
 final class Facilitator implements PaymentStatus
 {

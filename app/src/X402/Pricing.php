@@ -16,6 +16,14 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
  * X402_PRICES), the rest are free. A slow tool gets a longer signature
  * (X402_TIMEOUTS) and declares its worst case (X402_DURATIONS). A #[PaidJob]
  * tool is always paid.
+ *
+ * Three of the library middleware's hooks, each a closure in services.yaml:
+ *   $price     __invoke(): the x402 `accepts` list for this call (Networks::requirements builds one offer from
+ *              a network, a price in USD, payTo and how long the signature lives), or null for a free call
+ *   $validate  validate(): why the call must not be sold at all, before any payment is read
+ *   $duration  duration(): how long the tool can take, so a signature about to expire is refused first
+ * The library ships a PriceList that covers the first one from plain arrays; this class exists because the
+ * app reads its prices from env and adds the job-mode terms to a deposit's offer.
  */
 final class Pricing
 {

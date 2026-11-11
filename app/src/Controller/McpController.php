@@ -20,6 +20,16 @@ use Symfony\Component\HttpFoundation\Response;
 /**
  * The bundle's McpController plus the x402 middleware, which its final
  * MiddlewareFactory cannot take. Replaces mcp.server.default.controller.
+ *
+ * This is where the library meets the MCP server. X402McpMiddleware is a PSR-15 middleware, and the MCP SDK's
+ * HTTP transport takes a list of them, so charging for tools is one more entry in that list: no tool, handler
+ * or SDK class is changed. The middleware reads each JSON-RPC message; a tools/call of a tool with a price
+ * (App\X402\Pricing) and no payment is answered with the x402 PaymentRequired, one with a payment is verified,
+ * handed on to the server, and settled once the tool answered. Everything else (initialize, tools/list, free
+ * tools) passes through untouched.
+ *
+ * In an application that is not MCP the same place takes Quebracho\X402\X402Middleware, which charges plain
+ * HTTP routes (the 402 status and the PAYMENT-* headers) and is built from the same parts.
  */
 final class McpController
 {
@@ -43,8 +53,9 @@ final class McpController
             $this->responseFactory,
             $this->streamFactory,
             logger: $this->logger,
-            // After CORS and DNS rebinding protection: a list replaces the SDK defaults. JobIdOnRefusal wraps the
-            // x402 middleware: it adds the jobId to a `_start` refusal once the job row exists.
+            // After CORS and DNS rebinding protection: a list replaces the SDK defaults. The x402 middleware goes
+            // last, next to the server: a request refused before it (CORS, a bad host) is never read for a payment.
+            // JobIdOnRefusal wraps it (job mode only): it adds the jobId to a `_start` refusal once the job row exists.
             middleware: [...($this->middlewareFactory->create() ?? StreamableHttpTransport::defaultMiddleware()), $this->jobIds, $this->x402],
         );
 
