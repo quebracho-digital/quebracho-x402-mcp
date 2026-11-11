@@ -21,6 +21,13 @@ use Symfony\Component\DependencyInjection\Attribute\Target;
 /**
  * An agent that discovers the MCP server's tools, pays the paid ones with
  * x402 in band, and answers with them.
+ *
+ * The buyer side of the library, and there is no payment code in this class. The MCP client `buyer`
+ * (config/packages/mcp.yaml) sends its requests through Quebracho\X402\PayingMcpClient, a PSR-18 client
+ * (config/services.yaml, BUYER): a tools/call answered with an x402 PaymentRequired is paid within the
+ * budget (X402_BUDGETS, X402_MAX_PER_PAYMENT), only to an allowed payTo (X402_PAYTO_ALLOW, OFAC), and sent
+ * again; the agent only ever sees the tool's answer. What was paid, and what was refused and why, reaches
+ * App\X402\Receipts through the client's $onPaid and $onRefused closures, and is printed below.
  */
 #[AsCommand(name: 'app:ask', description: 'Ask the agent; it discovers, pays (x402) and calls MCP tools')]
 final class AskCommand

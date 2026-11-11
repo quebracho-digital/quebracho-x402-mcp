@@ -14,6 +14,9 @@ use Symfony\Component\HttpKernel\KernelEvents;
  * has already called fastcgi_finish_request, so the buyer has its jobId while the work runs. Only a job
  * whose row is durable (queued, written by JobDeposit::queue) is ever run. Messenger can replace this later
  * behind the same JobRunner::run.
+ *
+ * The one call job mode needs from the framework: JobDesk::afterResponse(), once per request, after the
+ * response went out. It runs the job this request queued and clears the desk's per-request state.
  */
 #[AsEventListener(event: KernelEvents::TERMINATE)]
 final class JobTerminate

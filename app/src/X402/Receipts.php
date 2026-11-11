@@ -7,6 +7,10 @@ namespace App\X402;
 /**
  * The x402 receipts the buyer got during this run, and the offers it
  * refused, for app:ask to show.
+ *
+ * PayingMcpClient's two callbacks (services.yaml): $onPaid is this object's __invoke, called with the tool,
+ * the offer that was signed and the seller's receipt; $onRefused is refused(), called with an offer the
+ * client did not pay and the reason (over budget, payTo not allowed, no scheme for that network...).
  */
 final class Receipts
 {

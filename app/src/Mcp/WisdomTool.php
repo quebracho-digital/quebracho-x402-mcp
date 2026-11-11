@@ -6,6 +6,16 @@ namespace App\Mcp;
 
 use Mcp\Capability\Attribute\McpTool;
 
+/**
+ * The smallest paid tool. Nothing here knows about x402: the tool is plain MCP code, and it is paid because
+ * X402_PAID_TOOLS names it (App\X402\Pricing answers its price to the library's middleware, which stands in
+ * front of the MCP server). It runs only for a call whose payment verified, and the payment is settled only
+ * after it answered: a tool that throws, or answers isError, is not charged.
+ *
+ * To sell a tool of your own: write it as any #[McpTool], add its name to X402_PAID_TOOLS, and optionally
+ * its own price in X402_PRICES. A tool that needs the payment itself reads it from the request's _meta
+ * (X402McpMiddleware::PAYMENT), as App\Mcp\AnalyzeTermsJobTool does.
+ */
 final class WisdomTool
 {
     private const SAYINGS = [

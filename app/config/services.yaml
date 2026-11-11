@@ -1,8 +1,33 @@
 # yaml-language-server: $schema=../vendor/symfony/dependency-injection/Loader/schema/services.schema.json
 
-# This file is the entry point to configure your own services.
-# Files in the packages/ subdirectory configure your dependencies.
-# See also https://symfony.com/doc/current/service_container/import.html
+# This file is the worked example of wiring quebracho/x402 (https://github.com/quebracho-digital/x402) into Symfony.
+# The library has no Symfony code: every class takes PSR interfaces and closures, so all the wiring is here.
+#
+# How to read it, in the order a paid call goes through:
+#
+#   SELLER (this app charges for its MCP tools)
+#     1. Quebracho\X402\X402McpMiddleware   the PSR-15 middleware that answers 402 and settles; every hook it
+#                                           takes is one closure, each explained on its line below
+#     2. App\X402\Pricing                   its $price: what a tools/call costs (the x402 `accepts` list), or null = free
+#     3. Quebracho\X402\EvmExact            its $schemes: how a payment is verified (and, for the buyer, signed)
+#     4. App\X402\Facilitator               its $verify and $settle: who moves the money (mock, Circle, any facilitator URL)
+#     5. Quebracho\X402\PaymentLedger       its $ledger: one payment is claimed, settled and answered once (files or Redis)
+#     6. Quebracho\X402\OfacSdn, App\X402\Screening, TokenBlacklist, PayeeAllowlist
+#                                           who may pay or be paid: listeners of the library's AddressCheck event
+#     7. Quebracho\X402\PaymentLog, PaymentRecord
+#                                           what happened: listeners of PaymentIntent, PaymentOutcome, PaymentFault...
+#     8. Quebracho\X402\ReceiptLookup, Reconciler
+#                                           a payment whose settle never answered, resolved by the chain (cron)
+#     The middleware is put in front of the MCP server by App\Controller\McpController.
+#
+#   JOB MODE (work longer than a signature lives: a deposit, then the result; docs/job-mode.md)
+#     Quebracho\X402\Job\JobDesk and its two parts wrap hooks 2 and 4 above; the tools are App\Mcp\AnalyzeTermsJobTool.
+#
+#   BUYER (app:ask pays other servers' tools)
+#     Quebracho\X402\PayingMcpClient, at the end: a PSR-18 client that pays a 402 within a Budget and retries.
+#
+# The smallest seller is 1 to 5: a middleware with $schemes, $price, $settle and a ledger. The rest is what a
+# seller in production also needs. Each value comes from env (app/.env documents every variable).
 
 # Put parameters here that don't need to change on each machine where the app is deployed
 # https://symfony.com/doc/current/best_practices.html#use-parameters-for-application-configuration
@@ -30,6 +55,10 @@ services:
 
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
+
+    # ---------------------------------------------------------------------------------------------------------
+    # SELLER
+    # ---------------------------------------------------------------------------------------------------------
 
     # app:x402:check verifies X402_NETWORK has a scheme here. The list is written once (anchor x402_schemes),
     # aliased by X402McpMiddleware below, so the check and the middleware cannot drift apart.
@@ -71,6 +100,10 @@ services:
         class: Symfony\Contracts\HttpClient\HttpClientInterface
         factory: ['Symfony\Component\HttpClient\HttpClient', 'create']
         arguments: [{timeout: 15, max_duration: 40}]
+
+    # ---------------------------------------------------------------------------------------------------------
+    # JOB MODE (Quebracho\X402\Job): what the app gives the library is a store, the works, slots and its prices
+    # ---------------------------------------------------------------------------------------------------------
 
     # Paid jobs (job mode): files under var/, never cache.app (a cache:clear would wipe a paid job).
     Quebracho\X402\Job\FileJobStore:
@@ -172,6 +205,12 @@ services:
             $redisUrl: '%env(default::X402_REDIS_URL)%'
             $dir: '%kernel.project_dir%/var/x402-ledger'
 
+    # The seller itself. A library closure argument ($price, $settle...) is a Symfony `!closure`: of an invokable
+    # service ('@Service', its __invoke) or of one method (['@Service', 'method']). The order the hooks run in
+    # for one tools/call: $price and $validate before any payment is read; then (Sale::admit) the offline verify
+    # by the scheme and $duration, $payer, the address check ($events, $ofac), the online $verify, and last the
+    # claim ($ledger); then the tool and $settle (the other way round for an upfront payment), and $sensitive
+    # decides whether the ledger keeps the answer for a retry.
     # Settlement goes through App\X402\Facilitator: X402_FACILITATOR is
     # "mock" or a facilitator URL, never left implicit.
     Quebracho\X402\X402McpMiddleware:
@@ -281,6 +320,14 @@ services:
             - '@logger'
         tags: [controller.service_arguments, { name: monolog.logger, channel: mcp }]
 
+    # ---------------------------------------------------------------------------------------------------------
+    # BUYER
+    # ---------------------------------------------------------------------------------------------------------
+
+    # A PSR-18 client: it sends the call, and when the answer is an x402 PaymentRequired it picks an offer its
+    # $schemes can sign and its $budget allows, checks payTo ($events, $ofac), signs, and sends the call again
+    # with the payment. Whoever uses it (here the MCP client of config/packages/mcp.yaml, `http_client:`) sees
+    # only the paid answer. For plain HTTP APIs the library has the same thing as PayingHttpClient.
     # Buyer side, for app:ask: pays paid tools in band within X402_BUDGETS and X402_MAX_PER_PAYMENT, only to X402_PAYTO_ALLOW.
     Quebracho\X402\PayingMcpClient:
         arguments:
