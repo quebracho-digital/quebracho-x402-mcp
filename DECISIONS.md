@@ -292,4 +292,32 @@ An accepted decision is never rewritten: if it changes, a new one replaces it.
 
 - Status: accepted (Leo: "deberia estar activada por defecto, no quiero tener ningun problema con el state department")
 - Decision: `quebracho/x402` ships OFAC's SDN list (the official Sanctions List Service, not a mirror) and checks both parties by default. An option turns it off and another adds more lists (`AddressList`, with an example format); PSR-14 events let third parties plug in their own. Keeping the lists fresh is the job of each application; the library's bundled list is refreshed before each release. Only OFAC is on by default (it needs no network); Chainalysis and the token's own blacklist are wired by the app. The allowlist never skips OFAC.
-- Consequences: the app's `App\X402\Screening` is built on the library; `app:x402:check` warns when the list in use is older than 14 days. Upgrade notes: the library's `UPGRADE.md`.
+- Consequences: the app's `App\X402\Screening` is built on the library (since D26, around the library's own `Screening`); `app:x402:check` warns when the list in use is older than 14 days. Upgrade notes: the library's `UPGRADE.md`.
+
+## D25 — Library v0.5.0: extension points, builders, and what the example app had grown (2026-11-10)
+
+- Status: accepted (Leo, after a review of the library: "haz las interfaces opcionales y que el nucleo siempre use scheme para decidir", "mueve todo lo que sugieres a la libreria")
+- Context: the core asked "is this EVM?" in several places, so a new chain family meant touching it; the constructors had grown to fifteen positional arguments; and the app held classes any seller needs (prices per tool, the rules for sensitive answers, the screening lists, the choice of a facilitator, job mode's wiring).
+- Decision (in `quebracho-digital/x402`, released as v0.5.0):
+  - What the core needs to know about a chain it asks the scheme, through optional interfaces: `SpendsOnce` (a payment's identity), `Expires`, `AddressForm`, `VetsOffers`, `ShapesOffers`.
+  - `Seller` and `Buyer` name the options; the constructors keep their order (no break).
+  - Into the library: `PriceList`, `SensitiveRules`, `Screening`, `Facilitators` and `MockFacilitator`, `Job\JobDesk`, `JobDeposit`, `JobDelivery`, `JobIdOnRefusal`, `JobSlots` with `FileJobSlots`, `Stop`, and PSR-20 clocks.
+  - `Networks` as an injectable instance waits for 1.0 (Leo: "4. ok, estoy de acuerdo").
+- Consequences: the library's `CONTRIBUTING.md` holds the rules, and its `ArchitectureTest` and `DocblockTest` enforce them. Its public API is checked against the inventories of 0.3.0 and 0.4.1 (`tests/CompatibilityTest.php`). New dependencies: `psr/cache`, `psr/clock` (interfaces only).
+
+## D26 — The app keeps no copy of a library class (2026-11-11)
+
+- Status: accepted (Leo: "migrar lo que falte de la libreria")
+- Context: a first migration to v0.5.0 wrapped the library's job classes in app classes of the same name, and lost the `#[AsEventListener]` of `App\X402\Screening`: the deny list and the sanctions API stopped being asked on payments while every test passed, because the test added the listener by hand.
+- Decision:
+  - The app uses the library's classes directly, wired in `app/config/services.yaml`: `Job\JobDesk`, `JobDeposit`, `JobDelivery`, `JobIdOnRefusal`, `PriceList`, `SensitiveRules`, and the `Facilitator` that `Facilitators::from` builds, given to the middleware and to `JobDesk` as it is.
+  - `App\X402` holds only what belongs to an application: factories that read env and name the env variable in an error (`PriceListFactory`, `FacilitatorFactory`, `LedgerFactory`, `SchemeFactory`, `BuyerBudget`, `BlacklistFactory`, `PaymentLogFactory`), the `#[PaidJob]` attribute, `ToolInput` (the MCP SDK's schema check, as the middleware's `$validate`), `JobSlots` (Symfony Lock), `Screening` (env, HTTP timeouts and the OFAC sync around the library's `Screening`) and the deploy checks.
+  - A kernel test asserts that `App\X402\Screening` listens to `AddressCheck` in the real container (`AppKernelTest::testTheAppsScreeningListensToEveryAddressCheck`).
+- Consequences: `App\X402\Pricing`, `SensitiveRules`, `Facilitator`, `JobDesk`, `JobDeposit`, `JobDelivery` and `JobIdOnRefusal` are gone. The app's own log lines for a mock settlement and a failed settle are gone with `App\X402\Facilitator`: the library reports every outcome and fault as an event, and `PaymentLog` writes it. `symfony/monolog-bundle` stays optional (`Kernel::optionalBundles`), never in `config/bundles.php`.
+
+## D27 — A stop switch for payments, by hand (2026-11-09, in the app 2026-11-11)
+
+- Status: accepted (Leo: "el global stop lo implementamos ahora o despues del hackathon? yo digo ahora"; "no debería ir a la librería?")
+- Decision: `Quebracho\X402\Stop` is a flag file. The seller's middleware and the buyer's client are given the same instance; while the file exists a paid call is answered `payments_paused` before anything is verified, claimed, run or charged, and the buyer reserves and signs nothing. `app:x402:stop on|off|status` sets it; `touch` does the same. The file is `X402_STOP_FILE`, by default `app/var/x402-stop/paused`.
+- Why a file: every process sees it at once, nothing has to be running to set it, and nothing sets it by itself. It fails closed where it can tell (anything at the path counts as engaged; a directory it cannot search does too), and `engage()` refuses a link, a file somebody else owns and a directory others can write to.
+- Consequences: it does not recall a payment already signed or a settle already sent; a payment the ledger already holds is still delivered, and jobs already paid for keep running. Free tools still answer. Several hosts need a shared path or the command on each. `app:x402:check` warns when it is engaged. Tests: `X402StopCommandTest`, `AppKernelTest::testOneStopSwitchPausesTheSellerAndTheBuyer`.

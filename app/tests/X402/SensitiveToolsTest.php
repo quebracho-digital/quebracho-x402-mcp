@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\X402;
 
-use App\X402\SensitiveRules;
+use Quebracho\X402\SensitiveRules;
 use Quebracho\X402\X402McpMiddleware;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 
@@ -22,14 +22,14 @@ final class SensitiveToolsTest extends KernelTestCase
 
     public function testOnlyTheListedToolOrACallerFlagIsSensitive(): void
     {
-        $sensitive = new SensitiveRules(['analyze_terms'], [['kind' => 'argument', 'name' => 'sensitive', 'value' => true]]);
+        $sensitive = new SensitiveRules([['kind' => 'argument', 'name' => 'sensitive', 'value' => true]], ['analyze_terms']);
 
         self::assertTrue($sensitive(['name' => 'analyze_terms', 'arguments' => ['text' => 'x']]));
         self::assertFalse($sensitive(['name' => 'wisdom', 'arguments' => []]));
         self::assertTrue($sensitive(['name' => 'wisdom', 'arguments' => ['sensitive' => true]]));
         // Only a real true marks it: "false" from a sloppy client does not.
         self::assertFalse($sensitive(['name' => 'wisdom', 'arguments' => ['sensitive' => 'false']]));
-        self::assertFalse((new SensitiveRules([], []))(['name' => 'analyze_terms']));
+        self::assertFalse((new SensitiveRules([]))(['name' => 'analyze_terms']));
     }
 
     public function testTheMiddlewareGetsX402SensitiveTools(): void

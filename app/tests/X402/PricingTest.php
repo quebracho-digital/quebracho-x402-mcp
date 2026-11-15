@@ -4,8 +4,9 @@ declare(strict_types=1);
 
 namespace App\Tests\X402;
 
+use App\Tests\Support\Prices;
 use App\X402\PaidJob;
-use App\X402\Pricing;
+use App\X402\ToolInput;
 use Mcp\Capability\Attribute\McpTool;
 use Mcp\Server\RequestContext;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -45,7 +46,7 @@ final class PricingTest extends TestCase
     {
         $tools = PaidJob::catalog(self::handlers());
         // X402_PAID_TOOLS left empty: NULL would mean free, i.e. a job run or delivered unpaid.
-        $pricing = new Pricing([], 'eip155:84532', '0.01', self::PAY_TO, tools: $tools);
+        $pricing = Prices::of([], 'eip155:84532', '0.01', self::PAY_TO, tools: $tools);
         self::assertContains('demo_start', array_keys($tools), 'the scan found the fixture');
 
         $start = $pricing(['name' => 'demo_start'])[0];
@@ -63,7 +64,7 @@ final class PricingTest extends TestCase
     public function testEveryFlaggedToolHasAPrice(): void
     {
         $tools = PaidJob::catalog(self::handlers());
-        $pricing = new Pricing([], 'eip155:84532', '0.01', self::PAY_TO, tools: $tools);
+        $pricing = Prices::of([], 'eip155:84532', '0.01', self::PAY_TO, tools: $tools);
         foreach (array_keys(array_filter($tools, static fn (array $t) => null !== $t['job'])) as $name) {
             self::assertNotNull($pricing(['name' => $name]), "$name must be paid");
         }
@@ -73,7 +74,7 @@ final class PricingTest extends TestCase
     {
         // By name this time, over every #[McpTool] scanned: an unflagged _start or _result is refused by the catalog
         // (testAJobToolMistakeStopsTheBuild); the rest must be priced, the deposit upfront, and _status free (decision 2).
-        $pricing = new Pricing([], 'eip155:84532', '0.01', self::PAY_TO, tools: PaidJob::catalog(self::handlers()));
+        $pricing = Prices::of([], 'eip155:84532', '0.01', self::PAY_TO, tools: PaidJob::catalog(self::handlers()));
         $seen = [];
         foreach (array_keys(PaidJob::catalog(self::handlers())) as $name) {
             if (!preg_match('/_(start|result|status)$/', $name, $m)) {
@@ -111,7 +112,7 @@ final class PricingTest extends TestCase
     {
         // Fails open otherwise: the tool meant to be charged is free.
         $this->expectExceptionMessage($message);
-        new Pricing($paid, 'eip155:84532', '0.01', self::PAY_TO, $prices, $timeouts, $durations, self::TOOLS);
+        Prices::of($paid, 'eip155:84532', '0.01', self::PAY_TO, $prices, $timeouts, $durations, self::TOOLS);
     }
 
     /** @return iterable<string, array{string, array<string, string>, array<string, mixed>, string}> */
@@ -120,8 +121,8 @@ final class PricingTest extends TestCase
         yield 'X402_PRICE not a number' => ['abc', [], self::TOOLS, 'X402_PRICE: '];
         yield 'X402_PRICES not a number' => ['0.01', ['wisdom' => 'abc'], self::TOOLS, 'X402_PRICES[wisdom]: '];
         yield 'X402_PRICES zero' => ['0.01', ['wisdom' => '0'], self::TOOLS, 'X402_PRICES[wisdom]: '];
-        // Past PaidJob::catalog's check (a price the token cannot represent): Pricing names the flag.
-        yield 'PaidJob price too precise' => ['0.01', [], ['j_start' => ['job' => ['role' => 'start', 'pairedWith' => 'j_result', 'price' => '0.0000001'], 'schema' => '{}']] + self::TOOLS, '#[PaidJob] price of j_start: '];
+        // Past PaidJob::catalog's check (a price the token cannot represent): the price list names the flag.
+        yield 'PaidJob price too precise' => ['0.01', [], ['j_start' => ['job' => ['role' => 'start', 'pairedWith' => 'j_result', 'price' => '0.0000001'], 'schema' => '{}'], 'j_result' => ['job' => ['role' => 'result', 'pairedWith' => 'j_start', 'price' => '0.01'], 'schema' => '{}']] + self::TOOLS, '#[PaidJob] price of j_start: '];
     }
 
     /**
@@ -132,25 +133,25 @@ final class PricingTest extends TestCase
     public function testEveryPaidToolIsPricedUpFront(string $price, array $prices, array $tools, string $message): void
     {
         $this->expectExceptionMessage($message);
-        new Pricing(['wisdom'], 'eip155:84532', $price, self::PAY_TO, $prices, tools: $tools);
+        Prices::of(['wisdom'], 'eip155:84532', $price, self::PAY_TO, $prices, tools: $tools);
     }
 
     public function testAPriceForAFreeToolIsAConfigError(): void
     {
         $this->expectExceptionMessage('X402_PRICES prices "echo", which is free');
-        new Pricing(['wisdom'], 'eip155:84532', '0.01', self::PAY_TO, ['echo' => '0.01'], tools: self::TOOLS);
+        Prices::of(['wisdom'], 'eip155:84532', '0.01', self::PAY_TO, ['echo' => '0.01'], tools: self::TOOLS);
     }
 
     public function testATimeoutTypoIsReportedBeforeTheDurationItBreaks(): void
     {
         // analyze_terms keeps the 60 s default, so its 60 s duration no longer fits: the typo is the cause.
         $this->expectExceptionMessage('X402_TIMEOUTS names "analyze_term"');
-        new Pricing(['analyze_terms'], 'eip155:84532', '0.01', self::PAY_TO, [], ['analyze_term' => 120], ['analyze_terms' => 60], self::TOOLS);
+        Prices::of(['analyze_terms'], 'eip155:84532', '0.01', self::PAY_TO, [], ['analyze_term' => 120], ['analyze_terms' => 60], self::TOOLS);
     }
 
     public function testAnUnusedDefaultPriceIsNotChecked(): void
     {
-        self::assertNull((new Pricing([], 'eip155:84532', 'abc', self::PAY_TO, tools: self::TOOLS))(['name' => 'wisdom']));
+        self::assertNull((Prices::of([], 'eip155:84532', 'abc', self::PAY_TO, tools: self::TOOLS))(['name' => 'wisdom']));
     }
 
     private static function edgeTools(): array
@@ -211,8 +212,7 @@ final class PricingTest extends TestCase
     #[DataProvider('startCalls')]
     public function testValidateChecksTheArgumentsAgainstTheToolsSchema(array|string|null $args, ?string $error): void
     {
-        $pricing = new Pricing([], 'eip155:84532', '0.01', self::PAY_TO, tools: self::edgeTools());
-        $reason = $pricing->validate(['name' => 'edge_start'] + (null === $args ? [] : ['arguments' => $args]));
+        $reason = (new ToolInput(self::edgeTools()))(['name' => 'edge_start'] + (null === $args ? [] : ['arguments' => $args]));
         null === $error ? self::assertNull($reason) : self::assertStringContainsString($error, (string) $reason);
         if (null !== $error) {
             self::assertStringStartsWith("Invalid parameters for tool 'edge_start'", (string) $reason);
@@ -221,9 +221,9 @@ final class PricingTest extends TestCase
 
     public function testAToolWithoutArgumentsTakesAnEmptyCall(): void
     {
-        $pricing = new Pricing(['edge_none'], 'eip155:84532', '0.01', self::PAY_TO, tools: self::edgeTools());
-        self::assertNull($pricing->validate(['name' => 'edge_none']));
-        self::assertNull($pricing->validate(['name' => 'edge_none', 'arguments' => []]));
+        $input = new ToolInput(self::edgeTools());
+        self::assertNull($input(['name' => 'edge_none']));
+        self::assertNull($input(['name' => 'edge_none', 'arguments' => []]));
     }
 
     public function testTheServedCatalogFailsClosedAndCountsOneHandlerOnce(): void
@@ -384,7 +384,7 @@ final class PricingTest extends TestCase
 
     public function testAFastToolKeepsTheDefaultOfferAndNoDuration(): void
     {
-        $pricing = new Pricing(['wisdom', 'analyze_terms'], 'eip155:84532', '0.01', self::PAY_TO, ['analyze_terms' => '0.02'], ['analyze_terms' => 120], ['analyze_terms' => 60], self::TOOLS);
+        $pricing = Prices::of(['wisdom', 'analyze_terms'], 'eip155:84532', '0.01', self::PAY_TO, ['analyze_terms' => '0.02'], ['analyze_terms' => 120], ['analyze_terms' => 60], self::TOOLS);
 
         self::assertSame(60, $pricing(['name' => 'wisdom'])[0]['maxTimeoutSeconds']);
         self::assertSame(0, $pricing->duration(['name' => 'wisdom']));
@@ -417,12 +417,12 @@ final class PricingTest extends TestCase
     public function testABadTimeoutOrDurationIsAConfigError(array $timeouts, array $durations): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        new Pricing(['analyze_terms'], 'eip155:84532', '0.01', self::PAY_TO, [], $timeouts, $durations, self::TOOLS);
+        Prices::of(['analyze_terms'], 'eip155:84532', '0.01', self::PAY_TO, [], $timeouts, $durations, self::TOOLS);
     }
 
     public function testTheLargestDurationsThatFit(): void
     {
-        $edge = new Pricing(['analyze_terms', 'wisdom'], 'eip155:84532', '0.01', self::PAY_TO, [], ['analyze_terms' => 600, 'wisdom' => 1], ['analyze_terms' => 593, 'echo' => 53, 'free' => 0], self::TOOLS);
+        $edge = Prices::of(['analyze_terms', 'wisdom'], 'eip155:84532', '0.01', self::PAY_TO, [], ['analyze_terms' => 600, 'wisdom' => 1], ['analyze_terms' => 593, 'echo' => 53, 'free' => 0], self::TOOLS);
         self::assertSame(593, $edge->duration(['name' => 'analyze_terms']));
         self::assertSame(53, $edge->duration(['name' => 'echo']));
         self::assertSame(1, $edge(['name' => 'wisdom'])[0]['maxTimeoutSeconds']);

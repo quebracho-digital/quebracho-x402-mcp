@@ -19,6 +19,6 @@ jobs:
         working-directory: app
       # PaymentLog must be built with no 'x402' channel: the locator is empty, so it logs through the PSR-3 logger.
       - run: |
-          php bin/console debug:container 'App\X402\PaymentLog' --env=prod
+          php bin/console debug:container 'Quebracho\X402\PaymentLog' --env=prod
           php -r 'require "vendor/autoload.php"; var_dump(class_exists(Symfony\Bundle\MonologBundle\MonologBundle::class));' | grep -qx 'bool(false)'
         working-directory: app

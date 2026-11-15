@@ -5,9 +5,9 @@ declare(strict_types=1);
 namespace App\Mcp;
 
 use App\Terms\TermsAnalyzer;
-use App\X402\SensitiveRules;
 use Mcp\Capability\Attribute\McpTool;
 use Mcp\Exception\ToolCallException;
+use Quebracho\X402\SensitiveRules;
 use Symfony\Component\DependencyInjection\Attribute\Target;
 use Symfony\Component\RateLimiter\RateLimiterFactoryInterface;
 

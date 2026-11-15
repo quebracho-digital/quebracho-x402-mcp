@@ -24,7 +24,7 @@ use Symfony\Component\HttpFoundation\Response;
  * This is where the library meets the MCP server. X402McpMiddleware is a PSR-15 middleware, and the MCP SDK's
  * HTTP transport takes a list of them, so charging for tools is one more entry in that list: no tool, handler
  * or SDK class is changed. The middleware reads each JSON-RPC message; a tools/call of a tool with a price
- * (App\X402\Pricing) and no payment is answered with the x402 PaymentRequired, one with a payment is verified,
+ * (Quebracho\X402\PriceList) and no payment is answered with the x402 PaymentRequired, one with a payment is verified,
  * handed on to the server, and settled once the tool answered. Everything else (initialize, tools/list, free
  * tools) passes through untouched.
  *

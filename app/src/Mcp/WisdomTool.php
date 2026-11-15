@@ -8,7 +8,7 @@ use Mcp\Capability\Attribute\McpTool;
 
 /**
  * The smallest paid tool. Nothing here knows about x402: the tool is plain MCP code, and it is paid because
- * X402_PAID_TOOLS names it (App\X402\Pricing answers its price to the library's middleware, which stands in
+ * X402_PAID_TOOLS names it (Quebracho\X402\PriceList answers its price to the library's middleware, which stands in
  * front of the MCP server). It runs only for a call whose payment verified, and the payment is settled only
  * after it answered: a tool that throws, or answers isError, is not charged.
  *

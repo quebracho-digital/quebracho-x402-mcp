@@ -5,9 +5,9 @@ declare(strict_types=1);
 namespace App\Terms;
 
 use App\Mcp\AnalyzeTermsJobTool;
-use App\X402\SensitiveRules;
 use Quebracho\X402\Job\JobFailed;
 use Quebracho\X402\Job\JobWork;
+use Quebracho\X402\SensitiveRules;
 use Symfony\Component\DependencyInjection\Attribute\Target;
 use Symfony\Component\RateLimiter\RateLimiterFactoryInterface;
 

@@ -25,7 +25,7 @@ use Quebracho\X402\X402McpMiddleware;
  *
  * The tools are thin: who may pay, when the money moves and the job's state are JobDeposit's (the deposit) and JobDelivery's (the result), the work is
  * App\Terms\AnalyzeTermsWork, run after the response by Quebracho\X402\Job\JobRunner. Prices are the #[PaidJob]
- * ones; Pricing charges every #[PaidJob] tool, listed in X402_PAID_TOOLS or not.
+ * ones; the price list charges every #[PaidJob] tool, listed in X402_PAID_TOOLS or not.
  */
 final class AnalyzeTermsJobTool
 {

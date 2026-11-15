@@ -6,9 +6,9 @@ namespace App\Tests\Terms;
 
 use App\Terms\AnalyzeTermsWork;
 use App\Terms\TermsAnalyzer;
-use App\X402\SensitiveRules;
 use PHPUnit\Framework\TestCase;
 use Quebracho\X402\Job\JobFailed;
+use Quebracho\X402\SensitiveRules;
 use Symfony\AI\Platform\Test\MockPlatformFactory;
 use Symfony\Component\Cache\Adapter\ArrayAdapter;
 use Symfony\Component\RateLimiter\RateLimiterFactory;
@@ -29,7 +29,7 @@ final class AnalyzeTermsWorkTest extends TestCase
         });
         $day = new RateLimiterFactory(['id' => 'day', 'policy' => 'fixed_window', 'limit' => $perDay, 'interval' => '1 day'], new InMemoryStorage());
 
-        return new AnalyzeTermsWork(new TermsAnalyzer($platform, 'm', $memo ?? new ArrayAdapter()), $day, new SensitiveRules([], []));
+        return new AnalyzeTermsWork(new TermsAnalyzer($platform, 'm', $memo ?? new ArrayAdapter()), $day, new SensitiveRules([]));
     }
 
     public function testABadTextIsRefusedWithTheAnalyzersOwnMessage(): void

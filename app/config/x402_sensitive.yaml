@@ -1,4 +1,4 @@
-# Ways a caller asks "do not keep my answer" (App\X402\SensitiveRules, DECISIONS.md D18). A request any rule marks is
+# Ways a caller asks "do not keep my answer" (Quebracho\X402\SensitiveRules, DECISIONS.md D18). A request any rule marks is
 # sensitive: the payment ledger keeps its state, never its answer. No rule matching means not sensitive.
 # Checked at cache:warmup (SensitiveToolsWarmer) and by app:x402:check: an unknown kind, a missing value, a duplicate or a
 # tool rule naming no served tool fails the deploy. X402_SENSITIVE_TOOLS adds one `tool` rule per name.
