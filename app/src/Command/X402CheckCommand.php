@@ -5,7 +5,8 @@ declare(strict_types=1);
 namespace App\Command;
 
 use App\X402\LedgerFactory;
-use App\X402\NetworkCheck;
+use Quebracho\X402\Facilitators;
+use Quebracho\X402\Networks;
 use Quebracho\X402\OfacSdn;
 use Quebracho\X402\PayingMcpClient;
 use Quebracho\X402\PriceList;
@@ -64,6 +65,8 @@ final class X402CheckCommand
         #[Autowire('%kernel.debug%')] private readonly bool $debug = false,
         // The stop switch (app:x402:stop): a deploy must not go live paused without anyone noticing.
         #[AutowireServiceClosure(Stop::class)] private readonly ?\Closure $stop = null,
+        // app/.env says mock, for the demo: a deploy that keeps it delivers every paid tool for free.
+        #[Autowire('%env(default::X402_FACILITATOR)%')] private readonly ?string $facilitator = null,
     ) {
     }
 
@@ -75,6 +78,9 @@ final class X402CheckCommand
         }
         if ($this->debug) {
             $io->warning('Debug is on (APP_ENV=dev or APP_DEBUG=1): errors show stack traces. Deploy with APP_ENV=prod.');
+        }
+        if (Facilitators::MOCK === trim((string) $this->facilitator)) {
+            $io->warning('X402_FACILITATOR is mock: signatures are verified but nothing is settled, so paid tools are delivered for free. Set a facilitator URL to charge.');
         }
         if (null !== $this->ofac && !$this->ofac->isOff()) {
             $days = intdiv(time() - (int) strtotime($this->ofac->published()), 86400);
@@ -101,7 +107,7 @@ final class X402CheckCommand
         }
         // PriceList's constructor prices every paid tool and refuses a name that is no tool.
         // Sale refuses a payment on a network no Scheme supports with a 500, on every paid call: catch it at deploy.
-        $check('X402_NETWORK', fn () => NetworkCheck::assertSupported((string) $this->network, $this->schemes));
+        $check('X402_NETWORK', fn () => Networks::assertSupported((string) $this->network, $this->schemes));
         $check('prices (X402_PAID_TOOLS, X402_PRICE(S), X402_PAY_TO, X402_NETWORK, X402_TIMEOUTS, X402_DURATIONS, #[PaidJob])', fn () => ($this->pricing)());
         $check('buyer (X402_BUDGETS, X402_MAX_PER_PAYMENT, X402_BUYER_KEY, X402_BUYER_MAX_TIMEOUT)', fn () => ($this->buyer)());
         if (null !== $this->ledgerDir) {

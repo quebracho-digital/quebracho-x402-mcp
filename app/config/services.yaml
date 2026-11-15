@@ -352,10 +352,20 @@ services:
     # Frozen in the USDC contract itself (not only OFAC): asked after Screening's
     # lists (lower priority), our allowlist included. An RPC that cannot answer follows the same policy
     # as the screening API: X402_SCREENING_UNAVAILABLE, "reject" by default.
+    # Its eth_call runs inside the paid request, before the claim: X402_SCREENING_TIMEOUT at most, like the
+    # screening API, then the policy above decides. The framework's default client has no timeout, and a slow
+    # public node would hold the call until the buyer's signature expired.
+    app.blacklist_http_client:
+        class: Symfony\Contracts\HttpClient\HttpClientInterface
+        factory: ['Symfony\Component\HttpClient\HttpClient', 'create']
+        arguments: [{timeout: '%env(float:X402_SCREENING_TIMEOUT)%', max_duration: '%env(float:X402_SCREENING_TIMEOUT)%', max_redirects: 0}]
+
     Quebracho\X402\TokenBlacklist:
         factory: ['App\X402\BlacklistFactory', 'create']
         arguments:
-            $http: '@psr18.http_client'
+            $http: !service
+                class: Symfony\Component\HttpClient\Psr18Client
+                arguments: ['@app.blacklist_http_client']
             $requests: '@mcp.psr17_factory'
             $streams: '@mcp.psr17_factory'
             $unavailable: '%env(X402_SCREENING_UNAVAILABLE)%'

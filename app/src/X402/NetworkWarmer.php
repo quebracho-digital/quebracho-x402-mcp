@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\X402;
 
+use Quebracho\X402\Networks;
 use Quebracho\X402\Scheme;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\HttpKernel\CacheWarmer\CacheWarmerInterface;
@@ -32,7 +33,7 @@ final class NetworkWarmer implements CacheWarmerInterface
     {
         $paidJob = array_filter($this->tools, static fn (array $tool) => null !== ($tool['job'] ?? null));
         if ('' !== trim((string) $this->paidTools) || [] !== $paidJob) {
-            NetworkCheck::assertSupported((string) $this->network, $this->schemes);
+            Networks::assertSupported((string) $this->network, $this->schemes);
         }
 
         return [];

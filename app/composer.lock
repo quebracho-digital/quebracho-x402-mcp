@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "54bec23995dc15791922ded24a53c287",
+    "content-hash": "022b0f1b6d357c9793e23921b06575e2",
     "packages": [
         {
             "name": "doctrine/deprecations",
@@ -1679,16 +1679,16 @@
         },
         {
             "name": "quebracho/x402",
-            "version": "v0.5.0",
+            "version": "v0.5.1",
             "source": {
                 "type": "git",
                 "url": "https://github.com/quebracho-digital/x402.git",
-                "reference": "3c2361dd68dba12357735daf181d11ae7c46dc4f"
+                "reference": "592f1e6473e63180f65753e196935a81b4708f8e"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/quebracho-digital/x402/zipball/3c2361dd68dba12357735daf181d11ae7c46dc4f",
-                "reference": "3c2361dd68dba12357735daf181d11ae7c46dc4f",
+                "url": "https://api.github.com/repos/quebracho-digital/x402/zipball/592f1e6473e63180f65753e196935a81b4708f8e",
+                "reference": "592f1e6473e63180f65753e196935a81b4708f8e",
                 "shasum": ""
             },
             "require": {
@@ -1734,10 +1734,10 @@
             "description": "x402 payments for PHP: EIP-712/EIP-3009 signing, PSR-15 middleware and PSR-18 paying client.",
             "support": {
                 "issues": "https://github.com/quebracho-digital/x402/issues",
-                "source": "https://github.com/quebracho-digital/x402/tree/v0.5.0"
+                "source": "https://github.com/quebracho-digital/x402/tree/v0.5.1"
             },
-            "time": "2026-11-10T11:13:13+00:00",
-            "published-time": "2026-11-10T11:24:42+00:00"
+            "time": "2026-11-15T17:52:57+00:00",
+            "published-time": "2026-11-15T17:53:07+00:00"
         },
         {
             "name": "symfony/ai-agent",

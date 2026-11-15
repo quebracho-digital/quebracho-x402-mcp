@@ -7,6 +7,7 @@ namespace App\Command;
 use App\Mcp\AnalyzeTermsTool;
 use App\X402\Receipts;
 use Quebracho\X402\Networks;
+use Quebracho\X402\Settlement;
 use Symfony\AI\Agent\AgentInterface;
 use Symfony\AI\McpBundle\Client\McpClientInterface;
 use Symfony\AI\Platform\Message\Message;
@@ -77,7 +78,12 @@ final class AskCommand
         foreach ($this->receipts->refused as ['req' => $req, 'reason' => $reason]) {
             $io->text(\sprintf('Not paid: %s atomic on %s to %s (%s)', $req['amount'] ?? '?', $req['network'] ?? '?', $req['payTo'] ?? '?', $reason));
         }
-        if ([] !== array_filter($this->receipts->all, static fn (array $r) => true !== $r['receipt']['success'])) {
+        $failed = array_filter($this->receipts->all, static fn (array $r) => true !== $r['receipt']['success']);
+        // The library's own list: after these the money may still move, so "nothing was charged" would be a guess.
+        $open = array_filter($failed, static fn (array $r) => '' !== ($r['receipt']['transaction'] ?? '') || \in_array($r['receipt']['errorReason'] ?? null, Settlement::MAY_HAVE_MOVED, true));
+        if ([] !== $open) {
+            $io->warning('A settlement did not finish (it is pending, or the facilitator went silent): nothing was delivered, but the payment may still settle until its signature expires. Check the receipt above before you run the command again.');
+        } elseif ([] !== $failed) {
             $io->warning('A settlement failed. The public testnet facilitator is shared and fails about one in six on its side: nothing was delivered or charged to you. Run the command again.');
         }
         if ([] === $this->receipts->all) {

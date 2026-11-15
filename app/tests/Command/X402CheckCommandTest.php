@@ -84,6 +84,15 @@ final class X402CheckCommandTest extends KernelTestCase
         self::assertStringNotContainsString('PAUSED', $this->check(['X402_STOP_FILE' => $flag])->getDisplay(), 'released: said no more');
     }
 
+    public function testTheMockFacilitatorIsAWarningNotAFailure(): void
+    {
+        // The demo runs on it, so it passes; a deploy that kept it would deliver paid tools for free.
+        $tester = $this->check(['X402_FACILITATOR' => 'mock']);
+        self::assertSame(0, $tester->getStatusCode(), $tester->getDisplay());
+        self::assertStringContainsString('X402_FACILITATOR is mock', $tester->getDisplay());
+        self::assertStringNotContainsString('X402_FACILITATOR is mock', $this->check(['X402_FACILITATOR' => 'https://x402.org/facilitator'])->getDisplay());
+    }
+
     public function testAStopFileThatIsNoAbsolutePathFailsWithItsName(): void
     {
         // Relative: not the same place for the web and the CLI, so the switch would stop one and not the other.

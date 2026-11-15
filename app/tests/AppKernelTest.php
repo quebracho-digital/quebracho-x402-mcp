@@ -54,6 +54,14 @@ final class AppKernelTest extends KernelTestCase
         $lookup = (new \ReflectionProperty(ReceiptLookup::class, 'http'))->getValue(self::getContainer()->get(ReceiptLookup::class));
         self::assertSame($http, (new \ReflectionProperty(Psr18Client::class, 'client'))->getValue($lookup));
 
+        // TokenBlacklist's eth_call runs inside the paid request: X402_SCREENING_TIMEOUT (3 s), never the default.
+        $http = self::getContainer()->get('app.blacklist_http_client');
+        $options = (new \ReflectionProperty($http, 'defaultOptions'))->getValue($http);
+        self::assertSame(3.0, (float) $options['timeout']);
+        self::assertSame(3.0, (float) $options['max_duration']);
+        $blacklist = (new \ReflectionProperty(\Quebracho\X402\TokenBlacklist::class, 'http'))->getValue(self::getContainer()->get(\Quebracho\X402\TokenBlacklist::class));
+        self::assertSame($http, (new \ReflectionProperty(Psr18Client::class, 'client'))->getValue($blacklist));
+
         // The memo is a cache.pool: cache:pool:list shows it and it keeps the 7-day default lifetime.
         $pool = self::getContainer()->get('terms.cache');
         self::assertSame(604800, (new \ReflectionProperty(AbstractAdapter::class, 'defaultLifetime'))->getValue($pool));
