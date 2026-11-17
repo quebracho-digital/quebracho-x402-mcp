@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "022b0f1b6d357c9793e23921b06575e2",
+    "content-hash": "12cc056afeb7498d199d6a2b8800486a",
     "packages": [
         {
             "name": "doctrine/deprecations",
@@ -7023,7 +7023,8 @@
                     "type": "github"
                 }
             ],
-            "time": "2026-10-28T22:38:53+00:00"
+            "time": "2026-10-28T22:38:53+00:00",
+            "published-time": "2026-10-28T22:39:06+00:00"
         },
         {
             "name": "phpunit/php-code-coverage",
