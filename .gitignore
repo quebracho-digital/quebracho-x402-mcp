@@ -10,3 +10,4 @@ CONTEXT.md
 # Local video work (not for git)
 /video/
 *.mp4
+packages
